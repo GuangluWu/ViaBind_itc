@@ -1,9 +1,0 @@
-[submodule "ITCgraph"]
-	path = ITCgraph
-	url = ../ITCgraph
-[submodule "ITCsimfit"]
-	path = ITCsimfit
-	url = ../ITCsimfit
-[submodule "ITCprocessor"]
-	path = ITCprocessor
-	url = ../ITCprocessor
