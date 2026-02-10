@@ -2,6 +2,62 @@
 # 4. Shiny Server
 # ==============================================================================
 server <- function(input, output, session) {
+  `%||%` <- function(x, y) if (is.null(x)) y else x
+  
+  session_bridge <- tryCatch({
+    b <- session$userData$itcsuite_bridge
+    if (is.null(b) || !is.list(b)) NULL else b
+  }, error = function(e) NULL)
+  bridge_store_name <- ".ITCSUITE_BRIDGE_STORE"
+  bridge_session_key <- tryCatch({
+    key <- as.character(session$token)
+    if (length(key) == 0 || !nzchar(key[1])) NA_character_ else key[1]
+  }, error = function(e) NA_character_)
+  if (is.na(bridge_session_key) || !nzchar(bridge_session_key)) {
+    bridge_session_key <- paste0("session_", format(Sys.time(), "%Y%m%d%H%M%OS6"))
+  }
+  bridge_last_step1_token <- reactiveVal(NA_real_)
+  
+  bridge_store_get_all <- function() {
+    x <- get0(bridge_store_name, envir = .GlobalEnv, inherits = FALSE, ifnotfound = NULL)
+    if (is.null(x) || !is.list(x)) return(list())
+    x
+  }
+  
+  bridge_store_put_all <- function(x) {
+    if (is.null(x) || !is.list(x)) x <- list()
+    assign(bridge_store_name, x, envir = .GlobalEnv)
+    invisible(NULL)
+  }
+  
+  bridge_get <- function(channel) {
+    ch <- if (!is.null(session_bridge)) session_bridge[[channel]] else NULL
+    if (is.function(ch)) return(ch())
+    store <- bridge_store_get_all()
+    entry <- store[[bridge_session_key]]
+    if (is.null(entry) || !is.list(entry)) return(NULL)
+    entry[[channel]]
+  }
+  
+  bridge_set <- function(channel, payload) {
+    ch <- if (!is.null(session_bridge)) session_bridge[[channel]] else NULL
+    if (is.function(ch)) {
+      ch(payload)
+      return(invisible(NULL))
+    }
+    store <- bridge_store_get_all()
+    entry <- store[[bridge_session_key]]
+    if (is.null(entry) || !is.list(entry)) entry <- list()
+    if (is.null(payload)) {
+      entry[[channel]] <- NULL
+    } else {
+      entry[[channel]] <- payload
+      entry$updated_at <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+    }
+    store[[bridge_session_key]] <- entry
+    bridge_store_put_all(store)
+    invisible(NULL)
+  }
   
   # ============================================================================
   # [i18n] 确保翻译函数可用
@@ -108,7 +164,7 @@ server <- function(input, output, session) {
   
   # 左栏 - 参数快照
   output$download_data_button <- renderUI({
-    downloadButton("downloadData", tr("btn_export_fit_data", lang()), class = "btn-success btn-xs")
+    downloadButton("simfit_downloadData", tr("btn_export_fit_data", lang()), class = "btn-success btn-xs")
   })
   
   # [新增] 模拟→实验按钮
@@ -558,6 +614,7 @@ server <- function(input, output, session) {
                            correlation_matrix = NULL,   # 存储参数相关性矩阵
                            residual_subtab = "res1",    # 当前选中的残差子标签页
                            manual_exp_data = NULL,      # 手动导入的实验数据（模拟→实验功能）
+                           manual_exp_source = NULL,    # 手动实验数据来源: sim_to_exp / step1_bridge
                            imported_xlsx_sheets = NULL, # 缓存 ITCprocessor 导出的原始 xlsx sheets
                            imported_xlsx_base_name = NULL,  # 导入文件的基名（去掉时间戳），用于导出命名
                            imported_xlsx_filename = NULL,  # 导入文件的显示用文件名（供界面展示）
@@ -566,6 +623,167 @@ server <- function(input, output, session) {
   # [缓存机制] 使用 reactiveVal 存储缓存的结果和键
   sim_cache_result <- reactiveVal(NULL)
   sim_cache_key <- reactiveVal(NULL)
+  
+  apply_meta_to_exp_inputs <- function(meta_df) {
+    if (is.null(meta_df) || !all(c("parameter", "value") %in% colnames(meta_df))) return(invisible(FALSE))
+    vals <- suppressWarnings(as.numeric(trimws(as.character(meta_df$value))))
+    param_vals <- setNames(vals, trimws(as.character(meta_df$parameter)))
+    
+    if ("H_cell_0_mM" %in% names(param_vals) && !is.na(param_vals[["H_cell_0_mM"]])) {
+      updateNumericInput(session, "H_cell_0", value = param_vals[["H_cell_0_mM"]])
+    }
+    if ("G_syringe_mM" %in% names(param_vals) && !is.na(param_vals[["G_syringe_mM"]])) {
+      updateNumericInput(session, "G_syringe", value = param_vals[["G_syringe_mM"]])
+    }
+    if ("V_cell_mL" %in% names(param_vals) && !is.na(param_vals[["V_cell_mL"]])) {
+      updateNumericInput(session, "V_cell", value = param_vals[["V_cell_mL"]])
+    }
+    if ("V_inj_uL" %in% names(param_vals) && !is.na(param_vals[["V_inj_uL"]])) {
+      updateNumericInput(session, "V_inj", value = param_vals[["V_inj_uL"]])
+    }
+    if ("V_pre_uL" %in% names(param_vals) && !is.na(param_vals[["V_pre_uL"]])) {
+      values$v_pre_programmatic_update <- TRUE
+      updateNumericInput(session, "V_pre", value = param_vals[["V_pre_uL"]])
+      updateNumericInput(session, "V_init_val", value = param_vals[["V_pre_uL"]])
+    }
+    if ("n_inj" %in% names(param_vals) && !is.na(param_vals[["n_inj"]])) {
+      updateNumericInput(session, "n_inj", value = as.integer(param_vals[["n_inj"]]))
+    }
+    if ("Temp_K" %in% names(param_vals) && !is.na(param_vals[["Temp_K"]])) {
+      updateNumericInput(session, "Temp", value = param_vals[["Temp_K"]])
+    }
+    invisible(TRUE)
+  }
+  
+  consume_step1_payload <- function(payload) {
+    if (is.null(payload) || !is.list(payload)) return(FALSE)
+    is_finite_scalar <- function(x) length(x) == 1 && is.finite(x)
+    
+    token_vec <- suppressWarnings(as.numeric(payload$token))
+    token <- if (length(token_vec) >= 1) token_vec[1] else NA_real_
+    last_token <- bridge_last_step1_token()
+    if (is_finite_scalar(token) && is_finite_scalar(last_token) && identical(token, last_token)) return(FALSE)
+    
+    bundle <- payload$bundle
+    int_df <- NULL
+    if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$integration)) {
+      int_df <- as.data.frame(bundle$integration)
+    }
+    if (is.null(int_df) && is.data.frame(payload$integration)) {
+      int_df <- as.data.frame(payload$integration)
+    }
+    if (is.null(int_df) || nrow(int_df) == 0) return(FALSE)
+    
+    vinj_default <- suppressWarnings(as.numeric(input$V_inj))
+    if (length(vinj_default) >= 1) vinj_default <- vinj_default[1]
+    if (!(length(vinj_default) == 1 && is.finite(vinj_default))) vinj_default <- UI_DEFAULTS$v_inj_default * 1000
+    
+    g_syringe <- suppressWarnings(as.numeric(input$G_syringe))
+    if (length(g_syringe) >= 1) g_syringe <- g_syringe[1]
+    if (!(length(g_syringe) == 1 && is.finite(g_syringe) && g_syringe > 0)) g_syringe <- UI_DEFAULTS$conc_syringe_default
+    
+    V_inj_uL <- if ("V_titrate_uL" %in% colnames(int_df)) as.numeric(int_df$V_titrate_uL) else rep(vinj_default, nrow(int_df))
+    V_inj_uL[is.na(V_inj_uL)] <- vinj_default
+    
+    Heat_Raw <- if ("heat_cal_mol" %in% colnames(int_df)) {
+      as.numeric(int_df$heat_cal_mol)
+    } else if ("Heat_ucal" %in% colnames(int_df)) {
+      denom <- V_inj_uL * g_syringe
+      ifelse(is.finite(denom) & denom > 0, 1000 * as.numeric(int_df$Heat_ucal) / denom, NA_real_)
+    } else {
+      rep(NA_real_, nrow(int_df))
+    }
+    
+    Ratio_Raw <- if ("Ratio_App" %in% colnames(int_df)) as.numeric(int_df$Ratio_App) else rep(NA_real_, nrow(int_df))
+    exp_df <- data.frame(
+      Ratio_Raw = Ratio_Raw,
+      Heat_Raw = Heat_Raw,
+      V_inj_uL = V_inj_uL,
+      Inj = seq_len(nrow(int_df)),
+      stringsAsFactors = FALSE
+    )
+    exp_df <- exp_df[is.finite(exp_df$Heat_Raw), , drop = FALSE]
+    if (nrow(exp_df) == 0) return(FALSE)
+    exp_df$Inj <- seq_len(nrow(exp_df))
+    
+    meta_df <- NULL
+    if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$meta)) {
+      meta_df <- as.data.frame(bundle$meta)
+    }
+    if (is.null(meta_df) && is.data.frame(payload$meta)) {
+      meta_df <- as.data.frame(payload$meta)
+    }
+    
+    power_df <- NULL
+    if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$power_corrected)) {
+      power_df <- as.data.frame(bundle$power_corrected)
+    }
+    
+    values$manual_exp_data <- exp_df
+    values$manual_exp_source <- "step1_bridge"
+    
+    cached_sheets <- list(integration = int_df)
+    if (!is.null(meta_df)) cached_sheets[["meta"]] <- meta_df
+    if (!is.null(power_df)) cached_sheets[["power_corrected"]] <- power_df
+    values$imported_xlsx_sheets <- cached_sheets
+    
+    source_name <- as.character(payload$source %||% "Step1")
+    if (length(source_name) == 0 || !nzchar(source_name[1])) source_name <- "Step1"
+    source_name <- source_name[1]
+    values$imported_xlsx_filename <- source_name
+    base_name <- tools::file_path_sans_ext(basename(source_name))
+    values$imported_xlsx_base_name <- if (nzchar(base_name)) base_name else "ITC_data"
+    token_tag <- if (is_finite_scalar(token)) {
+      format(token, scientific = FALSE, trim = TRUE)
+    } else {
+      format(Sys.time(), "%Y%m%d%H%M%S")
+    }
+    values$imported_xlsx_file_path <- paste0("bridge://step1/", token_tag)
+    
+    apply_meta_to_exp_inputs(meta_df)
+    
+    if ("V_titrate_uL" %in% colnames(int_df)) {
+      first_v <- suppressWarnings(as.numeric(int_df$V_titrate_uL))
+      first_v <- first_v[is.finite(first_v)]
+      if (length(first_v) > 0) {
+        values$v_pre_programmatic_update <- TRUE
+        updateNumericInput(session, "V_pre", value = first_v[1])
+        updateNumericInput(session, "V_init_val", value = first_v[1])
+      }
+    }
+    if (all(is.finite(V_inj_uL))) {
+      updateNumericInput(session, "V_inj", value = as.numeric(stats::median(V_inj_uL)))
+    }
+    updateNumericInput(session, "n_inj", value = nrow(exp_df))
+    
+    if (is_finite_scalar(token)) bridge_last_step1_token(token)
+    showNotification("Loaded Step 1 data into Step 2.", type = "message", duration = 2)
+    TRUE
+  }
+  
+  if (!is.null(session_bridge) && is.function(session_bridge$step1_payload)) {
+    observeEvent(session_bridge$step1_payload(), {
+      tryCatch(
+        consume_step1_payload(session_bridge$step1_payload()),
+        error = function(e) {
+          showNotification(
+            paste0("Step1 bridge payload skipped: ", conditionMessage(e)),
+            type = "warning",
+            duration = 5
+          )
+          FALSE
+        }
+      )
+    }, ignoreNULL = TRUE)
+  } else {
+    observe({
+      invalidateLater(300, session)
+      tryCatch(
+        consume_step1_payload(bridge_get("step1_payload")),
+        error = function(e) FALSE
+      )
+    })
+  }
   
   output$status_indicator <- renderUI({
     if(values$is_fitting) {
@@ -876,6 +1094,7 @@ server <- function(input, output, session) {
       
       # 存储到 manual_exp_data
       values$manual_exp_data <- exp_data
+      values$manual_exp_source <- "sim_to_exp"
       
       # 清空导入文件信息，避免 UI 显示之前的导入文件名
       values$imported_xlsx_filename <- NULL
@@ -1044,6 +1263,7 @@ server <- function(input, output, session) {
     if (is.null(f) || is.null(f$datapath)) return()
 
     values$manual_exp_data <- NULL
+    values$manual_exp_source <- NULL
     values$imported_xlsx_sheets <- NULL
     values$imported_xlsx_file_path <- NULL
     values$imported_xlsx_base_name <- NULL
@@ -2835,125 +3055,167 @@ server <- function(input, output, session) {
     }
   )
   
+  build_fit_export_bundle <- function(sim = NULL) {
+    sim_use <- if (is.null(sim)) tryCatch(sim_results(), error = function(e) NULL) else sim
+    if (is.null(sim_use)) return(NULL)
+    
+    safe_inp <- function(nm) {
+      tryCatch({
+        v <- input[[nm]]
+        if (is.null(v)) NA else v
+      }, error = function(e) NA)
+    }
+    active_paths_save <- if (is.null(input$active_paths) || length(input$active_paths) == 0) character(0) else input$active_paths
+    
+    fit_params_df <- data.frame(
+      parameter = c(
+        "logK1", "H1_cal_mol",
+        "logK2", "H2_cal_mol",
+        "logK3", "H3_cal_mol",
+        "logK4", "H4_cal_mol",
+        "logK5", "H5_cal_mol",
+        "logK6", "H6_cal_mol",
+        "fH", "fG", "V_init_uL", "Offset_cal",
+        "H_cell_0_mM", "G_syringe_mM", "V_cell_mL", "V_inj_uL",
+        "n_inj", "V_pre_uL", "Temp_K", "ActivePaths"
+      ),
+      value = as.character(c(
+        safe_inp("logK1"), safe_inp("H1"),
+        if ("rxn_D" %in% active_paths_save) safe_inp("logK2") else NA,
+        if ("rxn_D" %in% active_paths_save) safe_inp("H2") else NA,
+        if ("rxn_T" %in% active_paths_save) safe_inp("logK3") else NA,
+        if ("rxn_T" %in% active_paths_save) safe_inp("H3") else NA,
+        if ("rxn_B" %in% active_paths_save) safe_inp("logK4") else NA,
+        if ("rxn_B" %in% active_paths_save) safe_inp("H4") else NA,
+        if ("rxn_F" %in% active_paths_save) safe_inp("logK5") else NA,
+        if ("rxn_F" %in% active_paths_save) safe_inp("H5") else NA,
+        if ("rxn_U" %in% active_paths_save) safe_inp("logK6") else NA,
+        if ("rxn_U" %in% active_paths_save) safe_inp("H6") else NA,
+        safe_inp("factor_H"), safe_inp("factor_G"),
+        safe_inp("V_init_val"), safe_inp("heat_offset"),
+        safe_inp("H_cell_0"), safe_inp("G_syringe"),
+        safe_inp("V_cell"), safe_inp("V_inj"),
+        safe_inp("n_inj"), safe_inp("V_pre"),
+        safe_inp("Temp"),
+        paste(active_paths_save, collapse = ",")
+      )),
+      stringsAsFactors = FALSE
+    )
+    
+    sim_df <- as.data.frame(sim_use)
+    sheet_list <- list()
+    cached <- values$imported_xlsx_sheets
+    if (!is.null(cached)) {
+      drop_sheets <- if (!is.null(values$manual_exp_data) && identical(values$manual_exp_source, "sim_to_exp")) {
+        c("meta", "power_corrected")
+      } else {
+        character(0)
+      }
+      for (sn in names(cached)) {
+        if (!sn %in% drop_sheets) {
+          sheet_list[[sn]] <- cached[[sn]]
+        }
+      }
+    }
+    
+    exp_df <- tryCatch(exp_data_processed(), error = function(e) NULL)
+    int_export <- NULL
+    if (!is.null(exp_df) && nrow(exp_df) > 0) {
+      int_export <- data.frame(
+        Injection = exp_df$Inj,
+        Ratio_App = exp_df$Ratio_Raw,
+        heat_cal_mol = exp_df$Heat_Raw,
+        V_titrate_uL = if ("V_inj_uL" %in% names(exp_df)) exp_df$V_inj_uL else NA_real_,
+        stringsAsFactors = FALSE
+      )
+      sheet_list[["integration_rev"]] <- int_export
+    }
+    
+    meta_cached <- if (!is.null(cached) && "meta" %in% names(cached)) cached[["meta"]] else NULL
+    if (!is.null(meta_cached) && all(c("parameter", "value") %in% colnames(meta_cached))) {
+      meta_rev <- meta_cached
+    } else {
+      meta_rev <- data.frame(parameter = character(0), value = character(0), stringsAsFactors = FALSE)
+    }
+    meta_updates <- c(
+      H_cell_0_mM = safe_inp("H_cell_0"),
+      G_syringe_mM = safe_inp("G_syringe"),
+      V_cell_mL = safe_inp("V_cell"),
+      V_inj_uL = safe_inp("V_inj"),
+      n_inj = safe_inp("n_inj"),
+      V_pre_uL = safe_inp("V_pre"),
+      Temp_K = safe_inp("Temp")
+    )
+    for (nm in names(meta_updates)) {
+      val_chr <- if (is.null(meta_updates[[nm]]) || is.na(meta_updates[[nm]])) NA_character_ else as.character(meta_updates[[nm]])
+      if (nm %in% meta_rev$parameter) {
+        meta_rev$value[meta_rev$parameter == nm] <- val_chr
+      } else {
+        meta_rev <- rbind(meta_rev, data.frame(parameter = nm, value = val_chr, stringsAsFactors = FALSE))
+      }
+    }
+    
+    sheet_list[["meta_rev"]] <- meta_rev
+    sheet_list[["fit_params"]] <- fit_params_df
+    sheet_list[["simulation"]] <- sim_df
+    
+    list(
+      sheets = sheet_list,
+      integration_rev = int_export,
+      meta_rev = meta_rev,
+      fit_params = fit_params_df,
+      simulation = sim_df
+    )
+  }
+  
+  publish_step2_plot_payload <- function(sim = NULL) {
+    bundle <- build_fit_export_bundle(sim = sim)
+    if (is.null(bundle)) return(invisible(FALSE))
+    src <- values$imported_xlsx_filename
+    if (is.null(src) || !nzchar(src)) src <- "ITCsimfit"
+    bridge_set("step2_plot_payload", list(
+      token = as.numeric(Sys.time()),
+      source = src,
+      sheets = bundle$sheets,
+      integration_rev = bundle$integration_rev,
+      meta_rev = bundle$meta_rev,
+      fit_params = bundle$fit_params,
+      simulation = bundle$simulation
+    ))
+    invisible(TRUE)
+  }
+  
+  observeEvent(
+    list(
+      input$fit_1_step,
+      input$fit_10_step,
+      input$fit_full,
+      input$fit_global,
+      input$sim_to_exp,
+      input$exp_file
+    ),
+    {
+      sim <- tryCatch(sim_results(), error = function(e) NULL)
+      publish_step2_plot_payload(sim = sim)
+    },
+    ignoreInit = FALSE
+  )
+  
   # --- 6. 导出拟合数据（多 sheet xlsx，保留 ITCprocessor 原始数据 + 拟合结果）---
-  output$downloadData <- downloadHandler(
+  output$simfit_downloadData <- downloadHandler(
     filename = function() {
       base <- values$imported_xlsx_base_name
       if (is.null(base) || length(base) == 0 || base == "") base <- "ITC_Fit_Data"
       paste0(base, "_fitted_", format(Sys.time(), "%Y%m%d_%H%M"), ".xlsx")
     },
     content = function(file) {
-      sim <- sim_results()
-      if (is.null(sim)) {
+      bundle <- build_fit_export_bundle()
+      if (is.null(bundle)) {
         showNotification(tr("export_error_no_data", lang()), type = "error", duration = 5)
         writexl::write_xlsx(list(error = data.frame(Note = tr("export_error_no_data_note", lang()))), path = file)
         return()
       }
-      
-      # --- 构建 fit_params sheet（竖列，与 meta 一致：parameter / value）；未激活路径对应参数存 NA ---
-      safe_inp <- function(nm) { tryCatch({ v <- input[[nm]]; if (is.null(v)) NA else v }, error = function(e) NA) }
-      active_paths_save <- if (is.null(input$active_paths) || length(input$active_paths) == 0) character(0) else input$active_paths
-      logK2_val <- if ("rxn_D" %in% active_paths_save) safe_inp("logK2") else NA
-      H2_val    <- if ("rxn_D" %in% active_paths_save) safe_inp("H2") else NA
-      logK3_val <- if ("rxn_T" %in% active_paths_save) safe_inp("logK3") else NA
-      H3_val    <- if ("rxn_T" %in% active_paths_save) safe_inp("H3") else NA
-      logK4_val <- if ("rxn_B" %in% active_paths_save) safe_inp("logK4") else NA
-      H4_val    <- if ("rxn_B" %in% active_paths_save) safe_inp("H4") else NA
-      logK5_val <- if ("rxn_F" %in% active_paths_save) safe_inp("logK5") else NA
-      H5_val    <- if ("rxn_F" %in% active_paths_save) safe_inp("H5") else NA
-      logK6_val <- if ("rxn_U" %in% active_paths_save) safe_inp("logK6") else NA
-      H6_val    <- if ("rxn_U" %in% active_paths_save) safe_inp("H6") else NA
-      fp_vec <- c(
-        logK1 = safe_inp("logK1"), H1_cal_mol = safe_inp("H1"),
-        logK2 = logK2_val, H2_cal_mol = H2_val,
-        logK3 = logK3_val, H3_cal_mol = H3_val,
-        logK4 = logK4_val, H4_cal_mol = H4_val,
-        logK5 = logK5_val, H5_cal_mol = H5_val,
-        logK6 = logK6_val, H6_cal_mol = H6_val,
-        fH = safe_inp("factor_H"), fG = safe_inp("factor_G"),
-        V_init_uL = safe_inp("V_init_val"), Offset_cal = safe_inp("heat_offset"),
-        H_cell_0_mM = safe_inp("H_cell_0"), G_syringe_mM = safe_inp("G_syringe"),
-        V_cell_mL = safe_inp("V_cell"), V_inj_uL = safe_inp("V_inj"),
-        n_inj = safe_inp("n_inj"), V_pre_uL = safe_inp("V_pre"),
-        Temp_K = safe_inp("Temp"),
-        ActivePaths = paste(if (is.null(input$active_paths)) character(0) else input$active_paths, collapse = ",")
-      )
-      fit_params_df <- data.frame(
-        parameter = names(fp_vec),
-        value = as.character(fp_vec),
-        stringsAsFactors = FALSE
-      )
-      
-      # --- 构建 simulation sheet（始终为当前参数的模拟曲线）---
-      sim_df <- as.data.frame(sim)
-      
-      # --- 构建多 sheet 输出 ---
-      # 先保留原有的其他 sheets（meta、power_corrected 等）
-      sheet_list <- list()
-      cached <- values$imported_xlsx_sheets
-      if (!is.null(cached)) {
-        # 若点过 模拟→实验，清空 meta 和 power_corrected（数据来源改变，不再对应原始实验）
-        drop_sheets <- if (!is.null(values$manual_exp_data)) {
-          c("meta", "power_corrected")
-        } else {
-          character(0)
-        }
-        for (sn in names(cached)) {
-          if (!sn %in% drop_sheets) {
-            sheet_list[[sn]] <- cached[[sn]]
-          }
-        }
-      }
-      
-      # integration sheet：当前显示的实验数据（覆盖缓存中的 integration，与界面一致）
-      # 情况1：从未导入且未点 模拟→实验 → 无 integration
-      # 情况2：未导入但点过 模拟→实验 → integration = manual_exp_data
-      # 情况3：导入过但点过 模拟→实验 → integration = manual_exp_data（替换原导入数据）
-      # 情况4：导入过且未点 模拟→实验 → integration = 导入的 integration
-      exp_df <- tryCatch(exp_data_processed(), error = function(e) NULL)
-      if (!is.null(exp_df) && nrow(exp_df) > 0) {
-        # 转为 integration_rev 格式（基于新浓度的 Ratio_App, heat_cal_mol）；不覆盖原 integration
-        int_export <- data.frame(
-          Injection = exp_df$Inj,
-          Ratio_App = exp_df$Ratio_Raw,
-          heat_cal_mol = exp_df$Heat_Raw,
-          V_titrate_uL = if ("V_inj_uL" %in% names(exp_df)) exp_df$V_inj_uL else NA_real_,
-          stringsAsFactors = FALSE
-        )
-        sheet_list[["integration_rev"]] <- int_export
-      }
-      
-      # meta_rev sheet：基于当前参数，保留原 meta 其他字段
-      meta_rev <- NULL
-      meta_cached <- if (!is.null(cached) && "meta" %in% names(cached)) cached[["meta"]] else NULL
-      if (!is.null(meta_cached) && all(c("parameter", "value") %in% colnames(meta_cached))) {
-        meta_rev <- meta_cached
-      } else {
-        meta_rev <- data.frame(parameter = character(0), value = character(0), stringsAsFactors = FALSE)
-      }
-      meta_updates <- c(
-        H_cell_0_mM = safe_inp("H_cell_0"),
-        G_syringe_mM = safe_inp("G_syringe"),
-        V_cell_mL = safe_inp("V_cell"),
-        V_inj_uL = safe_inp("V_inj"),
-        n_inj = safe_inp("n_inj"),
-        V_pre_uL = safe_inp("V_pre"),
-        Temp_K = safe_inp("Temp")
-      )
-      for (nm in names(meta_updates)) {
-        val_chr <- if (is.null(meta_updates[[nm]]) || is.na(meta_updates[[nm]])) NA_character_ else as.character(meta_updates[[nm]])
-        if (nm %in% meta_rev$parameter) {
-          meta_rev$value[meta_rev$parameter == nm] <- val_chr
-        } else {
-          meta_rev <- rbind(meta_rev, data.frame(parameter = nm, value = val_chr, stringsAsFactors = FALSE))
-        }
-      }
-      sheet_list[["meta_rev"]] <- meta_rev
-      
-      sheet_list[["fit_params"]] <- fit_params_df
-      sheet_list[["simulation"]] <- sim_df
-      
-      writexl::write_xlsx(sheet_list, path = file)
+      writexl::write_xlsx(bundle$sheets, path = file)
     }
   )
 }
