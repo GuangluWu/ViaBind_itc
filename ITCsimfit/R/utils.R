@@ -1,0 +1,548 @@
+# ==============================================================================
+# utils.R - 工具函数和统一的错误处理
+# ==============================================================================
+# 本文件包含通用工具函数、错误处理机制和辅助函数
+
+# ==============================================================================
+# 错误处理函数
+# ==============================================================================
+
+#' 获取翻译的错误消息
+#' 
+#' 根据错误代码和语言设置获取翻译的错误标题和描述
+#' 
+#' @param error_code 错误代码（来自 constants.R 的 ERROR_CODES）
+#' @param lang_val 语言设置（"zh" 或 "en"）
+#' @return 包含 title 和 desc 的列表
+#' 
+#' @examples
+#' get_error_message("E001", "zh")  # 返回 list(title="数据无效", desc="...")
+get_error_message <- function(error_code, lang_val = "zh") {
+  # 构建翻译键
+  title_key <- paste0("error_", error_code, "_title")
+  desc_key <- paste0("error_", error_code, "_desc")
+  
+  # 尝试获取翻译
+  title <- if(exists("tr")) {
+    tryCatch({
+      tr(title_key, lang_val)
+    }, error = function(e) {
+      # 如果翻译失败，返回错误代码
+      error_code
+    })
+  } else {
+    error_code
+  }
+  
+  desc <- if(exists("tr")) {
+    tryCatch({
+      tr(desc_key, lang_val)
+    }, error = function(e) {
+      # 如果翻译失败，返回空字符串
+      ""
+    })
+  } else {
+    ""
+  }
+  
+  return(list(title = title, desc = desc))
+}
+
+#' 统一的错误处理函数
+#' 
+#' 提供一致的错误处理机制，包括日志记录和用户通知
+#' 
+#' @param e 错误对象（来自 tryCatch）
+#' @param context 错误上下文描述（如 "数据加载", "拟合计算"）
+#' @param show_to_user 是否向用户显示通知（默认 TRUE）
+#' @param log_to_file 是否记录到日志文件（默认 TRUE）
+#' @param lang_val 语言设置（"zh" 或 "en"，用于翻译错误消息）
+#' @param error_code 错误代码（可选，来自 constants.R 的 ERROR_CODES）
+#' @return NULL
+#' 
+#' @examples
+#' tryCatch({
+#'   # 某些可能失败的操作
+#'   result <- risky_calculation()
+#' }, error = function(e) {
+#'   handle_error(e, context = "计算模拟结果", lang_val = "zh")
+#' })
+handle_error <- function(e, 
+                        context = "", 
+                        show_to_user = TRUE, 
+                        log_to_file = TRUE,
+                        lang_val = "zh",
+                        error_code = NULL) {
+  
+  # 构建错误消息
+  timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+  error_msg <- as.character(e$message)
+  
+  # 如果提供了错误代码，获取翻译的错误信息
+  error_title <- NULL
+  error_desc <- NULL
+  if(!is.null(error_code)) {
+    error_info <- get_error_message(error_code, lang_val)
+    error_title <- error_info$title
+    error_desc <- error_info$desc
+    
+    # 构建带错误代码的消息
+    if(nchar(error_desc) > 0) {
+      error_msg <- paste0("[", error_code, "] ", error_title, ": ", error_desc)
+      # 如果原始错误消息有额外信息，也添加上
+      if(nchar(e$message) > 0) {
+        error_msg <- paste0(error_msg, " | ", e$message)
+      }
+    } else {
+      error_msg <- paste0("[", error_code, "] ", error_msg)
+    }
+  }
+  
+  # 添加上下文信息
+  if(nchar(context) > 0) {
+    full_msg <- paste0("[", context, "] ", error_msg)
+  } else {
+    full_msg <- error_msg
+  }
+  
+  # 记录到日志文件
+  if(log_to_file) {
+    tryCatch({
+      log_file <- if(exists("FILE_PATHS")) {
+        FILE_PATHS$error_log
+      } else {
+        "error.log"
+      }
+      
+      log_entry <- paste0(timestamp, " | ", full_msg, "\n")
+      cat(log_entry, file = log_file, append = TRUE)
+    }, error = function(log_e) {
+      # 如果日志记录失败，至少输出到控制台
+      if(exists("tr")) {
+        warning_msg <- tr("error_log_failed", lang_val)
+      } else {
+        warning_msg <- "Failed to write to error log"
+      }
+      warning(warning_msg, ": ", log_e$message)
+    })
+  }
+  
+  # 输出到控制台（用于开发调试）
+  message("ERROR: ", full_msg)
+  
+  # 向用户显示通知
+  if(show_to_user) {
+    tryCatch({
+      # 构建用户友好的通知消息
+      if(!is.null(error_title)) {
+        # 使用翻译的错误标题
+        notif_title <- error_title
+        notif_msg <- if(nchar(error_desc) > 0) error_desc else error_msg
+      } else {
+        # 使用通用错误消息
+        if(exists("tr")) {
+          notif_title <- tr("error_occurred", lang_val)
+        } else {
+          notif_title <- if(lang_val == "zh") "发生错误" else "An error occurred"
+        }
+        notif_msg <- error_msg
+      }
+      
+      # 如果有上下文，添加到消息中
+      if(nchar(context) > 0) {
+        notif_msg <- paste0(context, ": ", notif_msg)
+      }
+      
+      # 显示通知
+      duration <- if(exists("NOTIFICATION_DURATION")) {
+        NOTIFICATION_DURATION$error
+      } else {
+        10
+      }
+      
+      showNotification(
+        paste0(notif_title, " - ", notif_msg),
+        type = "error",
+        duration = duration
+      )
+    }, error = function(notif_e) {
+      # 如果通知显示失败，至少记录警告
+      if(exists("tr")) {
+        warning_msg <- tr("error_notification_failed", lang_val)
+      } else {
+        warning_msg <- "Failed to show notification"
+      }
+      warning(warning_msg, ": ", notif_e$message)
+    })
+  }
+  
+  return(NULL)
+}
+
+#' 安全执行函数
+#' 
+#' 包装一个表达式，捕获错误并使用统一的错误处理
+#' 
+#' @param expr 要执行的表达式
+#' @param context 错误上下文描述
+#' @param default 发生错误时返回的默认值（默认 NULL）
+#' @param show_error 是否向用户显示错误（默认 TRUE）
+#' @param lang_val 语言设置
+#' @return 表达式的结果，或发生错误时返回 default
+#' 
+#' @examples
+#' result <- safe_execute({
+#'   read.csv("data.csv")
+#' }, context = "读取CSV文件", default = NULL)
+safe_execute <- function(expr, 
+                        context = "", 
+                        default = NULL,
+                        show_error = TRUE,
+                        lang_val = "zh") {
+  tryCatch({
+    eval(expr, envir = parent.frame())
+  }, error = function(e) {
+    handle_error(e, context = context, show_to_user = show_error, lang_val = lang_val)
+    return(default)
+  })
+}
+
+#' 记录警告到日志
+#' 
+#' @param message 警告消息
+#' @param context 上下文
+#' @param log_to_file 是否记录到文件
+log_warning <- function(message, context = "", log_to_file = TRUE) {
+  timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+  
+  if(nchar(context) > 0) {
+    full_msg <- paste0("[", context, "] ", message)
+  } else {
+    full_msg <- message
+  }
+  
+  # 输出到控制台
+  warning(full_msg)
+  
+  # 记录到文件
+  if(log_to_file) {
+    tryCatch({
+      log_file <- if(exists("FILE_PATHS")) {
+        FILE_PATHS$error_log
+      } else {
+        "error.log"
+      }
+      
+      log_entry <- paste0(timestamp, " | WARNING: ", full_msg, "\n")
+      cat(log_entry, file = log_file, append = TRUE)
+    }, error = function(e) {
+      # 忽略日志记录错误
+    })
+  }
+}
+
+#' 记录信息到会话日志
+#' 
+#' @param message 信息消息
+#' @param context 上下文
+log_info <- function(message, context = "") {
+  timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+  
+  if(nchar(context) > 0) {
+    full_msg <- paste0("[", context, "] ", message)
+  } else {
+    full_msg <- message
+  }
+  
+  # 输出到控制台
+  message("INFO: ", full_msg)
+  
+  # 记录到会话日志
+  tryCatch({
+    log_file <- if(exists("FILE_PATHS")) {
+      FILE_PATHS$session_log
+    } else {
+      "session.log"
+    }
+    
+    log_entry <- paste0(timestamp, " | INFO: ", full_msg, "\n")
+    cat(log_entry, file = log_file, append = TRUE)
+  }, error = function(e) {
+    # 忽略日志记录错误
+  })
+}
+
+# ==============================================================================
+# 输入验证和安全函数
+# ==============================================================================
+
+#' 安全获取输入值
+#' 
+#' 处理可能为 NULL、NA 或空值的输入，返回默认值
+#' 
+#' @param x 输入值
+#' @param default 默认值
+#' @return 有效的输入值或默认值
+#' 
+#' @examples
+#' value <- safe_input(input$slider_value, default = 1.0)
+safe_input <- function(x, default) {
+  if(is.null(x) || length(x) == 0 || any(is.na(x))) {
+    return(default)
+  }
+  return(x)
+}
+
+#' 安全获取数值输入
+#' 
+#' 确保输入是有效的数值，并在指定范围内
+#' 
+#' @param x 输入值
+#' @param default 默认值
+#' @param min 最小值（可选）
+#' @param max 最大值（可选）
+#' @return 有效的数值
+safe_numeric <- function(x, default, min = -Inf, max = Inf) {
+  val <- safe_input(x, default)
+  
+  # 确保是数值
+  val <- suppressWarnings(as.numeric(val))
+  if(is.na(val)) {
+    return(default)
+  }
+  
+  # 检查范围
+  if(val < min) {
+    log_warning(sprintf("Value %f below minimum %f, using minimum", val, min))
+    return(min)
+  }
+  if(val > max) {
+    log_warning(sprintf("Value %f above maximum %f, using maximum", val, max))
+    return(max)
+  }
+  
+  return(val)
+}
+
+#' 验证数据框
+#' 
+#' 检查数据框是否有效且包含必需的列
+#' 
+#' @param df 数据框
+#' @param required_cols 必需的列名向量
+#' @param min_rows 最小行数（默认 1）
+#' @return 逻辑值，TRUE 表示有效
+validate_dataframe <- function(df, required_cols = NULL, min_rows = 1) {
+  # 检查是否为数据框
+  if(!is.data.frame(df)) {
+    return(FALSE)
+  }
+  
+  # 检查行数
+  if(nrow(df) < min_rows) {
+    return(FALSE)
+  }
+  
+  # 检查必需的列
+  if(!is.null(required_cols)) {
+    if(!all(required_cols %in% colnames(df))) {
+      missing <- required_cols[!required_cols %in% colnames(df)]
+      log_warning(paste("Missing required columns:", paste(missing, collapse = ", ")))
+      return(FALSE)
+    }
+  }
+  
+  return(TRUE)
+}
+
+# ==============================================================================
+# 数值计算辅助函数
+# ==============================================================================
+
+#' 安全的对数计算
+#' 
+#' 防止对零或负数取对数
+#' 
+#' @param x 输入值
+#' @param epsilon 极小值阈值（默认使用 EPSILON_LOG）
+#' @return log(x)，其中 x 被限制为 >= epsilon
+safe_log <- function(x, epsilon = NULL) {
+  if(is.null(epsilon)) {
+    epsilon <- if(exists("EPSILON_LOG")) EPSILON_LOG else 1e-15
+  }
+  return(log(pmax(x, epsilon)))
+}
+
+#' 安全的除法
+#' 
+#' 防止除零错误
+#' 
+#' @param numerator 分子
+#' @param denominator 分母
+#' @param epsilon 极小值阈值（默认使用 EPSILON）
+#' @return numerator / denominator，分母被限制为 >= epsilon
+safe_divide <- function(numerator, denominator, epsilon = NULL) {
+  if(is.null(epsilon)) {
+    epsilon <- if(exists("EPSILON")) EPSILON else 1e-20
+  }
+  return(numerator / pmax(abs(denominator), epsilon))
+}
+
+#' 检查数值是否接近零
+#' 
+#' @param x 输入值
+#' @param tolerance 容差（默认使用 EPSILON）
+#' @return 逻辑值
+is_near_zero <- function(x, tolerance = NULL) {
+  if(is.null(tolerance)) {
+    tolerance <- if(exists("EPSILON")) EPSILON else 1e-20
+  }
+  return(abs(x) < tolerance)
+}
+
+# ==============================================================================
+# 进度条辅助函数
+# ==============================================================================
+
+#' 创建带自动清理的进度条
+#' 
+#' @param message 进度条消息
+#' @param value 初始值（0-1）
+#' @param ... 传递给 Progress$new() 的其他参数
+#' @return Progress 对象
+create_progress <- function(message = "处理中...", value = 0, ...) {
+  progress <- shiny::Progress$new(...)
+  progress$set(message = message, value = value)
+  
+  # 返回带有自动清理的对象
+  return(progress)
+}
+
+# ==============================================================================
+# 缓存辅助函数
+# ==============================================================================
+
+#' 创建基于键的缓存检查函数
+#' 
+#' @param cache_val 当前缓存的值（reactiveVal）
+#' @param cache_key 当前缓存的键（reactiveVal）
+#' @param new_key 新的键
+#' @return 逻辑值，TRUE 表示缓存命中
+cache_hit <- function(cache_val, cache_key, new_key) {
+  if(is.null(cache_val) || is.null(cache_key)) {
+    return(FALSE)
+  }
+  
+  return(identical(cache_key, new_key))
+}
+
+#' 生成缓存键
+#' 
+#' 基于多个参数生成唯一的缓存键
+#' 
+#' @param ... 用于生成键的参数
+#' @return 字符串键
+generate_cache_key <- function(...) {
+  params <- list(...)
+  return(digest::digest(params))
+}
+
+# ==============================================================================
+# 字符串和格式化函数
+# ==============================================================================
+
+#' 格式化数值为字符串
+#' 
+#' @param x 数值
+#' @param digits 小数位数（默认 2）
+#' @param scientific 是否使用科学计数法（默认 FALSE）
+#' @return 格式化的字符串
+format_number <- function(x, digits = 2, scientific = FALSE) {
+  if(is.null(x) || is.na(x)) {
+    return("N/A")
+  }
+  
+  if(scientific || abs(x) > 1e6 || (abs(x) < 1e-3 && x != 0)) {
+    return(formatC(x, format = "e", digits = digits))
+  } else {
+    return(formatC(x, format = "f", digits = digits))
+  }
+}
+
+#' 截断长字符串
+#' 
+#' @param str 字符串
+#' @param max_length 最大长度
+#' @param suffix 截断后缀（默认 "..."）
+#' @return 截断后的字符串
+truncate_string <- function(str, max_length = 50, suffix = "...") {
+  if(is.null(str) || nchar(str) <= max_length) {
+    return(str)
+  }
+  
+  return(paste0(substr(str, 1, max_length - nchar(suffix)), suffix))
+}
+
+# ==============================================================================
+# 时间和性能测量
+# ==============================================================================
+
+#' 执行并测量时间
+#' 
+#' @param expr 要执行的表达式
+#' @param label 标签（用于日志）
+#' @param log_result 是否记录结果（默认 FALSE）
+#' @return 列表，包含 result（结果）和 elapsed（耗时，秒）
+time_it <- function(expr, label = "", log_result = FALSE) {
+  start_time <- Sys.time()
+  
+  result <- eval(expr, envir = parent.frame())
+  
+  end_time <- Sys.time()
+  elapsed <- as.numeric(difftime(end_time, start_time, units = "secs"))
+  
+  if(log_result) {
+    msg <- if(nchar(label) > 0) {
+      sprintf("%s completed in %.3f seconds", label, elapsed)
+    } else {
+      sprintf("Operation completed in %.3f seconds", elapsed)
+    }
+    log_info(msg, context = "Performance")
+  }
+  
+  return(list(result = result, elapsed = elapsed))
+}
+
+# ==============================================================================
+# 调试辅助函数
+# ==============================================================================
+
+#' 调试输出（仅在开发模式下）
+#' 
+#' @param ... 要输出的内容
+#' @param prefix 前缀（默认 "[DEBUG]"）
+debug_print <- function(..., prefix = "[DEBUG]") {
+  # 检查是否在开发模式
+  if(exists("DEBUG_MODE") && DEBUG_MODE) {
+    message(prefix, " ", ...)
+  }
+}
+
+#' 打印对象的结构信息
+#' 
+#' @param obj 对象
+#' @param name 对象名称
+print_object_info <- function(obj, name = "object") {
+  if(exists("DEBUG_MODE") && DEBUG_MODE) {
+    cat(sprintf("\n=== %s ===\n", name))
+    cat("Class:", class(obj), "\n")
+    if(is.data.frame(obj) || is.matrix(obj)) {
+      cat("Dimensions:", paste(dim(obj), collapse = " x "), "\n")
+    } else if(is.vector(obj) || is.list(obj)) {
+      cat("Length:", length(obj), "\n")
+    }
+    cat("Structure:\n")
+    str(obj, max.level = 2)
+    cat("\n")
+  }
+}
