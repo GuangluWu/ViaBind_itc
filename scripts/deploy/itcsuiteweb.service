@@ -1,0 +1,15 @@
+[Unit]
+Description=ITCSuiteWeb Shiny App
+After=network.target
+
+[Service]
+Type=simple
+User=shiny
+WorkingDirectory=/Users/guanglu/Documents/myScript/ITCSuite/ITCSuiteWeb
+ExecStart=/Users/guanglu/Documents/myScript/ITCSuite/scripts/deploy/run_itcsuiteweb.sh
+Restart=always
+RestartSec=5
+Environment=R_ENVIRON_USER=/home/shiny/.Renviron
+
+[Install]
+WantedBy=multi-user.target

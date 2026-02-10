@@ -1,0 +1,25 @@
+Package: itcCore
+Type: Package
+Title: Core APIs for ITCSuite Data Processing, Fitting and Plotting
+Version: 0.1.0
+Authors@R: c(
+    person(given = "ITCSuite", family = "Contributors", role = c("aut", "cre"), email = "noreply@example.com")
+)
+Description: Shared, non-Shiny algorithms and bundle adapters for parsing ITC files,
+    baseline correction, integration, simulation/fitting, plotting data generation,
+    and xlsx import/export in a unified schema.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Depends: R (>= 4.2)
+Imports:
+    ggplot2,
+    patchwork,
+    readxl,
+    rootSolve,
+    stats,
+    utils,
+    writexl
+Suggests:
+    testthat
+RoxygenNote: 7.3.2
