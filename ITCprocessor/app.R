@@ -17,9 +17,22 @@ ui <- fluidPage(
     #btn_data_to_fit:hover { background-color: #b5d8ff !important; border-color: #82b8ef !important; }
     .btn-file { background-color: #add8e6 !important; border-color: #87ceeb !important; color: #333 !important; }
     .btn-file:hover { background-color: #87ceeb !important; border-color: #6bb8e0 !important; }
-    .control-header { display: flex; align-items: center; gap: 8px; width: 100%; margin: 6px 0 4px 0; padding-right: 2px; box-sizing: border-box; overflow: hidden; }
-    .control-header h4 { margin: 0; font-size: 15px; font-weight: 700; flex: 1 1 auto; min-width: 0; }
-    .control-header .btn { margin: 0 !important; flex: 0 0 auto; }
+    .control-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      column-gap: 8px;
+      width: 100%;
+      margin: 6px 0 4px 0;
+      box-sizing: border-box;
+    }
+    .control-header h4 { margin: 0; font-size: 15px; font-weight: 700; min-width: 0; }
+    .control-header .btn { margin: 0 !important; max-width: 100%; box-sizing: border-box; }
+    #ui_baseline_settings { overflow: hidden; }
+    #ui_baseline_settings .control-header {
+      width: 100% !important;
+      margin-right: 0;
+    }
     .plot-panel { margin-bottom: 4px; }
     .plot-panel-integration { margin-bottom: 10px; }
     .expt-panel { margin-top: 4px; margin-bottom: 4px; padding: 8px 10px; }
@@ -48,13 +61,40 @@ ui <- fluidPage(
     .datatable-wrap { width: 100%; overflow-x: auto; }
     .datatable-wrap .dataTables_wrapper .dataTables_scrollHead { position: sticky; top: 0; z-index: 3; }
     .shiny-notification { z-index: 99999 !important; }
-    .action-btn-row { display: flex; gap: 6px; width: 100%; padding-right: 2px; box-sizing: border-box; overflow: hidden; }
-    .action-btn-row > * { flex: 1 1 0; min-width: 0; box-sizing: border-box; }
-    .action-btn-row .btn { width: 100%; display: block; box-sizing: border-box; }
+    .action-btn-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 6px;
+      width: 100%;
+      box-sizing: border-box;
+      overflow: hidden;
+    }
+    .action-btn-row > * { min-width: 0; box-sizing: border-box; }
+    .action-btn-row .btn {
+      width: 100%;
+      max-width: 100%;
+      display: block;
+      box-sizing: border-box;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      padding-left: 8px;
+      padding-right: 8px;
+    }
+    #action_btn_ui { overflow: hidden; }
+    #action_btn_ui .action-btn-row {
+      width: 100% !important;
+      margin-right: 0;
+    }
+    @media (min-width: 992px) {
+      .step1-sidebar.col-sm-3 { width: 23%; }
+      .step1-main.col-sm-9 { width: 77%; }
+    }
   "))),
   fluidRow(
     column(
       3,
+      class = "step1-sidebar",
       div(uiOutput("label_choose_file")),
       fileInput("file1", "", accept = c(".itc", ".txt")),
       uiOutput("ui_view_controls"),
@@ -77,9 +117,10 @@ ui <- fluidPage(
     ),
     column(
       9,
+      class = "step1-main",
       div(class = "plot-panel", plotlyOutput("plot_raw", height = "245px")),
       div(class = "plot-panel", plotlyOutput("plot_corrected", height = "245px")),
-      div(class = "plot-panel plot-panel-integration", plotlyOutput("plot_integration", height = "245px")),
+      div(class = "plot-panel plot-panel-integration", plotlyOutput("plot_integration", height = "200px")),
       wellPanel(
         class = "expt-panel",
         uiOutput("ui_expt_params"),
@@ -183,8 +224,9 @@ server <- function(input, output, session) {
   output$ui_baseline_settings <- renderUI({
     div(
       class = "control-header",
+      style = "width:100%;box-sizing:border-box;overflow:hidden;",
       h4("Baseline Settings (Spline)"),
-      actionButton("reset_baseline", "Reset", class = "btn btn-default btn-xs")
+      actionButton("reset_baseline", "Reset", class = "btn btn-default btn-xs", width = "70px")
     )
   })
   output$ui_integration_settings <- renderUI({ h4("Integration Range") })
@@ -206,8 +248,15 @@ server <- function(input, output, session) {
     if (!isTRUE(canExport())) return(NULL)
     div(
       class = "action-btn-row",
-      actionButton("btn_data_to_fit", "Data -> Fit"),
-      downloadButton("downloadData_processor", "Export P. Data")
+      style = "width:100%;box-sizing:border-box;overflow:hidden;",
+      div(style = "min-width:0;", actionButton("btn_data_to_fit", "Data -> Fit", width = "100%")),
+      div(
+        style = "min-width:0;",
+        tagAppendAttributes(
+          downloadButton("downloadData_processor", "Export P. Data"),
+          style = "width:100%;max-width:100%;box-sizing:border-box;"
+        )
+      )
     )
   })
 
@@ -821,16 +870,16 @@ server <- function(input, output, session) {
       return(plot_ly() %>% layout(
         title = list(text = "Integration", font = list(size = 16), x = 0, xanchor = "left"),
         xaxis = list(showticklabels = FALSE, title = ""),
-        yaxis = list(title = "Heat per inj (kcal/mol)")
+        yaxis = list(title = "Heat (ucal)")
       ))
     }
     
-    plot_ly(data = int_res, x = ~Injection, y = ~I(heat_cal_mol / 1000), type = 'scatter', mode = 'markers',
+    plot_ly(data = int_res, x = ~Injection, y = ~Heat_ucal, type = 'scatter', mode = 'markers',
             marker = list(size = 10, color = 'black', symbol = 'circle')) %>%
       layout(
         title = list(text = "Integration", font = list(size = 16), x = 0, xanchor = "left", y = 0.98, yanchor = "top"),
         xaxis = list(showticklabels = FALSE, ticks = "", title = "", showline = TRUE, automargin = FALSE),
-        yaxis = list(title = "Heat per inj (kcal/mol)", showline = TRUE, automargin = FALSE),
+        yaxis = list(title = "Heat (ucal)", showline = TRUE, automargin = FALSE),
         margin = list(l = 72, r = 14, t = 28, b = 8),
         showlegend = FALSE
       )
