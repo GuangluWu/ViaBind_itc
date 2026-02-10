@@ -1,0 +1,82 @@
+Key,Chinese,English
+app_title,ITC 绘图工具,ITC Graph
+lang_switch,English,中文
+section_import,数据导入,Data Import
+btn_import,导入 xlsx 文件,Import xlsx file
+import_success,数据导入成功！,Data imported successfully!
+import_error,导入失败：,Import error:
+import_no_power,未找到 power_corrected 数据表,No power_corrected sheet found
+import_no_integration,未找到 integration 数据表,No integration sheet found
+import_no_simulation,未找到 simulation 数据表,No simulation sheet found
+import_partial,部分数据表缺失，已导入可用数据,Some sheets missing. Available data imported.
+section_top_panel,上图设置 (Thermogram),Top Panel Settings (Thermogram)
+section_bot_panel,下图设置 (Isotherm),Bottom Panel Settings (Isotherm)
+section_global,全局设置,Global Settings
+section_export,导出,Export
+top_xlab,X 轴标签,X-axis label
+top_ylab,Y 轴标签,Y-axis label
+top_line_color,线条颜色,Line color
+top_line_width,线宽,Line width
+top_xrange,X 轴范围,X range
+top_yrange,Y 轴范围,Y range
+top_auto_range,自动范围,Auto range
+reset_range_to_initial,回到初始范围,Reset
+bot_xlab,X 轴标签,X-axis label
+bot_ylab,Y 轴标签,Y-axis label
+bot_point_color,散点边框颜色,Point border color
+bot_point_fill,散点填充颜色,Point fill color
+bot_point_fill_alpha,散点填充透明度,Point fill opacity
+bot_point_size,散点大小,Point size
+bot_point_shape,散点形状,Point shape
+bot_dim_first_point,淡化第一个点,Dim first point
+bot_layer_order,线/点图层顺序,Line/point order
+layer_points_over_line,点在上方,Points on top
+layer_line_over_points,线在上方,Line on top
+bot_line_color,拟合线颜色,Fit line color
+bot_line_width,拟合线宽,Fit line width
+bot_line_linetype,拟合线线型,Fit line linetype
+linetype_solid,实线,Solid
+linetype_dashed,虚线,Dashed
+linetype_dotted,点线,Dotted
+linetype_dotdash,点划线,Dotdash
+linetype_longdash,长虚线,Long dash
+bot_xrange,X 轴范围,X range
+bot_yrange,Y 轴范围,Y range
+bot_auto_range,自动范围,Auto range
+global_base_size,字体大小,Font size
+global_height_ratio,上下图高度比,Top/Bottom height ratio
+export_width,宽度 (inch),Width (inch)
+export_height,高度 (inch),Height (inch)
+export_dpi,分辨率 (DPI),Resolution (DPI)
+btn_export_pdf,导出 PDF,Export PDF
+btn_export_png,导出 PNG,Export PNG
+btn_export_tiff,导出 TIFF,Export TIFF
+preview_title,图形预览,Figure Preview
+no_data,请先导入数据文件,Please import a data file first
+status_ready,就绪,Ready
+status_no_data,无数据,No data
+data_summary,数据概要,Data Summary
+power_points,功率数据点数,Power data points
+integration_points,积分数据点数,Integration data points
+simulation_points,模拟数据点数,Simulation data points
+file_label,文件,File
+shape_circle_open,空心圆,Open circle
+shape_circle_filled,实心圆,Filled circle
+shape_square_open,空心方块,Open square
+shape_diamond_open,空心菱形,Open diamond
+shape_triangle_open,空心三角,Open triangle
+shape_circle_half,半填充圆,Half-filled circle
+top_ratio_label,上图高度比例,Top panel height ratio
+bot_ratio_label,下图高度比例,Bottom panel height ratio
+time_unit_label,时间单位,Time unit
+border_linewidth_label,边框线宽,Border linewidth
+heat_offset_label,基线热扣除 (cal/mol),Baseline heat offset (cal/mol)
+energy_unit_label,能量单位 (cal / J),Energy unit (cal / J)
+settings_save_hint,保存当前作图设置到 JSON（不含基线）,Save settings (excl. baseline)
+settings_import_hint,从 JSON 文件导入作图设置,Load plot settings from JSON file
+btn_save_settings,保存设置,Save settings .JSON
+btn_import_settings,导入设置,Import settings
+btn_load_settings,加载设置,Load settings
+settings_saved,设置已保存,Settings saved
+settings_imported,设置已导入,Settings imported
+settings_import_error,导入失败：,Import error:

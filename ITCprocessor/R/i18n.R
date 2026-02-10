@@ -1,0 +1,107 @@
+# i18n: 中英文翻译模块
+
+TRANS <- list(
+  en = list(
+    app_title = "ITC Data Processor",
+    baseline_settings = "Baseline Setting-Spline",
+    integration_settings = "Integration Setting",
+    view_controls = "View Controls",
+    baseline_correction = "Baseline Correction",
+    expt_params = "Expt Params",
+    integration = "Integration",
+    choose_file = "Choose ITC File (.itc)",
+    anchor_width = "Anchor Width (s):",
+    anchor_offset = "Anchor Offset (s):",
+    spline_spar = "Spline Spar (0-1):",
+    start_offset = "Start Offset (pts ahead inj)",
+    limit_integration = "Limit Integration End Point",
+    end_offset = "End Offset (pts after inj)",
+    zoom_baseline = "Auto-Zoom to Baseline Y-Axis",
+    export_data = "Export Data (.xlsx)",
+    export_no_data = "Please load and process data first to export.",
+    n_inj = "N inj",
+    interval_s = "Interval (s)",
+    temp_c = "Temp (°C)",
+    cell_vol = "Cell vol (mL)",
+    syringe_mM = "Syringe (mM)",
+    cell_mM = "Cell (mM)",
+    v_pre_ul = "V_pre (µL)",
+    v_inj_ul = "V_inj (µL)",
+    loaded = "Loaded: ",
+    total_points = "Total Points: ",
+    raw_data = "Raw Data",
+    baseline = "Baseline",
+    spline_anchors = "Spline Anchors",
+    injection = "Injection",
+    anchor = "Anchor",
+    time_s = "Time (s)",
+    power_ucal = "Power (ucal/s)",
+    corrected_power = "Corrected Power",
+    time_min = "Time (min)",
+    delta_power = "Delta Power",
+    integrated_area = "Integrated Area",
+    integration_start = "Integration Start",
+    integration_end = "Integration End",
+    integrated_heats = "Integrated Heats",
+    integrated_heats_no_data = "Integrated Heats (no data)",
+    injection_number = "Injection Number",
+    heat_per_inj = "Heat per inj (kcal/mol)"
+  ),
+  zh = list(
+    app_title = "ITC 元数据处理",
+    baseline_settings = "基线设置 (Spline)",
+    integration_settings = "积分设置",
+    view_controls = "视图控制",
+    baseline_correction = "基线校正",
+    expt_params = "实验参数",
+    integration = "积分结果",
+    choose_file = "选择 ITC 元数据文件 (.itc)",
+    anchor_width = "锚点左宽 (秒):",
+    anchor_offset = "锚点相对滴定左偏 (秒):",
+    spline_spar = "Spline Spar (0-1):",
+    start_offset = "起点 (注射点左方点数)",
+    limit_integration = "限制积分终点",
+    end_offset = "终点偏移 (注射点右方点数)",
+    zoom_baseline = "自动缩放至基线 Y 轴",
+    export_data = "导出数据 (.xlsx)",
+    export_no_data = "请先加载并处理数据后再导出。",
+    n_inj = "滴定数",
+    interval_s = "滴定间隔 (秒)",
+    temp_c = "温度 (°C)",
+    cell_vol = "样品池体积 (mL)",
+    syringe_mM = "注射器浓度 (mM)",
+    cell_mM = "样品池浓度 (mM)",
+    v_pre_ul = "首滴 V_pre (µL)",
+    v_inj_ul = "V_inj (µL)",
+    loaded = "已加载: ",
+    total_points = "总点数: ",
+    raw_data = "原始数据",
+    baseline = "基线",
+    spline_anchors = "Spline锚点",
+    injection = "滴定点",
+    anchor = "锚点",
+    time_s = "时间 (秒)",
+    power_ucal = "功率 (ucal/s)",
+    corrected_power = "校正功率",
+    time_min = "时间 (分钟)",
+    delta_power = "功率差",
+    integrated_area = "积分区域",
+    integration_start = "积分起点",
+    integration_end = "积分终点",
+    integrated_heats = "积分热",
+    integrated_heats_no_data = "积分热 (无数据)",
+    injection_number = "滴定序号",
+    heat_per_inj = "每针热量 (kcal/mol)"
+  )
+)
+
+#' 翻译函数：根据 key 和语言返回对应文本
+#' @param key 翻译键
+#' @param lang 语言代码 ("en" 或 "zh")
+#' @return 翻译后的字符串
+tr <- function(key, lang = "en") {
+  if (is.null(lang) || !lang %in% names(TRANS)) lang <- "en"
+  val <- TRANS[[lang]][[key]]
+  if (is.null(val)) val <- TRANS[["en"]][[key]]
+  if (is.null(val)) key else val
+}
