@@ -68,16 +68,27 @@ solve_equi_modular <- function(G_tot, H_tot, p, active_paths, last_guess) {
   # 根据质量守恒：H_tot = [H] + [M], G_tot = [G] + [M]
   # 代入平衡常数方程可得关于 [M] 的一元二次方程：
   # [M]^2 * K - [M] * (K*Ht + K*Gt + 1) + K*Ht*Gt = 0
-  # 即使复杂模型算崩了，我们也有这个物理上合理的"保底值"
-  solve_quadratic_M <- function(Gt, Ht, K) {
+  # 
+  # 【升级】支持 rxn_U 路径的有效常数 (2026-02-11)
+  # 当存在 M <-> U (K6) 平衡时，我们可以将 M 和 U 视为一个整体 M_sum = M + U
+  # 此时有效结合常数 K_eff = K1 * (1 + K6)
+  # 求解出的 M_exact 实际上是 M + U 的总浓度
+  solve_quadratic_M <- function(Gt, Ht, params, paths) {
+    # 确定有效 K 值
+    K_val <- params$K1
+    
+    # 如果激活了 U 路径，使用 K_eff = K1(1 + K6)
+    # 这能显著改善 K6 很大时的初始猜测质量
+    if (!is.null(paths) && "rxn_U" %in% paths) {
+      K6_val <- if(is.null(params$K6)) 0 else params$K6
+      K_val <- K_val * (1 + K6_val)
+    }
+    
     # 方程: M^2 * K - M * (K*Ht + K*Gt + 1) + K*Ht*Gt = 0
     # 也就是: a*M^2 + b*M + c = 0
-    # 为了数值稳定，计算 Free H 和 Free G
-    # Free H = Ht - M
-    # K = M / (FreeH * FreeG) => M = K * FreeH * (Gt - M)
-    # 这是一个极其稳定的解析解公式
+    # 这里解出的 M_exact 是 (M + U) 的总和
     
-    K <- max(K, EPSILON) # 防止 K=0，使用常量定义的极小值阈值
+    K <- max(K_val, EPSILON) # 防止 K=0
     a <- K
     b <- -(K * Ht + K * Gt + 1)
     c <- K * Ht * Gt
@@ -85,17 +96,18 @@ solve_equi_modular <- function(G_tot, H_tot, p, active_paths, last_guess) {
     # 求根公式 (-b - sqrt(b^2 - 4ac)) / 2a (取较小根)
     delta <- b^2 - 4 * a * c
     if(delta < 0) delta <- 0
-    M_exact <- (-b - sqrt(delta)) / (2 * a)
+    M_sum_exact <- (-b - sqrt(delta)) / (2 * a)
     
     # 算出对应的 Free G 和 Free H
-    G_free <- max(0, Gt - M_exact)
-    H_free <- max(0, Ht - M_exact)
+    # Free = Total - (M + U)
+    G_free <- max(0, Gt - M_sum_exact)
+    H_free <- max(0, Ht - M_sum_exact)
     
     return(c(G_free, H_free))
   }
   
-  # 获取锚点猜测值 (基于 K1)
-  anchor_guess <- solve_quadratic_M(G_tot, H_tot, p$K1)
+  # 获取锚点猜测值 (基于 K1 或 K_eff)
+  anchor_guess <- solve_quadratic_M(G_tot, H_tot, p, active_paths)
   
   # --- 情况 A: 如果只勾选了基础模型，直接返回解析解 (快且稳) ---
   # 或是只选了 M 和 D 但 K2 极小的情况
@@ -304,15 +316,19 @@ run_sim_modular <- function(p, active_paths) {
   # --- 参数清洗与准备 (防止 hidden inputs 导致 NULL) ---
   # 使用常量定义的默认值
   safe_K <- function(val) if(is.null(val) || is.na(val)) 10^DEFAULT_PARAMS$logK else 10^val
+  safe_logK_val <- function(val) if(is.null(val) || is.na(val)) DEFAULT_PARAMS$logK else val
   safe_H <- function(val) if(is.null(val) || is.na(val)) DEFAULT_PARAMS$H else val
   
+  # 预计算 ln(10) 用于 log10 -> ln 转换
+  LN10 <- 2.30258509299405
+  
   lin_p <- list(
-    K1 = safe_K(p$logK1), H1 = safe_H(p$H1),
-    K2 = safe_K(p$logK2), H2 = safe_H(p$H2),
-    K3 = safe_K(p$logK3), H3 = safe_H(p$H3),
-    K4 = safe_K(p$logK4), H4 = safe_H(p$H4),
-    K5 = safe_K(p$logK5), H5 = safe_H(p$H5),
-    K6 = safe_K(p$logK6), H6 = safe_H(p$H6)
+    K1 = safe_K(p$logK1), lnK1 = safe_logK_val(p$logK1) * LN10, H1 = safe_H(p$H1),
+    K2 = safe_K(p$logK2), lnK2 = safe_logK_val(p$logK2) * LN10, H2 = safe_H(p$H2),
+    K3 = safe_K(p$logK3), lnK3 = safe_logK_val(p$logK3) * LN10, H3 = safe_H(p$H3),
+    K4 = safe_K(p$logK4), lnK4 = safe_logK_val(p$logK4) * LN10, H4 = safe_H(p$H4),
+    K5 = safe_K(p$logK5), lnK5 = safe_logK_val(p$logK5) * LN10, H5 = safe_H(p$H5),
+    K6 = safe_K(p$logK6), lnK6 = safe_logK_val(p$logK6) * LN10, H6 = safe_H(p$H6)
   )
   
   # ============================================================================
@@ -489,7 +505,22 @@ run_sim_modular <- function(p, active_paths) {
       if("rxn_F" %in% active_paths && "rxn_D" %in% active_paths) {
         F_vec[i] <- lin_p$K5 * M_vec[i] * D_vec[i]
       }
-      if("rxn_U" %in% active_paths) U_vec[i] <- lin_p$K6 * M_vec[i]
+      
+      # 【修复】M=U 路径的数值下溢保护 (2026-02-11)
+      # 问题：当 K6 极大时，平衡偏向 U，导致中间体 M 浓度极低（可能下溢为0）。
+      # 此时直接用 K6 * M 计算 U 会得到 0，导致严重错误。
+      # 方案：使用对数旁路 (Logarithmic Bypass)，直接由 H 和 G 计算 U。
+      # [U] = K6 * [M] = K6 * K1 * [H] * [G]
+      # ln[U] = lnK6 + lnK1 + ln[H] + ln[G]
+      if("rxn_U" %in% active_paths) {
+        if (H_free_vec[i] > 0 && G_free_vec[i] > 0) {
+          # 使用预计算的 lnK 值，避免重复 log 运算
+          lnU <- lin_p$lnK6 + lin_p$lnK1 + log(H_free_vec[i]) + log(G_free_vec[i])
+          U_vec[i] <- exp(lnU)
+        } else {
+          U_vec[i] <- 0
+        }
+      }
       
       # 计算热量 (Total Heat Content) - 向量化计算
       Q_sum <- M_vec[i] * lin_p$H1
