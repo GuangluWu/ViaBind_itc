@@ -253,7 +253,7 @@ server <- function(input, output, session) {
   
   # 中栏 - 变量手调区
   output$section_manual_adjust_title <- renderUI({
-    paste0("2. ", tr("section_manual_adjust", lang()))
+    "2. Variables (dH: cal/mol)"
   })
   
   output$section_manual_adjust_desc <- renderUI({
@@ -536,7 +536,7 @@ server <- function(input, output, session) {
     })
     
     tagList(
-      div(style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;",
+      div(class = "fit-error-head",
           h5(tr("error_analysis_title", lang()), style="font-weight: bold; margin: 0;"),
           checkboxInput("enable_error_analysis", tr("error_analysis_enable", lang()), value = current_value, width = "auto")
       ),
@@ -638,7 +638,7 @@ server <- function(input, output, session) {
       updated_any <- isTRUE(update_numeric_if_present("V_init_val", param_vals[["V_pre_uL"]])) || updated_any
     }
     if ("n_inj" %in% names(param_vals) && !is.na(param_vals[["n_inj"]])) {
-      updated_any <- isTRUE(update_numeric_if_present("n_inj", as.integer(param_vals[["n_inj"]])) || updated_any)
+      updated_any <- isTRUE(update_numeric_if_present("n_inj", as.integer(param_vals[["n_inj"]]))) || updated_any
     }
     if ("Temp_K" %in% names(param_vals) && !is.na(param_vals[["Temp_K"]])) {
       updated_any <- isTRUE(update_numeric_if_present("Temp", param_vals[["Temp_K"]])) || updated_any
@@ -647,7 +647,7 @@ server <- function(input, output, session) {
   }
 
   apply_step1_inputs_from_payload <- function(payload) {
-    if (is.null(payload) || !is.list(payload)) return(FALSE)
+    if (is.null(payload) || !is.list(payload)) return(list(updated_any = FALSE, vinit_synced = FALSE))
 
     bundle <- payload$bundle
     meta_df <- NULL
@@ -671,8 +671,19 @@ server <- function(input, output, session) {
       updated_any <- isTRUE(apply_meta_to_exp_inputs(meta_df)) || updated_any
     }
 
+    # Ensure V_init sync is explicitly verified. If Step 2 has not mounted the
+    # V_init control yet, do not mark payload as fully consumed.
+    vpre_from_meta <- NA_real_
+    if (!is.null(meta_df) && all(c("parameter", "value") %in% colnames(meta_df))) {
+      vals <- suppressWarnings(as.numeric(trimws(as.character(meta_df$value))))
+      param_vals <- setNames(vals, trimws(as.character(meta_df$parameter)))
+      if ("V_pre_uL" %in% names(param_vals) && is.finite(param_vals[["V_pre_uL"]])) {
+        vpre_from_meta <- param_vals[["V_pre_uL"]]
+      }
+    }
+
     if (!is.null(int_df) && nrow(int_df) > 0) {
-      if ("V_titrate_uL" %in% colnames(int_df)) {
+      if (!is.finite(vpre_from_meta) && "V_titrate_uL" %in% colnames(int_df)) {
         first_v <- suppressWarnings(as.numeric(int_df$V_titrate_uL))
         first_v <- first_v[is.finite(first_v)]
         if (length(first_v) > 0) {
@@ -693,7 +704,23 @@ server <- function(input, output, session) {
       updated_any <- isTRUE(update_numeric_if_present("n_inj", nrow(int_df))) || updated_any
     }
 
-    updated_any
+    vpre_candidate <- vpre_from_meta
+    if (!is.finite(vpre_candidate) && !is.null(int_df) && nrow(int_df) > 0 && "V_titrate_uL" %in% colnames(int_df)) {
+      first_v <- suppressWarnings(as.numeric(int_df$V_titrate_uL))
+      first_v <- first_v[is.finite(first_v)]
+      if (length(first_v) > 0) vpre_candidate <- first_v[1]
+    }
+
+    vinit_synced <- FALSE
+    if (is.finite(vpre_candidate)) {
+      vinit_synced <- isTRUE(update_numeric_if_present("V_init_val", vpre_candidate))
+      updated_any <- vinit_synced || updated_any
+    } else if (!is.null(input$V_init_val)) {
+      # No V_pre source available, but input exists, so don't block consumption.
+      vinit_synced <- TRUE
+    }
+
+    list(updated_any = isTRUE(updated_any), vinit_synced = isTRUE(vinit_synced))
   }
   
   consume_step1_payload <- function(payload) {
@@ -785,7 +812,8 @@ server <- function(input, output, session) {
     }
     values$imported_xlsx_file_path <- paste0("bridge://step1/", token_tag)
 
-    if (isTRUE(apply_step1_inputs_from_payload(payload)) && is_finite_scalar(token)) {
+    input_apply <- apply_step1_inputs_from_payload(payload)
+    if (isTRUE(input_apply$vinit_synced) && is_finite_scalar(token)) {
       bridge_last_step1_input_token(token)
     }
     
@@ -848,8 +876,11 @@ server <- function(input, output, session) {
         identical(token, last_input_token)) {
       return()
     }
-    ok <- tryCatch(apply_step1_inputs_from_payload(payload), error = function(e) FALSE)
-    if (isTRUE(ok) && is_finite_scalar(token)) {
+    input_apply <- tryCatch(
+      apply_step1_inputs_from_payload(payload),
+      error = function(e) list(updated_any = FALSE, vinit_synced = FALSE)
+    )
+    if (isTRUE(input_apply$vinit_synced) && is_finite_scalar(token)) {
       bridge_last_step1_input_token(token)
     }
   })
@@ -1165,6 +1196,12 @@ server <- function(input, output, session) {
       values$manual_exp_data <- exp_data
       values$manual_exp_source <- "sim_to_exp"
       values$exp_data_disabled <- FALSE
+
+      # Sim->Exp: keep V_init synced from current Expt V_pre.
+      current_vpre <- suppressWarnings(as.numeric(input$V_pre))
+      if (length(current_vpre) >= 1 && is.finite(current_vpre[1])) {
+        updateNumericInput(session, "V_init_val", value = current_vpre[1])
+      }
       
       # 清空导入文件信息，避免 UI 显示之前的导入文件名
       values$imported_xlsx_filename <- NULL
@@ -1391,6 +1428,7 @@ server <- function(input, output, session) {
       }
       if (has_exp_data) {
         meta_has_params <- FALSE
+        source_vpre_applied <- FALSE
         if ("meta" %in% names(sheets)) {
           meta_df <- sheets[["meta"]]
           if (!is.null(meta_df) && all(c("parameter", "value") %in% colnames(meta_df))) {
@@ -1416,6 +1454,8 @@ server <- function(input, output, session) {
               if ("V_pre_uL" %in% names(param_vals) && !is.na(param_vals[["V_pre_uL"]])) {
                 values$v_pre_programmatic_update <- TRUE
                 updateNumericInput(session, "V_pre", value = param_vals[["V_pre_uL"]])
+                updateNumericInput(session, "V_init_val", value = param_vals[["V_pre_uL"]])
+                source_vpre_applied <- TRUE
               }
               if ("n_inj" %in% names(param_vals) && !is.na(param_vals[["n_inj"]])) {
                 updateNumericInput(session, "n_inj", value = param_vals[["n_inj"]])
@@ -1449,7 +1489,10 @@ server <- function(input, output, session) {
               }
               if ("V_pre_uL" %in% names(param_vals) && !is.na(suppressWarnings(as.numeric(param_vals[["V_pre_uL"]])))) {
                 values$v_pre_programmatic_update <- TRUE
-                updateNumericInput(session, "V_pre", value = as.numeric(param_vals[["V_pre_uL"]]))
+                vpre_num <- as.numeric(param_vals[["V_pre_uL"]])
+                updateNumericInput(session, "V_pre", value = vpre_num)
+                updateNumericInput(session, "V_init_val", value = vpre_num)
+                source_vpre_applied <- TRUE
               }
               if ("n_inj" %in% names(param_vals) && !is.na(suppressWarnings(as.numeric(param_vals[["n_inj"]])))) {
                 updateNumericInput(session, "n_inj", value = as.integer(param_vals[["n_inj"]]))
@@ -1467,7 +1510,7 @@ server <- function(input, output, session) {
         } else if (!meta_has_params) {
           showNotification(tr("import_params_no_source", lang()), type = "warning", duration = 5)
         }
-        if ("integration" %in% names(sheets)) {
+        if (!isTRUE(source_vpre_applied) && "integration" %in% names(sheets)) {
           int_df <- sheets[["integration"]]
           if (!is.null(int_df) && "V_titrate_uL" %in% colnames(int_df)) {
             first_v <- suppressWarnings(as.numeric(int_df$V_titrate_uL))

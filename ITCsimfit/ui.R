@@ -230,6 +230,41 @@ ui <- fluidPage(
         gap: 10px;
         margin-top: 10px;
       }
+
+      .simfit-root .fit-rss-row {
+        margin-bottom: 10px;
+      }
+
+      .simfit-root .fit-action-row {
+        margin-top: 2px;
+        margin-bottom: 10px;
+      }
+
+      .simfit-root .fit-error-wrap {
+        margin-top: 2px;
+      }
+
+      .simfit-root .fit-error-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+
+      .simfit-root .fit-error-head h5 {
+        margin: 0;
+        white-space: nowrap;
+      }
+
+      .simfit-root .fit-error-head .shiny-input-container {
+        margin-bottom: 0 !important;
+      }
+
+      .simfit-root .fit-error-head .checkbox {
+        margin: 0 !important;
+        min-height: 20px;
+      }
       
       .simfit-root .rss-container h5 {
         margin: 0;
@@ -463,7 +498,6 @@ ui <- fluidPage(
                  # [新增] 恢复默认按钮 (淡红色, btn-danger) 
                  uiOutput("reset_defaults_button")
              ),
-             p(uiOutput("section_manual_adjust_desc"), style="color:gray; font-size:0.8em; margin-top: -5px;"),
              
              # 【修改】使用新的高容器包裹滑条
              div(class = "slider-scroll-container",
@@ -645,14 +679,14 @@ ui <- fluidPage(
              ),
              
              # [UI优化] RSS 显示行
-             div(class = "rss-container",
+             div(class = "rss-container fit-rss-row",
                  h5(uiOutput("fit_rss_label")),
                  div(style="flex: 1;", # 容器包裹以确保 pre 标签正确拉伸
                      verbatimTextOutput("fit_status", placeholder = TRUE)
                  )
              ),
 
-             div(class = "flex-btn-row",
+             div(class = "flex-btn-row fit-action-row",
                  div(class = "flex-btn-item",
                      uiOutput("data_to_plot_button")
                  ),
@@ -662,7 +696,7 @@ ui <- fluidPage(
              ),
              
              # [新增] 误差分析结果显示
-             uiOutput("error_analysis_section")
+             div(class = "fit-error-wrap", uiOutput("error_analysis_section"))
            )
     )
   )
