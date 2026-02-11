@@ -1,8 +1,0 @@
-[PERF] 2026-01-27 21:53:34 | test | 批量测试 | 0.275s | steps=3, step_timings=list(list(label = "步骤1", elapsed = 0.0758380889892578), list(label = "步骤2", elapsed = 0.0782468318939209), list(label = "步骤3", elapsed = 0.0822198390960693)) 
-[PERF] 2026-01-27 21:53:34 | test | 步骤时间测试 | 0.244s | steps=2, step_timings=list(list(label = "快速步骤", elapsed = 0.0817291736602783), list(label = "慢速步骤", elapsed = 0.13195013999939)) 
-[PERF] 2026-01-27 21:53:36 | test | 我的函数 | 0.083s | Mem: +0.00 MB | SLOW 
-[PERF] 2026-01-27 21:53:37 | workflow | 批量流程 | 0.151s | SLOW | steps=2, step_timings=list(list(label = "子步骤1", elapsed = 0.0598289966583252), list(label = "子步骤2", elapsed = 0.0615980625152588)) 
-[PERF] 2026-01-30 08:34:20 | test | 批量测试 | 0.280s | steps=3, step_timings=list(list(label = "步骤1", elapsed = 0.0802261829376221), list(label = "步骤2", elapsed = 0.0765678882598877), list(label = "步骤3", elapsed = 0.0816028118133545)) 
-[PERF] 2026-01-30 08:34:20 | test | 步骤时间测试 | 0.291s | steps=2, step_timings=list(list(label = "快速步骤", elapsed = 0.0789210796356201), list(label = "慢速步骤", elapsed = 0.127608060836792)) 
-[PERF] 2026-01-30 08:34:22 | test | 我的函数 | 0.082s | Mem: +0.00 MB | SLOW 
-[PERF] 2026-01-30 08:34:22 | workflow | 批量流程 | 0.153s | SLOW | steps=2, step_timings=list(list(label = "子步骤1", elapsed = 0.0630209445953369), list(label = "子步骤2", elapsed = 0.06095290184021)) 
