@@ -371,96 +371,143 @@ server <- function(input, output, session) {
     actionButton("report_btn", strong("Report"), class = "btn-info btn-sm", style="flex:1 0 20%; min-width:80px; background-color: #9b59b6; border-color: #8e44ad; color: white;")
   })
 
-  observeEvent(input$report_btn, {
-    # 1. Gather Data
+  build_fitting_report_text <- function() {
+    safe_num <- function(id, default = NA_real_) {
+      val <- suppressWarnings(as.numeric(input[[id]]))
+      if (length(val) < 1 || !is.finite(val[1])) return(default)
+      val[1]
+    }
+
     file_name <- values$imported_xlsx_filename
-    if(is.null(file_name)) file_name <- "Unknown File"
-    
-    # Titration Info
+    if (is.null(file_name) || !nzchar(file_name)) file_name <- "Unknown File"
+
+    h_cell <- safe_num("H_cell_0", UI_DEFAULTS$conc_cell_default)
+    v_cell <- safe_num("V_cell", UI_DEFAULTS$v_cell_default)
+    g_syr <- safe_num("G_syringe", UI_DEFAULTS$conc_syringe_default)
+    v_inj <- safe_num("V_inj", UI_DEFAULTS$v_inj_default * 1000)
+    n_inj <- safe_num("n_inj", UI_DEFAULTS$n_inj_default)
+    v_pre <- safe_num("V_pre", UI_DEFAULTS$v_pre_default)
+    temp_k <- safe_num("Temp", UI_DEFAULTS$temp_default)
+    f_h <- safe_num("factor_H", DEFAULT_PARAMS$factor_H)
+    f_g <- safe_num("factor_G", DEFAULT_PARAMS$factor_G)
+    v_init <- safe_num("V_init_val", v_pre)
+    heat_offset <- safe_num("heat_offset", DEFAULT_PARAMS$offset)
+
     t_info <- paste0(
       "Data Name: ", file_name, "\n",
       "Titration Info:\n",
-      "  Cell: [H] = ", input$H_cell_0, " mM, V = ", input$V_cell, " mL\n",
-      "  Syringe: [G] = ", input$G_syringe, " mM\n",
-      "  Injection: V_inj = ", input$V_inj, " uL, Count = ", input$n_inj, "\n",
-      "  Recorded 1st Inj Vol: V_pre = ", input$V_pre, " uL\n",
-      "  Temperature: ", input$Temp, " K\n"
+      "  Cell: [H] = ", h_cell, " mM, V = ", v_cell, " mL\n",
+      "  Syringe: [G] = ", g_syr, " mM\n",
+      "  Injection: V_inj = ", v_inj, " uL, Count = ", n_inj, "\n",
+      "  Recorded 1st Inj Vol: V_pre = ", v_pre, " uL\n",
+      "  Temperature: ", temp_k, " K\n"
     )
-    
-    # Fitted Parameters
-    # Get SE if available (raw value)
+
     get_se_raw <- function(param) {
-      if(!is.null(values$error_analysis) && param %in% values$error_analysis$Parameter) {
-         se <- values$error_analysis$SE[values$error_analysis$Parameter == param]
-         if(is.finite(se)) return(se)
+      if (!is.null(values$error_analysis) && is.data.frame(values$error_analysis) &&
+          param %in% values$error_analysis$Parameter && "SE" %in% names(values$error_analysis)) {
+        se_vec <- suppressWarnings(as.numeric(values$error_analysis$SE[values$error_analysis$Parameter == param]))
+        se_vec <- se_vec[is.finite(se_vec)]
+        if (length(se_vec) > 0) return(se_vec[[1]])
       }
-      return(NA)
+      NA_real_
     }
 
-    # Format SE string
-    fmt_se <- function(se_val, unit="") {
-        if(is.na(se_val)) return("")
-        return(sprintf(" \u00B1 %.3f%s", se_val, unit))
+    fmt_se <- function(se_val, unit = "") {
+      if (is.na(se_val) || !is.finite(se_val)) return("")
+      sprintf(" \u00B1 %.3f%s", se_val, unit)
     }
-    
+
     p_info <- paste0(
       "Global Parameters:\n",
-      "  Correction Factor of [H]: fH = ", input$factor_H, fmt_se(get_se_raw("fH")), "\n",
-      "  Correction Factor of [G]: fG = ", input$factor_G, fmt_se(get_se_raw("fG")), "\n",
-      "  Fitted 1st Inj Vol: V_init = ", input$V_init_val, fmt_se(get_se_raw("V_init")), " uL\n",
-      "  Baseline Heat Subtraction: Offset = ", input$heat_offset, fmt_se(get_se_raw("Offset")), " cal/mol\n"
+      "  Correction Factor of [H]: fH = ", f_h, fmt_se(get_se_raw("fH")), "\n",
+      "  Correction Factor of [G]: fG = ", f_g, fmt_se(get_se_raw("fG")), "\n",
+      "  Fitted 1st Inj Vol: V_init = ", v_init, fmt_se(get_se_raw("V_init")), " uL\n",
+      "  Baseline Heat Subtraction: Offset = ", heat_offset, fmt_se(get_se_raw("Offset")), " cal/mol\n"
     )
-    
-    # Active Paths
-    # Constants
-    R_const <- 1.9872 # cal/(mol K)
-    T_val <- input$Temp
-    if(is.null(T_val) || is.na(T_val)) T_val <- 298.15
-    
-    path_info <- "Thermodynamic Analysis:\n"
-    
-    # Helper to calc thermodynamic params
+
+    R_const <- 1.9872
+    T_val <- temp_k
+    if (!is.finite(T_val)) T_val <- 298.15
+
     calc_thermo <- function(logK, dH_cal, name, logK_se, dH_se_cal) {
-      # 1. logK
+      if (!is.finite(logK) || !is.finite(dH_cal)) {
+        return(paste0(
+          "Path: ", name, "\n",
+          "  logK = NA\n",
+          "  dH = NA kcal/mol\n",
+          "  dG = NA kcal/mol\n",
+          "  TdS = NA kcal/mol\n\n"
+        ))
+      }
       K <- 10^logK
-      
-      # 2. dH (convert to kcal/mol)
       dH_kcal <- dH_cal / 1000
-      dH_se_kcal <- if(is.na(dH_se_cal)) NA else dH_se_cal / 1000
-      
-      # 3. dG (kcal/mol) = -RT ln K / 1000
-      # dG_se = |RT ln(10) / 1000| * logK_se
+      dH_se_kcal <- if (is.na(dH_se_cal)) NA else dH_se_cal / 1000
       dG_kcal <- -R_const * T_val * log(K) / 1000
-      dG_se_kcal <- if(is.na(logK_se)) NA else abs(R_const * T_val * log(10) / 1000) * logK_se
-      
-      # 4. TdS (kcal/mol) = dH - dG
-      # TdS_se = sqrt(dH_se^2 + dG_se^2) (assuming independence)
+      dG_se_kcal <- if (is.na(logK_se)) NA else abs(R_const * T_val * log(10) / 1000) * logK_se
       TdS_kcal <- dH_kcal - dG_kcal
-      TdS_se_kcal <- if(is.na(dH_se_kcal) || is.na(dG_se_kcal)) NA else sqrt(dH_se_kcal^2 + dG_se_kcal^2)
-      
-      res <- paste0(
+      TdS_se_kcal <- if (is.na(dH_se_kcal) || is.na(dG_se_kcal)) NA else sqrt(dH_se_kcal^2 + dG_se_kcal^2)
+
+      paste0(
         "Path: ", name, "\n",
         "  logK = ", logK, fmt_se(logK_se), "\n",
-        "  dH = ", dH_kcal, " kcal/mol", fmt_se(dH_se_kcal), "\n",
-        "  dG = ", sprintf("%.2f", dG_kcal), " kcal/mol", fmt_se(dG_se_kcal), "\n",
-        "  TdS = ", sprintf("%.2f", TdS_kcal), " kcal/mol", fmt_se(TdS_se_kcal), "\n",
+        "  dH = ", dH_kcal, fmt_se(dH_se_kcal), " kcal/mol\n",
+        "  dG = ", sprintf("%.2f", dG_kcal), fmt_se(dG_se_kcal), " kcal/mol\n",
+        "  TdS = ", sprintf("%.2f", TdS_kcal), fmt_se(TdS_se_kcal), " kcal/mol\n",
         "\n"
       )
-      return(res)
     }
-    
-    # M Path (Always active)
-    path_info <- paste0(path_info, calc_thermo(input$logK1, input$H1, "H + G <=> M", get_se_raw("logK1"), get_se_raw("H1")))
-    
-    # Other paths
-    active <- if(is.null(input$active_paths)) character(0) else input$active_paths
-    if("rxn_D" %in% active) path_info <- paste0(path_info, calc_thermo(input$logK2, input$H2, "M + G <=> D (Stepwise)", get_se_raw("logK2"), get_se_raw("H2")))
-    if("rxn_T" %in% active) path_info <- paste0(path_info, calc_thermo(input$logK3, input$H3, "M + M <=> T (Dimer)", get_se_raw("logK3"), get_se_raw("H3")))
-    if("rxn_B" %in% active) path_info <- paste0(path_info, calc_thermo(input$logK4, input$H4, "M + H <=> B (Reverse)", get_se_raw("logK4"), get_se_raw("H4")))
-    if("rxn_F" %in% active) path_info <- paste0(path_info, calc_thermo(input$logK5, input$H5, "M + D <=> F (Oligomer)", get_se_raw("logK5"), get_se_raw("H5")))
-    if("rxn_U" %in% active) path_info <- paste0(path_info, calc_thermo(input$logK6, input$H6, "M <=> U (Bending)", get_se_raw("logK6"), get_se_raw("H6")))
-    
-    full_report <- paste0(
+
+    path_info <- "Thermodynamic Analysis:\n"
+    path_info <- paste0(path_info, calc_thermo(
+      safe_num("logK1", DEFAULT_PARAMS$logK),
+      safe_num("H1", DEFAULT_PARAMS$H),
+      "H + G <=> M",
+      get_se_raw("logK1"),
+      get_se_raw("H1")
+    ))
+
+    active <- input$active_paths
+    if (is.null(active)) active <- character(0)
+    active <- as.character(active)
+
+    if ("rxn_D" %in% active) path_info <- paste0(path_info, calc_thermo(
+      safe_num("logK2", DEFAULT_PARAMS$logK),
+      safe_num("H2", DEFAULT_PARAMS$H),
+      "M + G <=> D (Stepwise)",
+      get_se_raw("logK2"),
+      get_se_raw("H2")
+    ))
+    if ("rxn_T" %in% active) path_info <- paste0(path_info, calc_thermo(
+      safe_num("logK3", DEFAULT_PARAMS$logK),
+      safe_num("H3", DEFAULT_PARAMS$H),
+      "M + M <=> T (Dimer)",
+      get_se_raw("logK3"),
+      get_se_raw("H3")
+    ))
+    if ("rxn_B" %in% active) path_info <- paste0(path_info, calc_thermo(
+      safe_num("logK4", DEFAULT_PARAMS$logK),
+      safe_num("H4", DEFAULT_PARAMS$H),
+      "M + H <=> B (Reverse)",
+      get_se_raw("logK4"),
+      get_se_raw("H4")
+    ))
+    if ("rxn_F" %in% active) path_info <- paste0(path_info, calc_thermo(
+      safe_num("logK5", DEFAULT_PARAMS$logK),
+      safe_num("H5", DEFAULT_PARAMS$H),
+      "M + D <=> F (Oligomer)",
+      get_se_raw("logK5"),
+      get_se_raw("H5")
+    ))
+    if ("rxn_U" %in% active) path_info <- paste0(path_info, calc_thermo(
+      safe_num("logK6", DEFAULT_PARAMS$logK),
+      safe_num("H6", DEFAULT_PARAMS$H),
+      "M <=> U (Bending)",
+      get_se_raw("logK6"),
+      get_se_raw("H6")
+    ))
+
+    report_text <- paste0(
       "==================================================\n",
       "                  FITTING REPORT                  \n",
       "==================================================\n\n",
@@ -470,6 +517,19 @@ server <- function(input, output, session) {
       "==================================================\n",
       "Generated by ITCsimfit on ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n"
     )
+
+    if (length(report_text) < 1 || is.null(report_text) || !nzchar(report_text[1])) {
+      report_text <- paste0(
+        "FITTING REPORT\n",
+        "Generated by ITCsimfit on ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n",
+        "Data Name: ", file_name, "\n"
+      )
+    }
+    as.character(report_text[1])
+  }
+
+  observeEvent(input$report_btn, {
+    full_report <- build_fitting_report_text()
     
     # Store in values for download handler
     values$current_report <- full_report
@@ -587,6 +647,7 @@ server <- function(input, output, session) {
                            residuals_data = NULL,       # 存储残差数据（用于残差图）
                            correlation_matrix = NULL,   # 存储参数相关性矩阵
                            residual_subtab = "res1",    # 当前选中的残差子标签页
+                           current_report = NULL,       # 当前报告文本（用于导出）
                            manual_exp_data = NULL,      # 手动导入的实验数据（模拟→实验功能）
                            manual_exp_source = NULL,    # 手动实验数据来源: sim_to_exp / step1_bridge
                            exp_data_disabled = FALSE,   # TRUE 时忽略所有实验数据输入，仅保留模拟模式
@@ -789,6 +850,10 @@ server <- function(input, output, session) {
     if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$power_corrected)) {
       power_df <- as.data.frame(bundle$power_corrected)
     }
+    power_original_df <- NULL
+    if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$power_original)) {
+      power_original_df <- as.data.frame(bundle$power_original)
+    }
     
     values$manual_exp_data <- exp_df
     values$manual_exp_source <- "step1_bridge"
@@ -797,6 +862,7 @@ server <- function(input, output, session) {
     cached_sheets <- list(integration = int_df)
     if (!is.null(meta_df)) cached_sheets[["meta"]] <- meta_df
     if (!is.null(power_df)) cached_sheets[["power_corrected"]] <- power_df
+    if (!is.null(power_original_df)) cached_sheets[["power_original"]] <- power_original_df
     values$imported_xlsx_sheets <- cached_sheets
     
     source_name <- as.character(payload$source %||% "Step1")
@@ -3194,6 +3260,7 @@ server <- function(input, output, session) {
     }
     active_paths_save <- if (is.null(input$active_paths) || length(input$active_paths) == 0) character(0) else input$active_paths
     
+    rss_info <- tryCatch(current_rss_val(), error = function(e) list(rss = NA_real_, method = ""))
     fit_params_df <- data.frame(
       parameter = c(
         "logK1", "H1_cal_mol",
@@ -3203,6 +3270,7 @@ server <- function(input, output, session) {
         "logK5", "H5_cal_mol",
         "logK6", "H6_cal_mol",
         "fH", "fG", "V_init_uL", "Offset_cal",
+        "RSS", "RSS_method",
         "H_cell_0_mM", "G_syringe_mM", "V_cell_mL", "V_inj_uL",
         "n_inj", "V_pre_uL", "Temp_K", "ActivePaths"
       ),
@@ -3220,6 +3288,8 @@ server <- function(input, output, session) {
         if ("rxn_U" %in% active_paths_save) safe_inp("H6") else NA,
         safe_inp("factor_H"), safe_inp("factor_G"),
         safe_inp("V_init_val"), safe_inp("heat_offset"),
+        if (is.null(rss_info$rss) || !is.finite(rss_info$rss)) NA else formatC(rss_info$rss, format = "e", digits = 3),
+        if (is.null(rss_info$method)) "" else as.character(rss_info$method),
         safe_inp("H_cell_0"), safe_inp("G_syringe"),
         safe_inp("V_cell"), safe_inp("V_inj"),
         safe_inp("n_inj"), safe_inp("V_pre"),
@@ -3285,7 +3355,84 @@ server <- function(input, output, session) {
     sheet_list[["meta_rev"]] <- meta_rev
     sheet_list[["fit_params"]] <- fit_params_df
     sheet_list[["simulation"]] <- sim_df
+
+    # Always regenerate report at export time to ensure current UI/fitting state
+    # is written, instead of reusing any stale cached report text.
+    report_text <- tryCatch(
+      build_fitting_report_text(),
+      error = function(e) {
+        paste0(
+          "FITTING REPORT\n",
+          "Generated by ITCsimfit on ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n",
+          "Automatic report generation failed: ", conditionMessage(e), "\n"
+        )
+      }
+    )
+    values$current_report <- report_text
+    report_lines <- unlist(strsplit(as.character(report_text), "\n", fixed = TRUE), use.names = FALSE)
+    if (length(report_lines) == 0) report_lines <- ""
+    sheet_list[["report"]] <- data.frame(
+      line = seq_along(report_lines),
+      text = report_lines,
+      stringsAsFactors = FALSE
+    )
+
+    if (!is.null(values$error_analysis) && is.data.frame(values$error_analysis) && nrow(values$error_analysis) > 0) {
+      sheet_list[["error_analysis"]] <- as.data.frame(values$error_analysis)
+    }
+    if (!is.null(values$error_analysis_info) && is.list(values$error_analysis_info) && length(values$error_analysis_info) > 0) {
+      info_df <- data.frame(
+        metric = names(values$error_analysis_info),
+        value = vapply(values$error_analysis_info, function(x) {
+          if (length(x) == 0 || is.null(x)) return(NA_character_)
+          as.character(x[[1]])
+        }, character(1)),
+        stringsAsFactors = FALSE
+      )
+      sheet_list[["error_reliability"]] <- info_df
+    }
+    if (!is.null(values$residuals_data) && is.data.frame(values$residuals_data) && nrow(values$residuals_data) > 0) {
+      sheet_list[["residuals"]] <- as.data.frame(values$residuals_data)
+    }
+    if (!is.null(values$correlation_matrix) && is.matrix(values$correlation_matrix) && nrow(values$correlation_matrix) > 0) {
+      corr_mat <- values$correlation_matrix
+      corr_df <- data.frame(
+        Parameter = rownames(corr_mat) %||% as.character(seq_len(nrow(corr_mat))),
+        as.data.frame(corr_mat, check.names = FALSE),
+        stringsAsFactors = FALSE,
+        row.names = NULL
+      )
+      sheet_list[["correlation_matrix"]] <- corr_df
+    }
     
+    desired_order <- c(
+      "power_original",
+      "meta",
+      "power_corrected",
+      "integration",
+      "meta_rev",
+      "integration_rev",
+      "simulation",
+      "fit_params",
+      "error_reliability",
+      "error_analysis",
+      "residuals",
+      "correlation_matrix"
+    )
+    ordered_sheets <- list()
+    for (nm in desired_order) {
+      if (nm %in% names(sheet_list)) ordered_sheets[[nm]] <- sheet_list[[nm]]
+    }
+    for (nm in names(sheet_list)) {
+      if (!nm %in% c(names(ordered_sheets), "report")) {
+        ordered_sheets[[nm]] <- sheet_list[[nm]]
+      }
+    }
+    if ("report" %in% names(sheet_list)) {
+      ordered_sheets[["report"]] <- sheet_list[["report"]]
+    }
+    sheet_list <- ordered_sheets
+
     list(
       sheets = sheet_list,
       integration_rev = int_export,
