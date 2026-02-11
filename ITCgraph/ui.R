@@ -108,6 +108,24 @@ ui <- fluidPage(
         color: #555 !important;
         cursor: not-allowed;
       }
+
+      /* File input button-only style (same interaction as Step 2) */
+      .graph-root .file-input-btn-style .input-group {
+        display: flex;
+        width: 100%;
+      }
+      .graph-root .file-input-btn-style .input-group-btn {
+        width: 100%;
+      }
+      .graph-root .file-input-btn-style .btn-file {
+        width: 100%;
+      }
+      .graph-root .file-input-btn-style .form-control {
+        display: none;
+      }
+      .graph-root .shiny-file-input-progress {
+        display: none !important;
+      }
     ")),
     tags$script(HTML("
       function markGraphReadonlyFields() {
@@ -201,8 +219,11 @@ ui <- fluidPage(
       div(class = "control-scroll settings-panel",
         wellPanel(
           uiOutput("section_import_ui"),
-          fileInput("xlsx_file", label = NULL, accept = ".xlsx",
-                    buttonLabel = "Browse...", placeholder = "No file selected"),
+          div(
+            class = "file-input-btn-style",
+            fileInput("xlsx_file", label = NULL, accept = ".xlsx",
+                      buttonLabel = "Import Data", placeholder = "No file selected")
+          ),
           uiOutput("data_summary_ui"),
           uiOutput("heat_offset_label_ui"),
           fluidRow(

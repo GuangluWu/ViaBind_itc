@@ -54,6 +54,7 @@ server <- function(input, output, session) {
     bridge_session_key <- paste0("session_", format(Sys.time(), "%Y%m%d%H%M%OS6"))
   }
   bridge_last_token <- reactiveVal(NA_real_)
+  bridge_last_source <- reactiveVal("")
   bridge_pending_autorange <- FALSE
   bridge_pending_offset <- NA_real_
   ratio_correction_enabled <- TRUE
@@ -107,6 +108,54 @@ server <- function(input, output, session) {
     updateTextInput(session, "graph_fg_display", value = fg_txt)
   }
 
+  update_color_input <- function(id, value) {
+    if (requireNamespace("colourpicker", quietly = TRUE)) {
+      tryCatch(
+        colourpicker::updateColourInput(session, id, value = value),
+        error = function(e) updateTextInput(session, id, value = value)
+      )
+    } else {
+      updateTextInput(session, id, value = value)
+    }
+    invisible(TRUE)
+  }
+
+  reset_plot_controls_to_defaults <- function() {
+    updateTextInput(session, "top_xlab", value = PLOT_DEFAULTS$top_xlab)
+    updateTextInput(session, "top_ylab", value = unit_label("top_ylab", PLOT_DEFAULTS$energy_unit))
+    updateSelectInput(session, "top_time_unit", selected = PLOT_DEFAULTS$top_time_unit)
+    update_color_input("top_line_color", PLOT_DEFAULTS$top_line_color)
+    updateNumericInput(session, "top_line_width", value = PLOT_DEFAULTS$top_line_width)
+
+    updateTextInput(session, "bot_xlab", value = PLOT_DEFAULTS$bot_xlab)
+    updateTextInput(session, "bot_ylab", value = unit_label("bot_ylab", PLOT_DEFAULTS$energy_unit))
+    update_color_input("bot_point_color", PLOT_DEFAULTS$bot_point_color)
+    update_color_input("bot_point_fill", PLOT_DEFAULTS$bot_point_fill)
+    updateNumericInput(session, "bot_point_size", value = PLOT_DEFAULTS$bot_point_size)
+    updateNumericInput(session, "bot_point_fill_alpha", value = PLOT_DEFAULTS$bot_point_fill_alpha)
+    updateSelectInput(session, "bot_point_shape", selected = as.character(PLOT_DEFAULTS$bot_point_shape))
+    updateSelectInput(session, "bot_layer_order", selected = PLOT_DEFAULTS$bot_layer_order)
+    updateCheckboxInput(session, "bot_dim_first_point", value = isTRUE(PLOT_DEFAULTS$bot_dim_first_point))
+    update_color_input("bot_line_color", PLOT_DEFAULTS$bot_line_color)
+    updateNumericInput(session, "bot_line_width", value = PLOT_DEFAULTS$bot_line_width)
+    updateSelectInput(session, "bot_line_linetype", selected = PLOT_DEFAULTS$bot_line_linetype)
+
+    updateNumericInput(session, "graph_heat_offset", value = PLOT_DEFAULTS$heat_offset)
+    updateSelectInput(session, "energy_unit", selected = PLOT_DEFAULTS$energy_unit)
+    updateCheckboxInput(session, "graph_apply_ratio_correction", value = TRUE)
+    ratio_correction_enabled <<- TRUE
+    sync_ratio_factor_display(1, 1)
+
+    updateNumericInput(session, "base_size", value = PLOT_DEFAULTS$base_size)
+    updateNumericInput(session, "height_ratio_top", value = 1)
+    updateNumericInput(session, "height_ratio_bot", value = 1)
+    updateNumericInput(session, "border_linewidth", value = PLOT_DEFAULTS$border_linewidth)
+    updateNumericInput(session, "export_width", value = PLOT_DEFAULTS$export_width)
+    updateNumericInput(session, "export_height", value = PLOT_DEFAULTS$export_height)
+    updateNumericInput(session, "export_dpi", value = PLOT_DEFAULTS$export_dpi)
+    invisible(TRUE)
+  }
+
   get_ratio_multiplier <- function(apply_ratio = ratio_correction_enabled) {
     if (!isTRUE(apply_ratio)) return(1)
     fh <- normalize_factor(imported_data$ratio_fh, 1)
@@ -131,10 +180,32 @@ server <- function(input, output, session) {
     list(integration = int_data, simulation = sim_data)
   }
 
+  resolve_step2_payload_source <- function(payload, token = NA_real_) {
+    src <- as.character(payload$source %||% "")
+    src <- if (length(src) == 0) "" else src[1]
+    if (!nzchar(src)) {
+      if (is.finite(token)) {
+        src <- paste0("Step2 bridge @ ", format(token, scientific = FALSE, trim = TRUE))
+      } else {
+        src <- "Step2 bridge"
+      }
+    }
+    src
+  }
+
   consume_step2_plot_payload <- function(payload) {
     if (is.null(payload) || !is.list(payload)) return(FALSE)
     token <- suppressWarnings(as.numeric(payload$token)[1])
-    if (is.finite(token) && !is.na(bridge_last_token()) && identical(token, bridge_last_token())) return(FALSE)
+    payload_source <- resolve_step2_payload_source(payload, token)
+    if (is.finite(token) &&
+        !is.na(bridge_last_token()) &&
+        identical(token, bridge_last_token()) &&
+        identical(payload_source, bridge_last_source())) {
+      return(FALSE)
+    }
+
+    reset_imported_data()
+    reset_plot_controls_to_defaults()
 
     sheets <- payload$sheets
     power_original_df <- NULL
@@ -191,13 +262,11 @@ server <- function(input, output, session) {
     imported_data$meta <- meta_df
     imported_data$sheets <- if (!is.null(sheets) && is.list(sheets)) sheets else NULL
 
-    src <- payload$source %||% "Step2 bridge"
-    src_chr <- as.character(src)
-    if (length(src_chr) == 0 || !nzchar(src_chr[1])) src_chr <- "Step2 bridge"
     imported_data$source <- "step2_bridge"
-    imported_data$filename <- src_chr[1]
+    imported_data$filename <- payload_source
 
-    offset_from_fit <- NA_real_
+    offset_from_fit <- PLOT_DEFAULTS$heat_offset
+    updateNumericInput(session, "graph_heat_offset", value = offset_from_fit)
     fp <- fit_param_map(imported_data$fit_params)
     if (!is.null(fp)) {
       off <- get_fit_param_num(fp, "Offset_cal", default = NA_real_)
@@ -218,6 +287,7 @@ server <- function(input, output, session) {
     schedule_bridge_autorange(offset_override = offset_from_fit)
 
     if (is.finite(token)) bridge_last_token(token)
+    bridge_last_source(payload_source)
     TRUE
   }
 
@@ -590,6 +660,7 @@ server <- function(input, output, session) {
     
     tryCatch({
       reset_imported_data()
+      reset_plot_controls_to_defaults()
       sheets <- readxl::excel_sheets(filepath)
       imported_data$sheets <- list()
       
@@ -634,7 +705,7 @@ server <- function(input, output, session) {
       }
       
       # 读取 fit_params（竖列 parameter/value）；读取 Offset_cal/fH/fG
-      offset_for_range <- as.numeric(input$graph_heat_offset %||% PLOT_DEFAULTS$heat_offset)
+      offset_for_range <- PLOT_DEFAULTS$heat_offset
       if ("fit_params" %in% sheets) {
         imported_data$fit_params <- as.data.frame(readxl::read_excel(filepath, sheet = "fit_params"))
         imported_data$sheets[["fit_params"]] <- imported_data$fit_params

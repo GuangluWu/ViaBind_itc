@@ -521,7 +521,17 @@ server <- function(input, output, session) {
     )
   })
 
+  last_data_to_fit_click <- reactiveVal(0L)
+  observeEvent(input$file1, {
+    # Re-arm Data -> Fit button gate for each newly imported file.
+    last_data_to_fit_click(0L)
+  }, ignoreInit = TRUE)
+
   observeEvent(input$btn_data_to_fit, {
+    click_id <- suppressWarnings(as.integer(input$btn_data_to_fit)[1])
+    if (!is.finite(click_id) || click_id <= 0L) return()
+    if (click_id <= last_data_to_fit_click()) return()
+    last_data_to_fit_click(click_id)
     payload <- step1_payload()
     if (is.null(payload)) return()
     payload$token <- as.numeric(Sys.time())

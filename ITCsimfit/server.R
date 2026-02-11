@@ -18,6 +18,7 @@ server <- function(input, output, session) {
   }
   bridge_last_step1_token <- reactiveVal(NA_real_)
   bridge_last_step1_input_token <- reactiveVal(NA_real_)
+  bridge_last_step1_reset_token <- reactiveVal(NA_real_)
   
   bridge_store_get_all <- function() {
     x <- get0(bridge_store_name, envir = .GlobalEnv, inherits = FALSE, ifnotfound = NULL)
@@ -659,6 +660,7 @@ server <- function(input, output, session) {
   # [缓存机制] 使用 reactiveVal 存储缓存的结果和键
   sim_cache_result <- reactiveVal(NULL)
   sim_cache_key <- reactiveVal(NULL)
+  fit_slider_force_default <- reactiveVal(FALSE)
 
   is_finite_scalar <- function(x) length(x) == 1 && is.finite(x)
 
@@ -672,6 +674,67 @@ server <- function(input, output, session) {
     value_num <- suppressWarnings(as.numeric(value))
     if (length(value_num) < 1 || !is.finite(value_num[1])) return(invisible(FALSE))
     updateNumericInput(session, id, value = value_num[1])
+    invisible(TRUE)
+  }
+
+  update_checkbox_if_present <- function(id, value) {
+    if (is.null(input[[id]])) return(invisible(FALSE))
+    updateCheckboxInput(session, id, value = isTRUE(value))
+    invisible(TRUE)
+  }
+
+  reset_step2_ui_for_new_dataset <- function(default_n_inj = NULL) {
+    updateCheckboxGroupInput(session, "active_paths", selected = character(0))
+    updateCheckboxGroupInput(session, "fit_params", selected = c("logK1", "H1"))
+
+    updateSliderInput(session, "logK1", value = DEFAULT_PARAMS$logK)
+    updateSliderInput(session, "H1", value = DEFAULT_PARAMS$H)
+    updateSliderInput(session, "logK2", value = DEFAULT_PARAMS$logK)
+    updateSliderInput(session, "H2", value = DEFAULT_PARAMS$H)
+    updateSliderInput(session, "logK3", value = DEFAULT_PARAMS$logK)
+    updateSliderInput(session, "H3", value = DEFAULT_PARAMS$H)
+    updateSliderInput(session, "logK4", value = DEFAULT_PARAMS$logK)
+    updateSliderInput(session, "H4", value = DEFAULT_PARAMS$H)
+    updateSliderInput(session, "logK5", value = DEFAULT_PARAMS$logK)
+    updateSliderInput(session, "H5", value = DEFAULT_PARAMS$H)
+    updateSliderInput(session, "logK6", value = DEFAULT_PARAMS$logK)
+    updateSliderInput(session, "H6", value = DEFAULT_PARAMS$H)
+
+    updateNumericInput(session, "factor_H", value = DEFAULT_PARAMS$fH)
+    updateNumericInput(session, "factor_G", value = DEFAULT_PARAMS$fG)
+    updateSliderInput(session, "heat_offset", value = DEFAULT_PARAMS$Offset)
+    update_checkbox_if_present("enable_error_analysis", FALSE)
+    update_checkbox_if_present("use_weighted_fitting", FALSE)
+    update_checkbox_if_present("use_robust_fitting", FALSE)
+
+    default_first <- if (!is.null(UI_DEFAULTS$v_pre_default)) UI_DEFAULTS$v_pre_default else DEFAULT_PARAMS$V_init
+    values$v_pre_programmatic_update <- TRUE
+    updateNumericInput(session, "V_pre", value = default_first)
+    updateNumericInput(session, "V_init_val", value = default_first)
+
+    n_inj_num <- suppressWarnings(as.integer(default_n_inj)[1])
+    if (!is.finite(n_inj_num) || n_inj_num < 1L) {
+      n_inj_num <- suppressWarnings(as.integer(input$n_inj)[1])
+    }
+    if (!is.finite(n_inj_num) || n_inj_num < 1L) n_inj_num <- UI_DEFAULTS$n_inj_default
+    left_default <- if (n_inj_num >= 2L) 2L else 1L
+    updateSliderInput(
+      session, "fit_data_range",
+      min = 1,
+      max = n_inj_num,
+      value = c(left_default, n_inj_num),
+      step = 1
+    )
+    fit_slider_force_default(TRUE)
+
+    values$error_analysis <- NULL
+    values$error_analysis_info <- NULL
+    values$residuals_data <- NULL
+    values$correlation_matrix <- NULL
+    values$residual_subtab <- "res1"
+    values$current_report <- NULL
+    # New dataset should not carry snapshot table row focus.
+    tryCatch(DT::selectRows(DT::dataTableProxy("param_table"), NULL), error = function(e) NULL)
     invisible(TRUE)
   }
   
@@ -774,8 +837,12 @@ server <- function(input, output, session) {
 
     vinit_synced <- FALSE
     if (is.finite(vpre_candidate)) {
-      vinit_synced <- isTRUE(update_numeric_if_present("V_init_val", vpre_candidate))
-      updated_any <- vinit_synced || updated_any
+      values$v_pre_programmatic_update <- TRUE
+      vpre_synced <- isTRUE(update_numeric_if_present("V_pre", vpre_candidate))
+      vinit_only_synced <- isTRUE(update_numeric_if_present("V_init_val", vpre_candidate))
+      # Treat payload as fully consumed only when both V_pre and V_init are synced.
+      vinit_synced <- isTRUE(vpre_synced && vinit_only_synced)
+      updated_any <- vpre_synced || vinit_only_synced || updated_any
     } else if (!is.null(input$V_init_val)) {
       # No V_pre source available, but input exists, so don't block consumption.
       vinit_synced <- TRUE
@@ -803,7 +870,6 @@ server <- function(input, output, session) {
     if (is.null(meta_df) && is.data.frame(payload$meta)) {
       meta_df <- as.data.frame(payload$meta)
     }
-    apply_meta_to_exp_inputs(meta_df)
 
     int_df <- NULL
     if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$integration)) {
@@ -813,6 +879,10 @@ server <- function(input, output, session) {
       int_df <- as.data.frame(payload$integration)
     }
     if (is.null(int_df) || nrow(int_df) == 0) return(FALSE)
+
+    reset_step2_ui_for_new_dataset(default_n_inj = nrow(int_df))
+    if (is_finite_scalar(token)) bridge_last_step1_reset_token(token)
+    apply_meta_to_exp_inputs(meta_df)
     
     vinj_default <- suppressWarnings(as.numeric(input$V_inj))
     if (length(vinj_default) >= 1) vinj_default <- vinj_default[1]
@@ -936,11 +1006,33 @@ server <- function(input, output, session) {
     payload <- get_latest_step1_payload()
     if (is.null(payload) || !is.list(payload)) return()
     token <- payload_token(payload)
+
     last_input_token <- bridge_last_step1_input_token()
     if (is_finite_scalar(token) &&
         is_finite_scalar(last_input_token) &&
         identical(token, last_input_token)) {
       return()
+    }
+
+    last_reset_token <- bridge_last_step1_reset_token()
+    need_reset <- !(is_finite_scalar(token) &&
+      is_finite_scalar(last_reset_token) &&
+      identical(token, last_reset_token))
+    if (isTRUE(need_reset)) {
+      int_df <- NULL
+      bundle <- payload$bundle
+      if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$integration)) {
+        int_df <- as.data.frame(bundle$integration)
+      }
+      if (is.null(int_df) && is.data.frame(payload$integration)) {
+        int_df <- as.data.frame(payload$integration)
+      }
+      n_inj_default <- if (!is.null(int_df) && nrow(int_df) > 0) nrow(int_df) else NULL
+      tryCatch(
+        reset_step2_ui_for_new_dataset(default_n_inj = n_inj_default),
+        error = function(e) NULL
+      )
+      if (is_finite_scalar(token)) bridge_last_step1_reset_token(token)
     }
     input_apply <- tryCatch(
       apply_step1_inputs_from_payload(payload),
@@ -1476,6 +1568,22 @@ server <- function(input, output, session) {
       values$imported_xlsx_sheets <- sheets
       values$imported_xlsx_file_path <- filepath
 
+      # Import Expt Data should reset Step 2 state similarly to Data -> Fit.
+      inferred_n_inj <- NULL
+      if ("integration" %in% names(sheets) && is.data.frame(sheets[["integration"]])) {
+        inferred_n_inj <- nrow(as.data.frame(sheets[["integration"]]))
+      } else if ("simulation" %in% names(sheets) && is.data.frame(sheets[["simulation"]])) {
+        inferred_n_inj <- nrow(as.data.frame(sheets[["simulation"]]))
+      } else if ("meta" %in% names(sheets) && is.data.frame(sheets[["meta"]]) &&
+                 all(c("parameter", "value") %in% names(sheets[["meta"]]))) {
+        meta_vals <- as.data.frame(sheets[["meta"]], stringsAsFactors = FALSE)
+        idx_n <- which(trimws(as.character(meta_vals$parameter)) == "n_inj")
+        if (length(idx_n) >= 1) {
+          inferred_n_inj <- suppressWarnings(as.integer(meta_vals$value[idx_n[1]]))
+        }
+      }
+      reset_step2_ui_for_new_dataset(default_n_inj = inferred_n_inj)
+
       # 填充实验参数：仅当有 integration 或 simulation（实验数据）时执行
       # 优先级：meta（含有效参数）> fit_params > 默认值
       exp_key_cols <- c("H_cell_0_mM", "G_syringe_mM", "V_cell_mL", "V_inj_uL", "n_inj", "V_pre_uL", "Temp_K")
@@ -1620,14 +1728,36 @@ server <- function(input, output, session) {
     }
   }, priority = 10)
   
-  # 有实验数据时：更新滑条 min/max，并自动将右值扩展到最大注射数，左值默认设为 2
+  # 有实验数据时：更新滑条 min/max；优先保留用户当前选择，仅在越界/无效时回退默认
   observeEvent(exp_data_processed(), {
     df <- exp_data_processed()
     if (is.null(df) || nrow(df) == 0) return()
     max_inj <- nrow(df)
     left_default <- if (max_inj >= 2L) 2L else 1L
-    new_value <- c(left_default, max_inj)
+    force_default <- isTRUE(fit_slider_force_default())
+    cur <- isolate(input$fit_data_range)
+    has_valid_cur <- !is.null(cur) &&
+      length(cur) == 2 &&
+      all(is.finite(cur))
+
+    if (force_default) {
+      new_value <- c(left_default, max_inj)
+    } else if (has_valid_cur) {
+      left <- as.integer(round(cur[1]))
+      right <- as.integer(round(cur[2]))
+      left <- max(1L, min(max_inj, left))
+      right <- max(1L, min(max_inj, right))
+      if (left > right) {
+        left <- left_default
+        right <- max_inj
+      }
+      new_value <- c(left, right)
+    } else {
+      new_value <- c(left_default, max_inj)
+    }
+
     updateSliderInput(session, "fit_data_range", min = 1, max = max_inj, value = new_value, step = 1)
+    if (force_default) fit_slider_force_default(FALSE)
   })
   
   # 无实验数据时：n_inj 变化时更新滑条 max 和 value（不依赖 exp_data_processed()，避免 req 挂起）
@@ -1635,14 +1765,18 @@ server <- function(input, output, session) {
     if (!has_exp_data()) {
       if (!is.null(input$n_inj) && is.numeric(input$n_inj) && input$n_inj > 0) {
         n <- as.integer(input$n_inj)
+        force_default <- isTRUE(fit_slider_force_default())
         cur <- isolate(input$fit_data_range)
         # 若当前范围仍在新 [1, n] 内则保留，否则设为全范围
-        new_value <- if (!is.null(cur) && length(cur) == 2 && cur[1] >= 1 && cur[2] <= n && cur[1] <= cur[2]) {
+        new_value <- if (force_default) {
+          c(if (n >= 2L) 2L else 1L, n)
+        } else if (!is.null(cur) && length(cur) == 2 && cur[1] >= 1 && cur[2] <= n && cur[1] <= cur[2]) {
           c(as.integer(cur[1]), as.integer(cur[2]))
         } else {
           c(if (n >= 2L) 2L else 1L, n)
         }
         updateSliderInput(session, "fit_data_range", min = 1, max = n, value = new_value, step = 1)
+        if (force_default) fit_slider_force_default(FALSE)
       }
     }
   })
@@ -3442,11 +3576,34 @@ server <- function(input, output, session) {
     )
   }
   
+  resolve_step2_plot_source <- function() {
+    source_mode <- as.character(values$manual_exp_source %||% "")
+    source_mode <- if (length(source_mode) == 0) "" else source_mode[1]
+    file_name <- as.character(values$imported_xlsx_filename %||% "")
+    file_name <- if (length(file_name) == 0) "" else file_name[1]
+    file_path <- as.character(values$imported_xlsx_file_path %||% "")
+    file_path <- if (length(file_path) == 0) "" else file_path[1]
+    has_real_file <- nzchar(file_path) && !startsWith(file_path, "bridge://")
+
+    src <- ""
+    if (identical(source_mode, "step1_bridge")) {
+      # Step1 bridge may not always carry a filename.
+      src <- file_name
+      if (!nzchar(src)) src <- "Step1 bridge"
+    } else if (identical(source_mode, "sim_to_exp")) {
+      src <- ""
+    } else if (has_real_file) {
+      src <- file_name
+    }
+
+    if (!nzchar(src)) return(NULL)
+    src
+  }
+
   publish_step2_plot_payload <- function(sim = NULL) {
     bundle <- build_fit_export_bundle(sim = sim)
     if (is.null(bundle)) return(invisible(FALSE))
-    src <- values$imported_xlsx_filename
-    if (is.null(src) || !nzchar(src)) src <- "ITCsimfit"
+    src <- resolve_step2_plot_source()
     bridge_set("step2_plot_payload", list(
       token = as.numeric(Sys.time()),
       source = src,
@@ -3459,23 +3616,12 @@ server <- function(input, output, session) {
     invisible(TRUE)
   }
   
-  observeEvent(
-    list(
-      input$fit_1_step,
-      input$fit_10_step,
-      input$fit_full,
-      input$fit_global,
-      input$sim_to_exp,
-      input$exp_file
-    ),
-    {
-      sim <- tryCatch(sim_results(), error = function(e) NULL)
-      publish_step2_plot_payload(sim = sim)
-    },
-    ignoreInit = FALSE
-  )
-
+  last_data_to_plot_click <- reactiveVal(0L)
   observeEvent(input$data_to_plot, {
+    click_id <- suppressWarnings(as.integer(input$data_to_plot)[1])
+    if (!is.finite(click_id) || click_id <= 0L) return()
+    if (click_id <= last_data_to_plot_click()) return()
+    last_data_to_plot_click(click_id)
     sim <- tryCatch(sim_results(), error = function(e) NULL)
     ok <- isTRUE(publish_step2_plot_payload(sim = sim))
     if (!ok) {
