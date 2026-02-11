@@ -18,6 +18,8 @@ server <- function(input, output, session) {
     integration = NULL,   # integration sheet
     simulation  = NULL,   # simulation sheet
     fit_params  = NULL,   # fit_params sheet
+    ratio_fh    = 1,      # fH from fit_params
+    ratio_fg    = 1,      # fG from fit_params
     meta        = NULL,   # meta sheet
     sheets      = NULL,   # all imported sheets
     source      = NULL,   # data source id
@@ -30,6 +32,8 @@ server <- function(input, output, session) {
     imported_data$integration <- NULL
     imported_data$simulation <- NULL
     imported_data$fit_params <- NULL
+    imported_data$ratio_fh <- 1
+    imported_data$ratio_fg <- 1
     imported_data$meta <- NULL
     imported_data$sheets <- NULL
     imported_data$source <- NULL
@@ -52,6 +56,7 @@ server <- function(input, output, session) {
   bridge_last_token <- reactiveVal(NA_real_)
   bridge_pending_autorange <- FALSE
   bridge_pending_offset <- NA_real_
+  ratio_correction_enabled <- TRUE
 
   bridge_store_get_all <- function() {
     x <- get0(bridge_store_name, envir = .GlobalEnv, inherits = FALSE, ifnotfound = NULL)
@@ -66,6 +71,64 @@ server <- function(input, output, session) {
     entry <- store[[bridge_session_key]]
     if (is.null(entry) || !is.list(entry)) return(NULL)
     entry[[channel]]
+  }
+
+  safe_num_scalar <- function(x, default = NA_real_) {
+    v <- suppressWarnings(as.numeric(x)[1])
+    if (!is.finite(v)) return(default)
+    v
+  }
+
+  normalize_factor <- function(v, default = 1) {
+    vv <- safe_num_scalar(v, default = default)
+    if (!is.finite(vv) || vv <= 0) return(default)
+    vv
+  }
+
+  fit_param_map <- function(df) {
+    if (is.null(df) || !is.data.frame(df)) return(NULL)
+    if (!all(c("parameter", "value") %in% names(df))) return(NULL)
+    setNames(as.character(df$value), trimws(as.character(df$parameter)))
+  }
+
+  get_fit_param_num <- function(fp_map, key, default = NA_real_) {
+    if (is.null(fp_map) || length(fp_map) == 0) return(default)
+    key_lc <- tolower(as.character(key)[1])
+    nms <- names(fp_map)
+    idx <- match(key_lc, tolower(nms))
+    if (is.na(idx)) return(default)
+    safe_num_scalar(fp_map[[idx]], default = default)
+  }
+
+  sync_ratio_factor_display <- function(fh, fg) {
+    fh_txt <- format(signif(normalize_factor(fh, 1), 6), scientific = FALSE, trim = TRUE)
+    fg_txt <- format(signif(normalize_factor(fg, 1), 6), scientific = FALSE, trim = TRUE)
+    updateTextInput(session, "graph_fh_display", value = fh_txt)
+    updateTextInput(session, "graph_fg_display", value = fg_txt)
+  }
+
+  get_ratio_multiplier <- function(apply_ratio = ratio_correction_enabled) {
+    if (!isTRUE(apply_ratio)) return(1)
+    fh <- normalize_factor(imported_data$ratio_fh, 1)
+    fg <- normalize_factor(imported_data$ratio_fg, 1)
+    fg / fh
+  }
+
+  get_bottom_plot_data <- function(apply_ratio = ratio_correction_enabled) {
+    int_data <- imported_data$integration
+    sim_data <- imported_data$simulation
+    mult <- get_ratio_multiplier(apply_ratio = apply_ratio)
+
+    if (!is.null(int_data) && is.data.frame(int_data) && "Ratio_App" %in% names(int_data)) {
+      int_data <- as.data.frame(int_data)
+      int_data$Ratio_App <- int_data$Ratio_App * mult
+    }
+    if (!is.null(sim_data) && is.data.frame(sim_data) && "Ratio_App" %in% names(sim_data)) {
+      sim_data <- as.data.frame(sim_data)
+      sim_data$Ratio_App <- sim_data$Ratio_App * mult
+    }
+
+    list(integration = int_data, simulation = sim_data)
   }
 
   consume_step2_plot_payload <- function(payload) {
@@ -135,16 +198,20 @@ server <- function(input, output, session) {
     imported_data$filename <- src_chr[1]
 
     offset_from_fit <- NA_real_
-    if (!is.null(imported_data$fit_params) && all(c("parameter", "value") %in% names(imported_data$fit_params))) {
-      fp <- setNames(as.character(imported_data$fit_params$value), trimws(as.character(imported_data$fit_params$parameter)))
-      if ("Offset_cal" %in% names(fp)) {
-        off <- suppressWarnings(as.numeric(fp[["Offset_cal"]]))
-        if (is.finite(off)) {
-          offset_from_fit <- off
-          updateNumericInput(session, "graph_heat_offset", value = off)
-        }
+    fp <- fit_param_map(imported_data$fit_params)
+    if (!is.null(fp)) {
+      off <- get_fit_param_num(fp, "Offset_cal", default = NA_real_)
+      if (is.finite(off)) {
+        offset_from_fit <- off
+        updateNumericInput(session, "graph_heat_offset", value = off)
       }
+      imported_data$ratio_fh <- normalize_factor(get_fit_param_num(fp, "fH", default = 1), 1)
+      imported_data$ratio_fg <- normalize_factor(get_fit_param_num(fp, "fG", default = 1), 1)
+    } else {
+      imported_data$ratio_fh <- 1
+      imported_data$ratio_fg <- 1
     }
+    sync_ratio_factor_display(imported_data$ratio_fh, imported_data$ratio_fg)
 
     # Bridge import should behave like file import: run auto-range immediately,
     # then replay once after UI flush to avoid first-hop race conditions.
@@ -177,19 +244,16 @@ server <- function(input, output, session) {
     if (!is.finite(off)) {
       off <- suppressWarnings(as.numeric(input$graph_heat_offset %||% PLOT_DEFAULTS$heat_offset)[1])
     }
-    if (!is.finite(off) && !is.null(imported_data$fit_params) &&
-        all(c("parameter", "value") %in% names(imported_data$fit_params))) {
-      fp <- setNames(as.character(imported_data$fit_params$value), trimws(as.character(imported_data$fit_params$parameter)))
-      if ("Offset_cal" %in% names(fp)) {
-        off2 <- suppressWarnings(as.numeric(fp[["Offset_cal"]]))
-        if (is.finite(off2)) off <- off2
-      }
+    if (!is.finite(off)) {
+      fp <- fit_param_map(imported_data$fit_params)
+      off2 <- get_fit_param_num(fp, "Offset_cal", default = NA_real_)
+      if (is.finite(off2)) off <- off2
     }
     if (!is.finite(off)) off <- PLOT_DEFAULTS$heat_offset
     off
   }
 
-  apply_auto_ranges <- function(offset_override = NA_real_) {
+  apply_auto_ranges <- function(offset_override = NA_real_, apply_ratio = ratio_correction_enabled) {
     if (!is.null(imported_data$power) && nrow(imported_data$power) > 0 &&
         "Time_s" %in% colnames(imported_data$power)) {
       time_unit <- input$top_time_unit %||% "min"
@@ -214,8 +278,9 @@ server <- function(input, output, session) {
       }
     }
 
-    int_data <- imported_data$integration
-    sim_data <- imported_data$simulation
+    bottom_data <- get_bottom_plot_data(apply_ratio = apply_ratio)
+    int_data <- bottom_data$integration
+    sim_data <- bottom_data$simulation
     has_int <- !is.null(int_data) && nrow(int_data) > 0
     has_sim <- !is.null(sim_data) && nrow(sim_data) > 0
     if (!(has_int || has_sim)) return(invisible(FALSE))
@@ -254,13 +319,13 @@ server <- function(input, output, session) {
     bridge_pending_autorange <<- TRUE
 
     # 1) Immediate apply for already-mounted controls.
-    tryCatch(apply_auto_ranges(offset_override = off), error = function(e) NULL)
+    tryCatch(apply_auto_ranges(offset_override = off, apply_ratio = ratio_correction_enabled), error = function(e) NULL)
 
     # 2) Deferred apply after flush, for first navigation where controls may
     # not be fully bound when the bridge payload arrives.
     session$onFlushed(function() {
       off2 <- bridge_pending_offset
-      tryCatch(apply_auto_ranges(offset_override = off2), error = function(e) NULL)
+      tryCatch(apply_auto_ranges(offset_override = off2, apply_ratio = ratio_correction_enabled), error = function(e) NULL)
     }, once = TRUE)
   }
 
@@ -268,7 +333,7 @@ server <- function(input, output, session) {
     if (!isTRUE(bridge_pending_autorange)) return(invisible())
     if (!identical(input$main_tabs, "Step 3 Plot & Export")) return(invisible())
     off <- bridge_pending_offset
-    tryCatch(apply_auto_ranges(offset_override = off), error = function(e) NULL)
+    tryCatch(apply_auto_ranges(offset_override = off, apply_ratio = ratio_correction_enabled), error = function(e) NULL)
     bridge_pending_autorange <<- FALSE
   }, ignoreInit = TRUE)
   
@@ -568,23 +633,24 @@ server <- function(input, output, session) {
         }
       }
       
-      # 读取 fit_params（竖列 parameter/value）；若有 Offset_cal 则填入 Baseline heat offset，并用于下 panel 范围计算（扣完基线后定范围）
+      # 读取 fit_params（竖列 parameter/value）；读取 Offset_cal/fH/fG
       offset_for_range <- as.numeric(input$graph_heat_offset %||% PLOT_DEFAULTS$heat_offset)
       if ("fit_params" %in% sheets) {
         imported_data$fit_params <- as.data.frame(readxl::read_excel(filepath, sheet = "fit_params"))
         imported_data$sheets[["fit_params"]] <- imported_data$fit_params
-        fp_df <- imported_data$fit_params
-        if (!is.null(fp_df) && nrow(fp_df) >= 1 && all(c("parameter", "value") %in% colnames(fp_df))) {
-          param_vals <- setNames(as.character(fp_df$value), trimws(as.character(fp_df$parameter)))
-          if ("Offset_cal" %in% names(param_vals)) {
-            offset_num <- suppressWarnings(as.numeric(param_vals["Offset_cal"]))
-            if (length(offset_num) > 0 && !is.na(offset_num[1])) {
-              offset_for_range <- offset_num[1]
-              updateNumericInput(session, "graph_heat_offset", value = offset_num[1])
-            }
-          }
+        fp_map <- fit_param_map(imported_data$fit_params)
+        offset_num <- get_fit_param_num(fp_map, "Offset_cal", default = NA_real_)
+        if (is.finite(offset_num)) {
+          offset_for_range <- offset_num
+          updateNumericInput(session, "graph_heat_offset", value = offset_num)
         }
+        imported_data$ratio_fh <- normalize_factor(get_fit_param_num(fp_map, "fH", default = 1), 1)
+        imported_data$ratio_fg <- normalize_factor(get_fit_param_num(fp_map, "fG", default = 1), 1)
+      } else {
+        imported_data$ratio_fh <- 1
+        imported_data$ratio_fg <- 1
       }
+      sync_ratio_factor_display(imported_data$ratio_fh, imported_data$ratio_fg)
       
       # 读取 meta_rev/meta（可选）
       if ("meta_rev" %in% sheets) {
@@ -605,7 +671,13 @@ server <- function(input, output, session) {
       }
       
       # 导入后统一执行自动范围（与 Step2->Step3 桥接路径一致）
-      tryCatch(apply_auto_ranges(offset_override = offset_for_range), error = function(e) NULL)
+      tryCatch(
+        apply_auto_ranges(
+          offset_override = offset_for_range,
+          apply_ratio = isTRUE(input$graph_apply_ratio_correction)
+        ),
+        error = function(e) NULL
+      )
       
     }, error = function(e) {
       showNotification(paste0("Import failed: ", e$message), type = "error", duration = 8)
@@ -641,8 +713,9 @@ server <- function(input, output, session) {
   })
   
   observeEvent(input$bot_auto_xrange, {
-    int_data <- imported_data$integration
-    sim_data <- imported_data$simulation
+    bottom_data <- get_bottom_plot_data(apply_ratio = isTRUE(input$graph_apply_ratio_correction))
+    int_data <- bottom_data$integration
+    sim_data <- bottom_data$simulation
     has_int <- !is.null(int_data) && nrow(int_data) > 0 && "Ratio_App" %in% colnames(int_data)
     has_sim <- !is.null(sim_data) && nrow(sim_data) > 0 && "Ratio_App" %in% colnames(sim_data)
     if (!has_int && !has_sim) {
@@ -718,6 +791,17 @@ server <- function(input, output, session) {
         updateNumericInput(session, "bot_ymax", value = r[2])
       }
     }
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$graph_apply_ratio_correction, {
+    ratio_correction_enabled <<- isTRUE(input$graph_apply_ratio_correction)
+    tryCatch(
+      apply_auto_ranges(
+        offset_override = get_effective_offset(),
+        apply_ratio = ratio_correction_enabled
+      ),
+      error = function(e) NULL
+    )
   }, ignoreInit = TRUE)
 
   # ============================================================
@@ -800,15 +884,16 @@ server <- function(input, output, session) {
   # ============================================================
   current_figure <- reactive({
     # 至少需要有某种数据
+    bottom_data <- get_bottom_plot_data(apply_ratio = isTRUE(input$graph_apply_ratio_correction))
     has_data <- !is.null(imported_data$power) ||
-                !is.null(imported_data$integration) ||
-                !is.null(imported_data$simulation)
+                !is.null(bottom_data$integration) ||
+                !is.null(bottom_data$simulation)
     if (!has_data) return(NULL)
     
     create_itc_figure(
       power_data       = imported_data$power,
-      integration_data = imported_data$integration,
-      simulation_data  = imported_data$simulation,
+      integration_data = bottom_data$integration,
+      simulation_data  = bottom_data$simulation,
       params           = plot_params()
     )
   })

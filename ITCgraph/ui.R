@@ -101,6 +101,29 @@ ui <- fluidPage(
         width: 100%;
       }
       .graph-root .preview-container .shiny-plot-output { max-width: 100%; }
+
+      /* Read-only fit factor fields */
+      .graph-root input.readonly-fit-factor {
+        background-color: #f2f2f2 !important;
+        color: #555 !important;
+        cursor: not-allowed;
+      }
+    ")),
+    tags$script(HTML("
+      function markGraphReadonlyFields() {
+        $('#graph_fh_display, #graph_fg_display').each(function() {
+          $(this)
+            .prop('readonly', true)
+            .attr('readonly', 'readonly')
+            .addClass('readonly-fit-factor');
+        });
+      }
+      $(document).on('shiny:connected shiny:reconnected shown.bs.tab', function() {
+        markGraphReadonlyFields();
+      });
+      $(document).on('shiny:value shiny:inputchanged', function() {
+        markGraphReadonlyFields();
+      });
     "))
   ),
   
@@ -187,6 +210,11 @@ ui <- fluidPage(
             column(6, selectInput("energy_unit", label = NULL,
                                   choices = c("cal" = "cal", "J" = "J"),
                                   selected = PLOT_DEFAULTS$energy_unit))
+          ),
+          fluidRow(
+            column(3, textInput("graph_fh_display", label = "fH", value = "1")),
+            column(3, textInput("graph_fg_display", label = "fG", value = "1")),
+            column(6, checkboxInput("graph_apply_ratio_correction", "Apply ratio correction (fG/fH)", value = TRUE))
           )
         ),
         wellPanel(
