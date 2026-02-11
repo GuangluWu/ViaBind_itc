@@ -14,16 +14,8 @@ if (!requireNamespace("colourpicker", quietly = TRUE)) {
   warning("Package 'colourpicker' is not installed. Color pickers will use text input instead.")
 }
 
-# 加载 i18n 翻译模块
-source("R/i18n.R", local = FALSE)
-
 # 加载能量单位标签模块（类似 i18n，用于 cal/J 切换）
 source("R/energy_units.R", local = FALSE)
-
-# 验证翻译函数
-if (!exists("tr", envir = .GlobalEnv)) {
-  stop("Failed to load tr() function from R/i18n.R.")
-}
 
 # 全局默认值
 PLOT_DEFAULTS <- list(

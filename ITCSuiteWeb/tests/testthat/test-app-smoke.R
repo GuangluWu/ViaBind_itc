@@ -7,7 +7,7 @@ if (!requireNamespace("testthat", quietly = TRUE) || !requireNamespace("shinytes
       name = "app-launch-smoke",
       load_timeout = 60000
     )
-    testthat::expect_true(app$get_value(input = "main_tabs") %in% c("Step 1 Process", "Step 2 Sim & Fit", "Step 3 Plot & Export"))
+    testthat::expect_true(app$get_value(input = "main_tabs") %in% c("Step 1 Baseline & Integration", "Step 2 Simulation & Fitting", "Step 3 Plot & Export"))
     app$stop()
   })
 }

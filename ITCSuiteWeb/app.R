@@ -141,8 +141,8 @@ ui <- fluidPage(
     class = "main-host-wrap",
     tabsetPanel(
       id = "main_tabs",
-      tabPanel("Step 1 Process", uiOutput("legacy_processor_ui")),
-      tabPanel("Step 2 Sim & Fit", uiOutput("legacy_simfit_ui")),
+      tabPanel("Step 1 Baseline & Integration", uiOutput("legacy_processor_ui")),
+      tabPanel("Step 2 Simulation & Fitting", uiOutput("legacy_simfit_ui")),
       tabPanel("Step 3 Plot & Export", uiOutput("legacy_graph_ui"))
     )
   )

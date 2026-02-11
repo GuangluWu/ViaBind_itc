@@ -932,7 +932,7 @@ server <- function(input, output, session) {
   # This fixes the first-click case where payload arrives before tab controls exist.
   observe({
     invalidateLater(250, session)
-    if (!identical(input$main_tabs, "Step 2 Sim & Fit")) return()
+    if (!identical(input$main_tabs, "Step 2 Simulation & Fitting")) return()
     payload <- get_latest_step1_payload()
     if (is.null(payload) || !is.list(payload)) return()
     token <- payload_token(payload)

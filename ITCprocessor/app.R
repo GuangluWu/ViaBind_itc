@@ -527,7 +527,7 @@ server <- function(input, output, session) {
     payload$token <- as.numeric(Sys.time())
     bridge_set("step1_payload", payload)
     tryCatch({
-      updateTabsetPanel(session, "main_tabs", selected = "Step 2 Sim & Fit")
+      updateTabsetPanel(session, "main_tabs", selected = "Step 2 Simulation & Fitting")
     }, error = function(e) NULL)
     showNotification("Data sent to Step 2.", type = "message", duration = 2)
   }, ignoreInit = TRUE)
