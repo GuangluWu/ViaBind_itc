@@ -201,7 +201,7 @@ ui <- fluidPage(
             column(4, uiOutput("bot_layer_order_ui"))
           ),
           fluidRow(
-            column(12, uiOutput("bot_first_point_dim_ui"))
+            column(12, uiOutput("bot_no_dim_range_ui"))
           ),
           # Fit Line Settings
           fluidRow(

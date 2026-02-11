@@ -37,7 +37,10 @@ PLOT_DEFAULTS <- list(
   bot_point_fill  = "#D66666",
   bot_point_fill_alpha = 0.7,
   bot_layer_order = "points_over_line",
-  bot_dim_first_point = TRUE,
+  # Continuous injection index range [start, end] that keeps normal color.
+  # Points outside this range are dimmed.
+  bot_no_dim_start = 2,
+  bot_no_dim_end   = NA_real_,
   bot_line_color   = "#000000",
   bot_line_width   = 0.6,
   bot_line_linetype = "longdash",  # solid, dashed, dotted, dotdash, longdash

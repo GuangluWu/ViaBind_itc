@@ -171,7 +171,6 @@ create_isotherm_panel <- function(integration_data, simulation_data, p) {
   fill_alpha <- as.numeric(p$bot_point_fill_alpha %||% 0.7)
   fill_alpha <- max(min(fill_alpha, 1), 0)
   point_fill <- grDevices::adjustcolor(p$bot_point_fill, alpha.f = fill_alpha)
-  dim_first <- isTRUE(p$bot_dim_first_point)
   dim_color <- "#C8C8C8"
   dim_point_fill <- grDevices::adjustcolor(dim_color, alpha.f = fill_alpha)
   
@@ -191,11 +190,38 @@ create_isotherm_panel <- function(integration_data, simulation_data, p) {
   
   add_points <- function(g) {
     if (!has_int) return(g)
-    if (dim_first && nrow(int_plot) > 0) {
-      first_point <- int_plot[1, , drop = FALSE]
-      rest_points <- if (nrow(int_plot) > 1) int_plot[-1, , drop = FALSE] else NULL
+    n_inj <- nrow(int_plot)
+    int_plot$inj_idx <- seq_len(n_inj)
+
+    no_dim_start <- suppressWarnings(as.integer(p$bot_no_dim_start))
+    no_dim_end <- suppressWarnings(as.integer(p$bot_no_dim_end))
+
+    # Backward compatibility for old settings payload using bot_dim_first_point.
+    if (!is.finite(no_dim_start) || !is.finite(no_dim_end)) {
+      if (isTRUE(p$bot_dim_first_point)) {
+        no_dim_start <- 2L
+        no_dim_end <- n_inj
+      } else {
+        no_dim_start <- 1L
+        no_dim_end <- n_inj
+      }
+    }
+
+    no_dim_start <- max(1L, min(n_inj, as.integer(no_dim_start)))
+    no_dim_end <- max(1L, min(n_inj, as.integer(no_dim_end)))
+    if (no_dim_start > no_dim_end) {
+      tmp <- no_dim_start
+      no_dim_start <- no_dim_end
+      no_dim_end <- tmp
+    }
+
+    int_plot$is_not_dimmed <- int_plot$inj_idx >= no_dim_start & int_plot$inj_idx <= no_dim_end
+    keep_points <- int_plot[int_plot$is_not_dimmed, , drop = FALSE]
+    dim_points <- int_plot[!int_plot$is_not_dimmed, , drop = FALSE]
+
+    if (nrow(dim_points) > 0) {
       g <- g + geom_point(
-        data = first_point,
+        data = dim_points,
         aes(x = x, y = y),
         shape = p$bot_point_shape,
         size = p$bot_point_size,
@@ -203,21 +229,10 @@ create_isotherm_panel <- function(integration_data, simulation_data, p) {
         fill = dim_point_fill,
         stroke = 0.6
       )
-      if (!is.null(rest_points) && nrow(rest_points) > 0) {
-        g <- g + geom_point(
-          data = rest_points,
-          aes(x = x, y = y),
-          shape = p$bot_point_shape,
-          size = p$bot_point_size,
-          color = p$bot_point_color,
-          fill = point_fill,
-          stroke = 0.6
-        )
-      }
-      g
-    } else {
-      g + geom_point(
-        data = int_plot,
+    }
+    if (nrow(keep_points) > 0) {
+      g <- g + geom_point(
+        data = keep_points,
         aes(x = x, y = y),
         shape = p$bot_point_shape,
         size = p$bot_point_size,
@@ -226,6 +241,7 @@ create_isotherm_panel <- function(integration_data, simulation_data, p) {
         stroke = 0.6
       )
     }
+    g
   }
   
   layer_order <- p$bot_layer_order %||% "points_over_line"

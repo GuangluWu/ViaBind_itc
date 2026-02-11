@@ -29,6 +29,7 @@ bot_point_fill_alpha,散点填充透明度,Point fill opacity
 bot_point_size,散点大小,Point size
 bot_point_shape,散点形状,Point shape
 bot_dim_first_point,淡化第一个点,Dim first point
+bot_no_dim_range,不淡化注射点区间,Not dimmed injection range
 bot_layer_order,线/点图层顺序,Line/point order
 layer_points_over_line,点在上方,Points on top
 layer_line_over_points,线在上方,Line on top

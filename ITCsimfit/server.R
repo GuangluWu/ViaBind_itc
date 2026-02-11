@@ -2944,11 +2944,46 @@ server <- function(input, output, session) {
     current_rss <- rss_info$rss
     
     # 2. 【核心修改】构建名称 (Name)
-    # 格式：YYYY-MM-DD HH:MM [- UserNote]
-    time_str <- format(Sys.time(), "%Y-%m-%d %H:%M")
-    user_note <- trimws(input$snap_name) # 去除首尾空格
-    
-    final_name <- if(nchar(user_note) > 0) paste(time_str, user_note, sep=" - ") else time_str
+    # 规则：
+    # 1) xx + 文件名 + 时间戳
+    # 2) 文件名 + 时间戳
+    # 3) xx + sim + 时间戳
+    # 4) sim + 时间戳
+    time_str <- format(Sys.time(), "%Y%m%d_%H%M%S")
+    xx_raw <- trimws(input$snap_name)
+    file_raw <- values$imported_xlsx_base_name
+    has_base_name <- FALSE
+    if (!is.null(file_raw) && length(file_raw) > 0) {
+      base_candidate <- trimws(as.character(file_raw[[1]]))
+      has_base_name <- nzchar(base_candidate)
+    }
+    if (!has_base_name) file_raw <- values$imported_xlsx_filename
+
+    sanitize_snap_part <- function(x, drop_extension = FALSE) {
+      if (is.null(x) || length(x) == 0) return("")
+      out <- trimws(as.character(x[[1]]))
+      if (!nzchar(out)) return("")
+      if (drop_extension) out <- tools::file_path_sans_ext(out)
+      out <- gsub("[[:space:]/\\\\]+", "_", out)
+      out <- gsub("_+", "_", out)
+      out <- gsub("^_+|_+$", "", out)
+      out
+    }
+
+    xx_part <- sanitize_snap_part(xx_raw, drop_extension = FALSE)
+    file_part <- sanitize_snap_part(file_raw, drop_extension = TRUE)
+    has_xx <- nzchar(xx_part)
+    has_file <- nzchar(file_part)
+
+    final_name <- if (has_xx && has_file) {
+      paste(xx_part, file_part, time_str, sep = "_")
+    } else if (!has_xx && has_file) {
+      paste(file_part, time_str, sep = "_")
+    } else if (has_xx && !has_file) {
+      paste(xx_part, "sim", time_str, sep = "_")
+    } else {
+      paste("sim", time_str, sep = "_")
+    }
     
     # 3. 构造数据行 (用 Name 替代原来的 Time 列)
     # [新增] 包含实验条件，放在最后几列

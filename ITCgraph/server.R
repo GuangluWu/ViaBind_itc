@@ -135,7 +135,9 @@ server <- function(input, output, session) {
     updateNumericInput(session, "bot_point_fill_alpha", value = PLOT_DEFAULTS$bot_point_fill_alpha)
     updateSelectInput(session, "bot_point_shape", selected = as.character(PLOT_DEFAULTS$bot_point_shape))
     updateSelectInput(session, "bot_layer_order", selected = PLOT_DEFAULTS$bot_layer_order)
-    updateCheckboxInput(session, "bot_dim_first_point", value = isTRUE(PLOT_DEFAULTS$bot_dim_first_point))
+    n_inj <- get_valid_injection_count(apply_ratio = ratio_correction_enabled)
+    no_dim_range <- resolve_no_dim_range(NULL, n_inj)
+    updateSliderInput(session, "bot_no_dim_range", min = 1, max = n_inj, value = no_dim_range)
     update_color_input("bot_line_color", PLOT_DEFAULTS$bot_line_color)
     updateNumericInput(session, "bot_line_width", value = PLOT_DEFAULTS$bot_line_width)
     updateSelectInput(session, "bot_line_linetype", selected = PLOT_DEFAULTS$bot_line_linetype)
@@ -178,6 +180,52 @@ server <- function(input, output, session) {
     }
 
     list(integration = int_data, simulation = sim_data)
+  }
+
+  get_valid_injection_count <- function(apply_ratio = ratio_correction_enabled) {
+    bottom_data <- get_bottom_plot_data(apply_ratio = apply_ratio)
+    int_data <- bottom_data$integration
+    if (is.null(int_data) || !is.data.frame(int_data)) return(1L)
+    if (!all(c("Ratio_App", "heat_cal_mol") %in% names(int_data))) return(1L)
+
+    valid_rows <- is.finite(int_data$Ratio_App) & is.finite(int_data$heat_cal_mol)
+    n_inj <- sum(valid_rows, na.rm = TRUE)
+    if (!is.finite(n_inj) || n_inj < 1) return(1L)
+    as.integer(n_inj)
+  }
+
+  resolve_no_dim_range <- function(value, n_inj) {
+    n_inj <- suppressWarnings(as.integer(n_inj)[1])
+    if (!is.finite(n_inj) || n_inj < 1) n_inj <- 1L
+
+    default_start <- suppressWarnings(as.integer(PLOT_DEFAULTS$bot_no_dim_start)[1])
+    if (!is.finite(default_start)) default_start <- 1L
+    default_end <- suppressWarnings(as.integer(PLOT_DEFAULTS$bot_no_dim_end)[1])
+    if (!is.finite(default_end)) default_end <- n_inj
+
+    if (!is.null(value) && length(value) >= 2) {
+      start <- safe_num_scalar(value[1], default = default_start)
+      end <- safe_num_scalar(value[2], default = default_end)
+    } else {
+      start <- default_start
+      end <- default_end
+    }
+
+    start <- max(1L, min(n_inj, as.integer(round(start))))
+    end <- max(1L, min(n_inj, as.integer(round(end))))
+    if (start > end) {
+      tmp <- start
+      start <- end
+      end <- tmp
+    }
+    c(start, end)
+  }
+
+  reset_no_dim_range_to_default <- function(apply_ratio = ratio_correction_enabled) {
+    n_inj <- get_valid_injection_count(apply_ratio = apply_ratio)
+    no_dim_range <- resolve_no_dim_range(NULL, n_inj)
+    updateSliderInput(session, "bot_no_dim_range", min = 1, max = n_inj, value = no_dim_range)
+    invisible(no_dim_range)
   }
 
   resolve_step2_payload_source <- function(payload, token = NA_real_) {
@@ -281,6 +329,7 @@ server <- function(input, output, session) {
       imported_data$ratio_fg <- 1
     }
     sync_ratio_factor_display(imported_data$ratio_fh, imported_data$ratio_fg)
+    reset_no_dim_range_to_default(apply_ratio = ratio_correction_enabled)
 
     # Bridge import should behave like file import: run auto-range immediately,
     # then replay once after UI flush to avoid first-hop race conditions.
@@ -605,9 +654,20 @@ server <- function(input, output, session) {
                 selectize = FALSE)
   })
   
-  output$bot_first_point_dim_ui <- renderUI({
-    checkboxInput("bot_dim_first_point", "Dim first injection point",
-                  value = isolate(input$bot_dim_first_point) %||% PLOT_DEFAULTS$bot_dim_first_point)
+  output$bot_no_dim_range_ui <- renderUI({
+    n_inj <- get_valid_injection_count(apply_ratio = isTRUE(input$graph_apply_ratio_correction))
+    current_range <- isolate(input$bot_no_dim_range)
+    selected <- resolve_no_dim_range(current_range, n_inj)
+    sliderInput(
+      "bot_no_dim_range",
+      "Not dimmed injection range",
+      min = 1,
+      max = n_inj,
+      value = selected,
+      step = 1,
+      sep = "",
+      ticks = FALSE
+    )
   })
   
   # ---- Global settings labels ----
@@ -722,6 +782,7 @@ server <- function(input, output, session) {
         imported_data$ratio_fg <- 1
       }
       sync_ratio_factor_display(imported_data$ratio_fh, imported_data$ratio_fg)
+      reset_no_dim_range_to_default(apply_ratio = isTRUE(input$graph_apply_ratio_correction))
       
       # 读取 meta_rev/meta（可选）
       if ("meta_rev" %in% sheets) {
@@ -903,6 +964,10 @@ server <- function(input, output, session) {
     # 始终使用用户输入的轴标签（不再覆盖），默认值由 unit_label 在切换时更新
     top_ylab <- input$top_ylab %||% unit_label("top_ylab", energy_unit)
     bot_ylab <- input$bot_ylab %||% unit_label("bot_ylab", energy_unit)
+    no_dim_range <- resolve_no_dim_range(
+      input$bot_no_dim_range,
+      get_valid_injection_count(apply_ratio = isTRUE(input$graph_apply_ratio_correction))
+    )
     params <- list(
       # 上 Panel
       top_xlab       = input$top_xlab %||% PLOT_DEFAULTS$top_xlab,
@@ -922,7 +987,8 @@ server <- function(input, output, session) {
       bot_point_size  = input$bot_point_size %||% PLOT_DEFAULTS$bot_point_size,
       bot_point_shape = as.integer(input$bot_point_shape %||% PLOT_DEFAULTS$bot_point_shape),
       bot_layer_order = input$bot_layer_order %||% PLOT_DEFAULTS$bot_layer_order,
-      bot_dim_first_point = isTRUE(input$bot_dim_first_point %||% PLOT_DEFAULTS$bot_dim_first_point),
+      bot_no_dim_start = as.integer(no_dim_range[1]),
+      bot_no_dim_end = as.integer(no_dim_range[2]),
       bot_line_color   = input$bot_line_color %||% PLOT_DEFAULTS$bot_line_color,
       bot_line_width   = input$bot_line_width %||% PLOT_DEFAULTS$bot_line_width,
       bot_line_linetype = input$bot_line_linetype %||% PLOT_DEFAULTS$bot_line_linetype,
@@ -1064,8 +1130,12 @@ server <- function(input, output, session) {
   
   # 收集当前设置（28 个参数），用于保存为 JSON
   get_settings_list <- function() {
+    no_dim_range <- resolve_no_dim_range(
+      input$bot_no_dim_range,
+      get_valid_injection_count(apply_ratio = isTRUE(input$graph_apply_ratio_correction))
+    )
     list(
-      version = 1L,
+      version = 2L,
       top_xlab       = as.character(input$top_xlab %||% PLOT_DEFAULTS$top_xlab),
       top_ylab       = as.character(input$top_ylab %||% unit_label("top_ylab", input$energy_unit %||% "cal")),
       top_time_unit  = as.character(input$top_time_unit %||% PLOT_DEFAULTS$top_time_unit),
@@ -1087,7 +1157,8 @@ server <- function(input, output, session) {
       bot_point_size  = as.numeric(input$bot_point_size %||% PLOT_DEFAULTS$bot_point_size),
       bot_point_shape = as.integer(input$bot_point_shape %||% PLOT_DEFAULTS$bot_point_shape),
       bot_layer_order = as.character(input$bot_layer_order %||% PLOT_DEFAULTS$bot_layer_order),
-      bot_dim_first_point = as.logical(input$bot_dim_first_point %||% PLOT_DEFAULTS$bot_dim_first_point),
+      bot_no_dim_start = as.integer(no_dim_range[1]),
+      bot_no_dim_end = as.integer(no_dim_range[2]),
       bot_line_color   = as.character(input$bot_line_color %||% PLOT_DEFAULTS$bot_line_color),
       bot_line_width   = as.numeric(input$bot_line_width %||% PLOT_DEFAULTS$bot_line_width),
       bot_line_linetype = as.character(input$bot_line_linetype %||% PLOT_DEFAULTS$bot_line_linetype),
@@ -1135,8 +1206,21 @@ server <- function(input, output, session) {
       if (!is.null(s$bot_point_shape)) updateSelectInput(session, "bot_point_shape", selected = as.character(as.integer(s$bot_point_shape)))
       if (!is.null(s$bot_line_linetype)) updateSelectInput(session, "bot_line_linetype", selected = as.character(s$bot_line_linetype))
       if (!is.null(s$bot_layer_order)) updateSelectInput(session, "bot_layer_order", selected = as.character(s$bot_layer_order))
-      if (!is.null(s$bot_dim_first_point)) updateCheckboxInput(session, "bot_dim_first_point", value = as.logical(s$bot_dim_first_point))
       if (!is.null(s$energy_unit)) updateSelectInput(session, "energy_unit", selected = as.character(s$energy_unit))
+      n_inj <- get_valid_injection_count(apply_ratio = isTRUE(input$graph_apply_ratio_correction))
+      if (!is.null(s$bot_no_dim_start) || !is.null(s$bot_no_dim_end)) {
+        imported_range <- c(
+          safe_num_scalar(s$bot_no_dim_start, default = NA_real_),
+          safe_num_scalar(s$bot_no_dim_end, default = NA_real_)
+        )
+        no_dim_range <- resolve_no_dim_range(imported_range, n_inj)
+        updateSliderInput(session, "bot_no_dim_range", min = 1, max = n_inj, value = no_dim_range)
+      } else if (!is.null(s$bot_dim_first_point)) {
+        old_dim_first <- isTRUE(as.logical(s$bot_dim_first_point))
+        no_dim_range <- if (old_dim_first) c(2, n_inj) else c(1, n_inj)
+        no_dim_range <- resolve_no_dim_range(no_dim_range, n_inj)
+        updateSliderInput(session, "bot_no_dim_range", min = 1, max = n_inj, value = no_dim_range)
+      }
       # 数值
       if (!is.null(s$top_xmin)) updateNumericInput(session, "top_xmin", value = as.numeric(s$top_xmin))
       if (!is.null(s$top_xmax)) updateNumericInput(session, "top_xmax", value = as.numeric(s$top_xmax))
