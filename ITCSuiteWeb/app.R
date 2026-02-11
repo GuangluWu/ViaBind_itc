@@ -20,7 +20,7 @@ detect_repo_root <- function() {
   )
 }
 
-load_legacy_app <- function(app_dir, label) {
+load_legacy_app <- function(app_dir, label, required_symbols = character(0)) {
   app_file <- file.path(app_dir, "app.R")
   if (!dir.exists(app_dir)) {
     fail_fast("Startup check failed: missing legacy dir for ", label, ": ", app_dir)
@@ -57,6 +57,23 @@ load_legacy_app <- function(app_dir, label) {
 
   if (!is.function(server_fun)) {
     fail_fast("Startup check failed: legacy ", label, " `server` is not a function.")
+  }
+  # Keep legacy server lookups inside its own captured scope to avoid
+  # cross-module symbol pollution when multiple legacy apps are hosted together.
+  environment(server_fun) <- env
+
+  if (length(required_symbols) > 0) {
+    missing <- required_symbols[!vapply(
+      required_symbols,
+      function(sym) exists(sym, envir = env, inherits = TRUE),
+      logical(1)
+    )]
+    if (length(missing) > 0) {
+      fail_fast(
+        "Startup check failed: missing required symbols for ",
+        label, ": ", paste(missing, collapse = ", "), "."
+      )
+    }
   }
 
   list(ui = ui_obj, server = server_fun, env = env, label = label)
@@ -101,7 +118,16 @@ bridge_step2_to_step3_server <- function(id, bridge_bus) {
 
 repo_root <- detect_repo_root()
 processor_legacy <- load_legacy_app(file.path(repo_root, "ITCprocessor"), "ITCprocessor")
-simfit_legacy <- load_legacy_app(file.path(repo_root, "ITCsimfit"), "ITCsimfit")
+simfit_legacy <- load_legacy_app(
+  file.path(repo_root, "ITCsimfit"),
+  "ITCsimfit",
+  required_symbols = c(
+    "calculate_weighted_robust_loss",
+    "calculate_weights_from_derivative",
+    "huber_loss",
+    "calculate_huber_delta"
+  )
+)
 graph_legacy <- load_legacy_app(file.path(repo_root, "ITCgraph"), "ITCgraph")
 
 ui <- fluidPage(

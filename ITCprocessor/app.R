@@ -524,6 +524,7 @@ server <- function(input, output, session) {
   observeEvent(input$btn_data_to_fit, {
     payload <- step1_payload()
     if (is.null(payload)) return()
+    payload$token <- as.numeric(Sys.time())
     bridge_set("step1_payload", payload)
     tryCatch({
       updateTabsetPanel(session, "main_tabs", selected = "Step 2 Sim & Fit")
@@ -531,11 +532,6 @@ server <- function(input, output, session) {
     showNotification("Data sent to Step 2.", type = "message", duration = 2)
   }, ignoreInit = TRUE)
 
-  observe({
-    payload <- step1_payload()
-    if (!is.null(payload)) bridge_set("step1_payload", payload)
-  })
-  
   # ---------------------------------------------------------
   # 回滚到稳定版逻辑：全量重绘 + 状态保持尝试
   # ---------------------------------------------------------

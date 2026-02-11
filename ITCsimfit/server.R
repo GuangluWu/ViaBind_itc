@@ -17,6 +17,7 @@ server <- function(input, output, session) {
     bridge_session_key <- paste0("session_", format(Sys.time(), "%Y%m%d%H%M%OS6"))
   }
   bridge_last_step1_token <- reactiveVal(NA_real_)
+  bridge_last_step1_input_token <- reactiveVal(NA_real_)
   
   bridge_store_get_all <- function() {
     x <- get0(bridge_store_name, envir = .GlobalEnv, inherits = FALSE, ifnotfound = NULL)
@@ -60,103 +61,107 @@ server <- function(input, output, session) {
   }
   
   # ============================================================================
-  # [i18n] 确保翻译函数可用
+  # [i18n] 使用 SimFit 私有翻译函数，避免被其他 legacy 模块覆盖
   # ============================================================================
-  # 如果 tr 函数不存在，重新加载 i18n 模块
-  if (!exists("tr", envir = .GlobalEnv)) {
-    tryCatch({
-      source("R/i18n.R", local = FALSE)
-    }, error = function(e) {
-      # 如果加载失败，创建一个简单的后备函数
-      warning("Failed to load i18n.R: ", e$message)
-      tr <<- function(key, lang = "zh") { return(key) }
-      trf <<- function(key, lang = "zh", ...) { return(key) }
-    })
-  }
-  
-  # 再次检查，确保函数存在
-  if (!exists("tr", envir = .GlobalEnv)) {
-    # 最后的后备：定义简单的函数
-    assign("tr", function(key, lang = "zh") { return(key) }, envir = .GlobalEnv)
-    assign("trf", function(key, lang = "zh", ...) { return(key) }, envir = .GlobalEnv)
-  }
-  
-  # ============================================================================
-  # [i18n] 语言状态管理
-  # ============================================================================
-  current_lang <- reactiveVal("en")  # 默认英文（与 processor 一致）
-  
-  # [新增] 语言切换进行中标志，用于防止UI重建时的循环触发
-  lang_switching <- reactiveVal(FALSE)
-  
-  # 语言切换响应式函数
-  lang <- reactive({
-    lang_val <- current_lang()
-    # 确保返回值不为空
-    if(is.null(lang_val) || length(lang_val) == 0 || !lang_val %in% c("zh", "en")) {
-      return("en")
-    }
-    return(lang_val)
-  })
-  
-  # 安全获取语言值的辅助函数（用于非reactive上下文）
-  get_lang_safe <- function() {
-    tryCatch({
-      lang_val <- current_lang()
-      if(is.null(lang_val) || length(lang_val) == 0 || !lang_val %in% c("zh", "en")) {
-        return("en")
-      }
-      return(lang_val)
-    }, error = function(e) {
-      return("en")
-    })
-  }
-  
-  # 监听语言切换按钮
-  observeEvent(input$lang_switch, {
-    # [修复] 设置切换标志，防止重复触发
-    if(lang_switching()) {
-      return()  # 如果正在切换中，忽略新的点击
-    }
-    
-    lang_switching(TRUE)
-    new_lang <- if(current_lang() == "zh") "en" else "zh"
-    current_lang(new_lang)
-    
-    # [修复] 使用 later 包延迟重置标志（如果没有 later 包，使用 Sys.sleep）
-    if(requireNamespace("later", quietly = TRUE)) {
-      later::later(function() { lang_switching(FALSE) }, delay = 0.5)
+  load_simfit_i18n <- function() {
+    empty_tbl <- data.frame(
+      Key = character(0),
+      Chinese = character(0),
+      English = character(0),
+      Category = character(0),
+      Notes = character(0),
+      stringsAsFactors = FALSE
+    )
+    csv_candidates <- unique(c(
+      "i18n_translation_table.csv",
+      file.path(getwd(), "i18n_translation_table.csv"),
+      file.path(getwd(), "ITCsimfit", "i18n_translation_table.csv"),
+      file.path(dirname(getwd()), "ITCsimfit", "i18n_translation_table.csv")
+    ))
+    csv_hits <- csv_candidates[file.exists(csv_candidates)]
+    csv_path <- if (length(csv_hits) > 0) csv_hits[[1]] else NA_character_
+    tbl <- if (!is.na(csv_path) && nzchar(csv_path)) {
+      tryCatch(
+        read.csv(csv_path, stringsAsFactors = FALSE, encoding = "UTF-8"),
+        error = function(e) {
+          warning("Failed to read SimFit i18n table: ", e$message)
+          empty_tbl
+        }
+      )
     } else {
-      # 备用方案：使用简单的异步重置（在下次 reactive flush 后）
-      # 创建一个单次触发的 observer
-      local({
-        reset_observer <- NULL
-        reset_observer <<- observe({
-          invalidateLater(500)
-          isolate({
-            lang_switching(FALSE)
-            reset_observer$destroy()  # 自毁
-          })
-        }, priority = -100)  # 低优先级，确保在其他更新之后执行
-      })
+      warning("SimFit i18n table not found. Falling back to key names.")
+      empty_tbl
     }
-  }, ignoreInit = TRUE)
+
+    tr_map <- new.env(parent = emptyenv())
+    if (nrow(tbl) > 0 && all(c("Key", "Chinese", "English") %in% names(tbl))) {
+      for (i in seq_len(nrow(tbl))) {
+        key <- tbl$Key[[i]]
+        if (is.null(key) || is.na(key) || key == "") next
+        zh_val <- tbl$Chinese[[i]]
+        en_val <- tbl$English[[i]]
+        assign(
+          key,
+          list(
+            zh = if (is.null(zh_val) || is.na(zh_val) || zh_val == "") key else as.character(zh_val),
+            en = if (is.null(en_val) || is.na(en_val) || en_val == "") key else as.character(en_val)
+          ),
+          envir = tr_map
+        )
+      }
+    }
+
+    pretty_key_fallback <- function(key) {
+      key_chr <- as.character(key)[1]
+      if (is.na(key_chr) || key_chr == "") return("")
+      txt <- gsub("_", " ", key_chr, fixed = TRUE)
+      txt <- gsub("\\s+", " ", txt, perl = TRUE)
+      txt <- trimws(txt)
+      words <- strsplit(txt, " ", fixed = TRUE)[[1]]
+      words <- vapply(words, function(w) {
+        if (!nzchar(w)) return(w)
+        paste0(toupper(substr(w, 1, 1)), substr(w, 2, nchar(w)))
+      }, FUN.VALUE = character(1))
+      paste(words, collapse = " ")
+    }
+
+    tr_local <- function(key, lang = "en") {
+      if (is.null(key) || length(key) == 0 || is.na(key) || key == "") return("")
+      lang_norm <- if (identical(as.character(lang)[1], "zh")) "zh" else "en"
+      if (exists(key, envir = tr_map, inherits = FALSE)) {
+        val <- get(key, envir = tr_map, inherits = FALSE)[[lang_norm]]
+        if (!is.null(val) && !is.na(val) && val != "") return(val)
+      }
+      pretty_key_fallback(key)
+    }
+    trf_local <- function(key, lang = "en", ...) {
+      template <- tr_local(key, lang)
+      args <- list(...)
+      if (length(args) == 0) return(template)
+      tryCatch(do.call(sprintf, c(list(template), args)), error = function(e) template)
+    }
+    list(tr = tr_local, trf = trf_local)
+  }
+  simfit_i18n <- load_simfit_i18n()
+  tr <- simfit_i18n$tr
+  trf <- simfit_i18n$trf
   
-  # 渲染应用标题（动态）
-  output$app_title_dynamic <- renderUI({
-    current_lang_val <- tryCatch(lang(), error = function(e) "en")
-    if(is.null(current_lang_val) || length(current_lang_val) == 0) current_lang_val <- "en"
-    tr("app_subtitle", current_lang_val)
-  })
+  # ============================================================================
+  # [i18n] English-first mode (language switch disabled for now)
+  # ============================================================================
+  current_lang <- reactiveVal("en")
+  lang_switching <- reactiveVal(FALSE)
+
+  lang <- reactive("en")
+
+  get_lang_safe <- function() {
+    "en"
+  }
+
+  output$app_title_dynamic <- renderUI(NULL)
   
   # 渲染语言切换按钮（仿照 processor：小国旗 + 目标语言名）
-  output$lang_switch_button <- renderUI({
-    current <- lang()
-    btn_label <- if(current == "en") "\U0001F1E8\U0001F1F3 \u7b80\u4f53\u4e2d\u6587" else "\U0001F1EC\U0001F1E7 English"
-    actionButton("lang_switch", btn_label,
-                 class = "btn-default btn-xs",
-                 style = "min-width: 90px;")
-  })
+  output$lang_switch_button <- renderUI(NULL)
   
   # ============================================================================
   # [i18n] UI 动态文本渲染
@@ -164,7 +169,11 @@ server <- function(input, output, session) {
   
   # 左栏 - 参数快照
   output$download_data_button <- renderUI({
-    downloadButton("simfit_downloadData", tr("btn_export_fit_data", lang()), class = "btn-success btn-xs")
+    downloadButton("simfit_downloadData", "Export F. Data", class = "btn-success btn-sm btn-block")
+  })
+
+  output$data_to_plot_button <- renderUI({
+    actionButton("data_to_plot", "Data -> Plot", class = "btn-info btn-sm btn-block")
   })
   
   # [新增] 模拟→实验按钮
@@ -172,6 +181,10 @@ server <- function(input, output, session) {
     actionButton("sim_to_exp", 
                  label = tr("btn_sim_to_exp", lang()), 
                  class = "btn-info btn-sm")
+  })
+
+  output$rm_exp_button <- renderUI({
+    actionButton("rm_exp", "rm Exp", class = "btn-default btn-sm")
   })
   
   output$section_param_snapshot_title <- renderUI({
@@ -201,11 +214,8 @@ server <- function(input, output, session) {
   # 中栏 - 路径构建
   output$section_path_build_title <- renderUI({
     HTML(paste0(
-      '<span style="font-weight:bold; font-size:1.1em; margin-right:10px;">1. ', 
-      tr("section_path_build", lang()), 
-      '</span>',
-      '<span style="color:gray; font-size:0.8em;">', 
-      tr("section_path_build_desc", lang()), 
+      '<span style="font-weight:bold; font-size:1.1em; margin-right:10px;">1. ',
+      tr("section_path_build", lang()),
       '</span>'
     ))
   })
@@ -247,7 +257,7 @@ server <- function(input, output, session) {
   })
   
   output$section_manual_adjust_desc <- renderUI({
-    tr("section_manual_adjust_desc", lang())
+    "dH: cal/mol"
   })
   
   output$reset_defaults_button <- renderUI({
@@ -304,11 +314,12 @@ server <- function(input, output, session) {
   })
   
   output$section_exp_data_desc <- renderUI({
-    tr("section_exp_data_desc", lang())
+    NULL
   })
   
   output$exp_file_input <- renderUI({
     input$sim_to_exp  # 依赖 Sim->Exp 按钮，点击时重置文件输入框
+    input$rm_exp      # 依赖 rm Exp 按钮，清空实验数据后可重新导入同名文件
     fileInput("exp_file", label=NULL, buttonLabel = tr("btn_import_data", lang()), accept = ".xlsx")
   })
 
@@ -323,17 +334,7 @@ server <- function(input, output, session) {
     )
   })
 
-  # [i18n] 实验数据区 numericInput 标签随语言更新（使 i18n_translation_table 中 exp_* 生效）
-  observe({
-    l <- lang()
-    updateNumericInput(session, "H_cell_0",  label = tr("exp_H_cell",   l))
-    updateNumericInput(session, "G_syringe",  label = tr("exp_G_syringe", l))
-    updateNumericInput(session, "V_cell",    label = tr("exp_V_cell",   l))
-    updateNumericInput(session, "V_inj",     label = tr("exp_V_inj",    l))
-    updateNumericInput(session, "n_inj",     label = tr("exp_n_inj",    l))
-    updateNumericInput(session, "V_pre",    label = tr("exp_V_pre",    l))
-    updateNumericInput(session, "Temp",     label = tr("exp_temp",     l))
-  })
+  # Expt Data input labels are now static English in ui.R.
   
   # 右栏 - 拟合
   output$section_fitting_title <- renderUI({
@@ -367,8 +368,7 @@ server <- function(input, output, session) {
   })
 
   output$report_button <- renderUI({
-    lbl <- if(lang() == "zh") "生成报告" else "Report"
-    actionButton("report_btn", strong(lbl), class = "btn-info btn-sm", style="flex:1 0 20%; min-width:80px; background-color: #9b59b6; border-color: #8e44ad; color: white;")
+    actionButton("report_btn", strong("Report"), class = "btn-info btn-sm", style="flex:1 0 20%; min-width:80px; background-color: #9b59b6; border-color: #8e44ad; color: white;")
   })
 
   observeEvent(input$report_btn, {
@@ -476,10 +476,10 @@ server <- function(input, output, session) {
     
     # Show Modal
     showModal(modalDialog(
-      title = if(lang() == "zh") "拟合结果报告" else "Fitting Report",
+      title = "Fitting Report",
       textAreaInput("report_content", NULL, value = full_report, rows = 15, width = "100%", resize = "vertical"),
       footer = tagList(
-        downloadButton("save_report_txt", if(lang() == "zh") "另存为 TXT" else "Save as TXT", class = "btn-success"),
+        downloadButton("save_report_txt", "Save as TXT", class = "btn-success"),
         # JS Copy Button
         tags$button(
           id = "copy_report_btn",
@@ -500,9 +500,9 @@ server <- function(input, output, session) {
                 catch (e) { alert('Failed to copy.'); }
             }
           ",
-          icon("copy"), if(lang() == "zh") "复制到剪贴板" else "Copy to Clipboard"
+          icon("copy"), "Copy to Clipboard"
         ),
-        modalButton(if(lang() == "zh") "关闭" else "Close")
+        modalButton("Close")
       ),
       size = "l",
       easyClose = TRUE
@@ -528,31 +528,6 @@ server <- function(input, output, session) {
     tr("fit_rss", lang())
   })
   
-  # 高级拟合选项
-  output$fit_advanced_options <- renderUI({
-    tags$details(
-      tags$summary(style="cursor: pointer; color: #2980b9; font-size: 0.9em; font-weight: bold; margin-bottom: 8px;",
-                  tr("fit_advanced_options", lang())),
-      div(style="margin-top: 8px; padding: 8px; background-color: #f9f9f9; border-left: 3px solid #2980b9;",
-          checkboxInput("use_weighted_fitting", tr("fit_weighted", lang()), value = FALSE, width = "100%"),
-          div(style="margin-left: 20px; margin-top: 4px; margin-bottom: 8px; font-size: 0.85em; color: #666;",
-              tr("fit_weighted_desc", lang())),
-          checkboxInput("use_robust_fitting", tr("fit_robust", lang()), value = FALSE, width = "100%"),
-          div(style="margin-left: 20px; margin-top: 4px; margin-bottom: 8px; font-size: 0.85em; color: #666;",
-              tr("fit_robust_desc", lang())),
-          conditionalPanel(
-            condition = "input.use_robust_fitting == true",
-            div(style="margin-left: 20px; margin-top: 8px;",
-                numericInput("huber_delta", tr("fit_huber_delta", lang()), value = NULL, min = 0, step = 0.1,
-                             width = "100%"),
-                div(style="font-size: 0.8em; color: #888; margin-top: 4px;",
-                    tr("fit_huber_delta_desc", lang()))
-            )
-          )
-      )
-    )
-  })
-  
   # 误差分析部分
   output$error_analysis_section <- renderUI({
     # [修复] 使用 isolate() 保持当前开关状态，避免语言切换时重置和触发循环
@@ -561,7 +536,6 @@ server <- function(input, output, session) {
     })
     
     tagList(
-      tags$hr(),
       div(style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;",
           h5(tr("error_analysis_title", lang()), style="font-weight: bold; margin: 0;"),
           checkboxInput("enable_error_analysis", tr("error_analysis_enable", lang()), value = current_value, width = "auto")
@@ -615,6 +589,7 @@ server <- function(input, output, session) {
                            residual_subtab = "res1",    # 当前选中的残差子标签页
                            manual_exp_data = NULL,      # 手动导入的实验数据（模拟→实验功能）
                            manual_exp_source = NULL,    # 手动实验数据来源: sim_to_exp / step1_bridge
+                           exp_data_disabled = FALSE,   # TRUE 时忽略所有实验数据输入，仅保留模拟模式
                            imported_xlsx_sheets = NULL, # 缓存 ITCprocessor 导出的原始 xlsx sheets
                            imported_xlsx_base_name = NULL,  # 导入文件的基名（去掉时间戳），用于导出命名
                            imported_xlsx_filename = NULL,  # 导入文件的显示用文件名（供界面展示）
@@ -623,48 +598,125 @@ server <- function(input, output, session) {
   # [缓存机制] 使用 reactiveVal 存储缓存的结果和键
   sim_cache_result <- reactiveVal(NULL)
   sim_cache_key <- reactiveVal(NULL)
+
+  is_finite_scalar <- function(x) length(x) == 1 && is.finite(x)
+
+  payload_token <- function(payload) {
+    token_vec <- suppressWarnings(as.numeric(payload$token))
+    if (length(token_vec) >= 1) token_vec[1] else NA_real_
+  }
+
+  update_numeric_if_present <- function(id, value) {
+    if (is.null(input[[id]])) return(invisible(FALSE))
+    value_num <- suppressWarnings(as.numeric(value))
+    if (length(value_num) < 1 || !is.finite(value_num[1])) return(invisible(FALSE))
+    updateNumericInput(session, id, value = value_num[1])
+    invisible(TRUE)
+  }
   
   apply_meta_to_exp_inputs <- function(meta_df) {
     if (is.null(meta_df) || !all(c("parameter", "value") %in% colnames(meta_df))) return(invisible(FALSE))
+    updated_any <- FALSE
     vals <- suppressWarnings(as.numeric(trimws(as.character(meta_df$value))))
     param_vals <- setNames(vals, trimws(as.character(meta_df$parameter)))
     
     if ("H_cell_0_mM" %in% names(param_vals) && !is.na(param_vals[["H_cell_0_mM"]])) {
-      updateNumericInput(session, "H_cell_0", value = param_vals[["H_cell_0_mM"]])
+      updated_any <- isTRUE(update_numeric_if_present("H_cell_0", param_vals[["H_cell_0_mM"]])) || updated_any
     }
     if ("G_syringe_mM" %in% names(param_vals) && !is.na(param_vals[["G_syringe_mM"]])) {
-      updateNumericInput(session, "G_syringe", value = param_vals[["G_syringe_mM"]])
+      updated_any <- isTRUE(update_numeric_if_present("G_syringe", param_vals[["G_syringe_mM"]])) || updated_any
     }
     if ("V_cell_mL" %in% names(param_vals) && !is.na(param_vals[["V_cell_mL"]])) {
-      updateNumericInput(session, "V_cell", value = param_vals[["V_cell_mL"]])
+      updated_any <- isTRUE(update_numeric_if_present("V_cell", param_vals[["V_cell_mL"]])) || updated_any
     }
     if ("V_inj_uL" %in% names(param_vals) && !is.na(param_vals[["V_inj_uL"]])) {
-      updateNumericInput(session, "V_inj", value = param_vals[["V_inj_uL"]])
+      updated_any <- isTRUE(update_numeric_if_present("V_inj", param_vals[["V_inj_uL"]])) || updated_any
     }
     if ("V_pre_uL" %in% names(param_vals) && !is.na(param_vals[["V_pre_uL"]])) {
       values$v_pre_programmatic_update <- TRUE
-      updateNumericInput(session, "V_pre", value = param_vals[["V_pre_uL"]])
-      updateNumericInput(session, "V_init_val", value = param_vals[["V_pre_uL"]])
+      updated_any <- isTRUE(update_numeric_if_present("V_pre", param_vals[["V_pre_uL"]])) || updated_any
+      updated_any <- isTRUE(update_numeric_if_present("V_init_val", param_vals[["V_pre_uL"]])) || updated_any
     }
     if ("n_inj" %in% names(param_vals) && !is.na(param_vals[["n_inj"]])) {
-      updateNumericInput(session, "n_inj", value = as.integer(param_vals[["n_inj"]]))
+      updated_any <- isTRUE(update_numeric_if_present("n_inj", as.integer(param_vals[["n_inj"]])) || updated_any)
     }
     if ("Temp_K" %in% names(param_vals) && !is.na(param_vals[["Temp_K"]])) {
-      updateNumericInput(session, "Temp", value = param_vals[["Temp_K"]])
+      updated_any <- isTRUE(update_numeric_if_present("Temp", param_vals[["Temp_K"]])) || updated_any
     }
-    invisible(TRUE)
+    invisible(updated_any)
+  }
+
+  apply_step1_inputs_from_payload <- function(payload) {
+    if (is.null(payload) || !is.list(payload)) return(FALSE)
+
+    bundle <- payload$bundle
+    meta_df <- NULL
+    if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$meta)) {
+      meta_df <- as.data.frame(bundle$meta)
+    }
+    if (is.null(meta_df) && is.data.frame(payload$meta)) {
+      meta_df <- as.data.frame(payload$meta)
+    }
+
+    int_df <- NULL
+    if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$integration)) {
+      int_df <- as.data.frame(bundle$integration)
+    }
+    if (is.null(int_df) && is.data.frame(payload$integration)) {
+      int_df <- as.data.frame(payload$integration)
+    }
+
+    updated_any <- FALSE
+    if (!is.null(meta_df)) {
+      updated_any <- isTRUE(apply_meta_to_exp_inputs(meta_df)) || updated_any
+    }
+
+    if (!is.null(int_df) && nrow(int_df) > 0) {
+      if ("V_titrate_uL" %in% colnames(int_df)) {
+        first_v <- suppressWarnings(as.numeric(int_df$V_titrate_uL))
+        first_v <- first_v[is.finite(first_v)]
+        if (length(first_v) > 0) {
+          values$v_pre_programmatic_update <- TRUE
+          updated_any <- isTRUE(update_numeric_if_present("V_pre", first_v[1])) || updated_any
+          updated_any <- isTRUE(update_numeric_if_present("V_init_val", first_v[1])) || updated_any
+        }
+      }
+
+      vinj_vec <- if ("V_titrate_uL" %in% colnames(int_df)) suppressWarnings(as.numeric(int_df$V_titrate_uL)) else NULL
+      if (!is.null(vinj_vec)) {
+        vinj_vec <- vinj_vec[is.finite(vinj_vec)]
+        if (length(vinj_vec) > 0) {
+          updated_any <- isTRUE(update_numeric_if_present("V_inj", as.numeric(stats::median(vinj_vec)))) || updated_any
+        }
+      }
+
+      updated_any <- isTRUE(update_numeric_if_present("n_inj", nrow(int_df))) || updated_any
+    }
+
+    updated_any
   }
   
   consume_step1_payload <- function(payload) {
     if (is.null(payload) || !is.list(payload)) return(FALSE)
-    is_finite_scalar <- function(x) length(x) == 1 && is.finite(x)
     
-    token_vec <- suppressWarnings(as.numeric(payload$token))
-    token <- if (length(token_vec) >= 1) token_vec[1] else NA_real_
+    token <- payload_token(payload)
     last_token <- bridge_last_step1_token()
-    if (is_finite_scalar(token) && is_finite_scalar(last_token) && identical(token, last_token)) return(FALSE)
+    if (is_finite_scalar(token) &&
+        is_finite_scalar(last_token) &&
+        identical(token, last_token)) {
+      return(FALSE)
+    }
     
     bundle <- payload$bundle
+    meta_df <- NULL
+    if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$meta)) {
+      meta_df <- as.data.frame(bundle$meta)
+    }
+    if (is.null(meta_df) && is.data.frame(payload$meta)) {
+      meta_df <- as.data.frame(payload$meta)
+    }
+    apply_meta_to_exp_inputs(meta_df)
+
     int_df <- NULL
     if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$integration)) {
       int_df <- as.data.frame(bundle$integration)
@@ -706,14 +758,6 @@ server <- function(input, output, session) {
     if (nrow(exp_df) == 0) return(FALSE)
     exp_df$Inj <- seq_len(nrow(exp_df))
     
-    meta_df <- NULL
-    if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$meta)) {
-      meta_df <- as.data.frame(bundle$meta)
-    }
-    if (is.null(meta_df) && is.data.frame(payload$meta)) {
-      meta_df <- as.data.frame(payload$meta)
-    }
-    
     power_df <- NULL
     if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$power_corrected)) {
       power_df <- as.data.frame(bundle$power_corrected)
@@ -721,6 +765,7 @@ server <- function(input, output, session) {
     
     values$manual_exp_data <- exp_df
     values$manual_exp_source <- "step1_bridge"
+    values$exp_data_disabled <- FALSE
     
     cached_sheets <- list(integration = int_df)
     if (!is.null(meta_df)) cached_sheets[["meta"]] <- meta_df
@@ -739,26 +784,21 @@ server <- function(input, output, session) {
       format(Sys.time(), "%Y%m%d%H%M%S")
     }
     values$imported_xlsx_file_path <- paste0("bridge://step1/", token_tag)
-    
-    apply_meta_to_exp_inputs(meta_df)
-    
-    if ("V_titrate_uL" %in% colnames(int_df)) {
-      first_v <- suppressWarnings(as.numeric(int_df$V_titrate_uL))
-      first_v <- first_v[is.finite(first_v)]
-      if (length(first_v) > 0) {
-        values$v_pre_programmatic_update <- TRUE
-        updateNumericInput(session, "V_pre", value = first_v[1])
-        updateNumericInput(session, "V_init_val", value = first_v[1])
-      }
+
+    if (isTRUE(apply_step1_inputs_from_payload(payload)) && is_finite_scalar(token)) {
+      bridge_last_step1_input_token(token)
     }
-    if (all(is.finite(V_inj_uL))) {
-      updateNumericInput(session, "V_inj", value = as.numeric(stats::median(V_inj_uL)))
-    }
-    updateNumericInput(session, "n_inj", value = nrow(exp_df))
     
     if (is_finite_scalar(token)) bridge_last_step1_token(token)
     showNotification("Loaded Step 1 data into Step 2.", type = "message", duration = 2)
     TRUE
+  }
+
+  get_latest_step1_payload <- function() {
+    if (!is.null(session_bridge) && is.function(session_bridge$step1_payload)) {
+      return(session_bridge$step1_payload())
+    }
+    bridge_get("step1_payload")
   }
   
   if (!is.null(session_bridge) && is.function(session_bridge$step1_payload)) {
@@ -784,6 +824,35 @@ server <- function(input, output, session) {
       )
     })
   }
+
+  # Retry bridge consume for cases where Step 2 controls were not ready on first payload arrival.
+  observe({
+    invalidateLater(400, session)
+    tryCatch(
+      consume_step1_payload(get_latest_step1_payload()),
+      error = function(e) FALSE
+    )
+  })
+
+  # Ensure Step 1 parameters are applied after Step 2 controls are mounted.
+  # This fixes the first-click case where payload arrives before tab controls exist.
+  observe({
+    invalidateLater(250, session)
+    if (!identical(input$main_tabs, "Step 2 Sim & Fit")) return()
+    payload <- get_latest_step1_payload()
+    if (is.null(payload) || !is.list(payload)) return()
+    token <- payload_token(payload)
+    last_input_token <- bridge_last_step1_input_token()
+    if (is_finite_scalar(token) &&
+        is_finite_scalar(last_input_token) &&
+        identical(token, last_input_token)) {
+      return()
+    }
+    ok <- tryCatch(apply_step1_inputs_from_payload(payload), error = function(e) FALSE)
+    if (isTRUE(ok) && is_finite_scalar(token)) {
+      bridge_last_step1_input_token(token)
+    }
+  })
   
   output$status_indicator <- renderUI({
     if(values$is_fitting) {
@@ -918,10 +987,10 @@ server <- function(input, output, session) {
     ci_name <- tr("error_analysis_table_ci", current_lang_val)
     
     # 如果翻译为空，使用默认值
-    if(is.null(param_name) || length(param_name) == 0 || param_name == "") param_name <- "参数"
-    if(is.null(value_name) || length(value_name) == 0 || value_name == "") value_name <- "最优值"
-    if(is.null(se_name) || length(se_name) == 0 || se_name == "") se_name <- "标准误差"
-    if(is.null(ci_name) || length(ci_name) == 0 || ci_name == "") ci_name <- "95% 置信区间"
+    if(is.null(param_name) || length(param_name) == 0 || param_name == "") param_name <- "Parameter"
+    if(is.null(value_name) || length(value_name) == 0 || value_name == "") value_name <- "Best Value"
+    if(is.null(se_name) || length(se_name) == 0 || se_name == "") se_name <- "Standard Error"
+    if(is.null(ci_name) || length(ci_name) == 0 || ci_name == "") ci_name <- "95% Confidence Interval"
     
     # 【关键修复】使用固定的内部列名，避免 DataTables 缓存问题
     # 内部列名永远使用英文，不随语言变化，这样 DataTables 就不会因为列名变化而报错
@@ -1095,6 +1164,7 @@ server <- function(input, output, session) {
       # 存储到 manual_exp_data
       values$manual_exp_data <- exp_data
       values$manual_exp_source <- "sim_to_exp"
+      values$exp_data_disabled <- FALSE
       
       # 清空导入文件信息，避免 UI 显示之前的导入文件名
       values$imported_xlsx_filename <- NULL
@@ -1118,11 +1188,24 @@ server <- function(input, output, session) {
       )
     })
   })
+
+  observeEvent(input$rm_exp, {
+    values$manual_exp_data <- NULL
+    values$manual_exp_source <- NULL
+    values$imported_xlsx_sheets <- NULL
+    values$imported_xlsx_file_path <- NULL
+    values$imported_xlsx_base_name <- NULL
+    values$imported_xlsx_filename <- NULL
+    values$exp_data_disabled <- TRUE
+    showNotification("Experimental data removed. Simulation-only mode.", type = "message", duration = 3)
+  }, ignoreInit = TRUE)
   
   # 缓存当前导入的 xlsx 文件路径，用于与 reactive 共享已读取的 sheets，避免重复读取且保证参数更新与导入同步
   values$imported_xlsx_file_path <- NULL
 
   exp_data_processed <- reactive({
+    if (isTRUE(values$exp_data_disabled)) return(NULL)
+
     safe_val <- function(x, default) {
       if (is.null(x) || length(x) == 0 || is.na(x)) default else x
     }
@@ -1156,7 +1239,7 @@ server <- function(input, output, session) {
     build_exp_from_integration <- function(int_df) {
       if (is.null(int_df) || nrow(int_df) == 0) return(NULL)
       if (!("Heat_ucal" %in% colnames(int_df))) {
-        showNotification("integration缺少Heat_ucal，无法按实时参数重算热量", type = "warning", duration = 5)
+        showNotification("Missing Heat_ucal in integration; cannot recalculate heat from current parameters.", type = "warning", duration = 5)
         return(NULL)
       }
 
@@ -1264,6 +1347,7 @@ server <- function(input, output, session) {
 
     values$manual_exp_data <- NULL
     values$manual_exp_source <- NULL
+    values$exp_data_disabled <- FALSE
     values$imported_xlsx_sheets <- NULL
     values$imported_xlsx_file_path <- NULL
     values$imported_xlsx_base_name <- NULL
@@ -1607,12 +1691,12 @@ server <- function(input, output, session) {
         
         calc_error_text <- tr("calc_error", current_lang_val)
         if(is.null(calc_error_text) || length(calc_error_text) == 0 || calc_error_text == "" || nchar(calc_error_text) == 0) {
-          calc_error_text <- "计算失败："
+          calc_error_text <- "Calculation failed: "
         }
         
         calc_suggestion_text <- tr("calc_error_suggestion", current_lang_val)
         if(is.null(calc_suggestion_text) || length(calc_suggestion_text) == 0 || calc_suggestion_text == "" || nchar(calc_suggestion_text) == 0) {
-          calc_suggestion_text <- "建议：检查参数是否在合理范围内"
+          calc_suggestion_text <- "Suggestion: check whether parameter values are within a valid range."
         }
         
         error_msg <- paste0(calc_error_text, e$message, "\n", calc_suggestion_text)
@@ -2551,7 +2635,7 @@ server <- function(input, output, session) {
     }, error = function(e) {
       ggplot() + 
         annotate("text", x = 0.5, y = 0.5, 
-                label = paste("绘图出错:", e$message), size = 4) +
+                label = paste("Plot error:", e$message), size = 4) +
         theme_void()
     })
   })
@@ -2571,7 +2655,7 @@ server <- function(input, output, session) {
     }, error = function(e) {
       ggplot() + 
         annotate("text", x = 0.5, y = 0.5, 
-                label = paste("绘图出错:", e$message), size = 4) +
+                label = paste("Plot error:", e$message), size = 4) +
         theme_void()
     })
   })
@@ -2741,11 +2825,11 @@ server <- function(input, output, session) {
     # [修复] 防止在语言切换时触发
     if(lang_switching()) return()
     showModal(modalDialog(
-      title = "确认恢复默认",
-      "确定要将所有变量 恢复为默认值 吗？此操作不可撤销。建议先点击 ‘保存快照’ 存储当前参数。",
+      title = "Confirm Reset",
+      "Reset all variables to default values? This action cannot be undone. Save a snapshot first if needed.",
       footer = tagList(
-        modalButton("取消"),
-        actionButton("confirm_reset", "确认", class = "btn-danger")
+        modalButton("Cancel"),
+        actionButton("confirm_reset", "Confirm", class = "btn-danger")
       )
     ))
   })
@@ -3200,6 +3284,19 @@ server <- function(input, output, session) {
     },
     ignoreInit = FALSE
   )
+
+  observeEvent(input$data_to_plot, {
+    sim <- tryCatch(sim_results(), error = function(e) NULL)
+    ok <- isTRUE(publish_step2_plot_payload(sim = sim))
+    if (!ok) {
+      showNotification("No data available for Step 3.", type = "warning", duration = 3)
+      return()
+    }
+    tryCatch({
+      updateTabsetPanel(session, "main_tabs", selected = "Step 3 Plot & Export")
+    }, error = function(e) NULL)
+    showNotification("Data sent to Step 3.", type = "message", duration = 2)
+  }, ignoreInit = TRUE)
   
   # --- 6. 导出拟合数据（多 sheet xlsx，保留 ITCprocessor 原始数据 + 拟合结果）---
   output$simfit_downloadData <- downloadHandler(
