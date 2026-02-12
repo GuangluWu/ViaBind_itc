@@ -3,6 +3,59 @@
 # ==============================================================================
 # 本文件包含通用工具函数、错误处理机制和辅助函数
 
+# 兼容模式：允许该文件被独立 source（例如 tests）时仍可工作。
+if (!exists("format_itc_error", mode = "function")) {
+  format_itc_error <- function(e, context = "", code = NULL) {
+    msg <- tryCatch(as.character(e$message), error = function(...) "Unknown error")
+    msg <- if (length(msg) > 0 && nzchar(msg[1])) msg[1] else "Unknown error"
+    if (!is.null(code) && nzchar(as.character(code)[1])) msg <- paste0("[", code, "] ", msg)
+    if (nzchar(context)) msg <- paste0("[", context, "] ", msg)
+    msg
+  }
+}
+
+if (!exists("itc_log_info", mode = "function")) {
+  itc_log_info <- function(message, context = "", log_to_file = TRUE) {
+    timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+    ctx <- if (nzchar(context)) paste0("[", context, "] ") else ""
+    entry <- paste0(timestamp, " | INFO | ", ctx, as.character(message)[1])
+    message(entry)
+    if (isTRUE(log_to_file)) {
+      log_file <- if (exists("FILE_PATHS")) FILE_PATHS$session_log else "session.log"
+      cat(paste0(entry, "\n"), file = log_file, append = TRUE)
+    }
+    invisible(entry)
+  }
+}
+
+if (!exists("itc_log_warn", mode = "function")) {
+  itc_log_warn <- function(message, context = "", log_to_file = TRUE) {
+    timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+    ctx <- if (nzchar(context)) paste0("[", context, "] ") else ""
+    entry <- paste0(timestamp, " | WARN | ", ctx, as.character(message)[1])
+    warning(entry, call. = FALSE)
+    if (isTRUE(log_to_file)) {
+      log_file <- if (exists("FILE_PATHS")) FILE_PATHS$error_log else "error.log"
+      cat(paste0(entry, "\n"), file = log_file, append = TRUE)
+    }
+    invisible(entry)
+  }
+}
+
+if (!exists("itc_log_error", mode = "function")) {
+  itc_log_error <- function(message, context = "", log_to_file = TRUE) {
+    timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+    ctx <- if (nzchar(context)) paste0("[", context, "] ") else ""
+    entry <- paste0(timestamp, " | ERROR | ", ctx, as.character(message)[1])
+    warning(entry, call. = FALSE)
+    if (isTRUE(log_to_file)) {
+      log_file <- if (exists("FILE_PATHS")) FILE_PATHS$error_log else "error.log"
+      cat(paste0(entry, "\n"), file = log_file, append = TRUE)
+    }
+    invisible(entry)
+  }
+}
+
 # ==============================================================================
 # 错误处理函数
 # ==============================================================================
@@ -73,68 +126,37 @@ handle_error <- function(e,
                         log_to_file = TRUE,
                         lang_val = "zh",
                         error_code = NULL) {
-  
-  # 构建错误消息
-  timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-  error_msg <- as.character(e$message)
+  error_msg <- format_itc_error(e, context = "", code = error_code)
   
   # 如果提供了错误代码，获取翻译的错误信息
   error_title <- NULL
   error_desc <- NULL
-  if(!is.null(error_code)) {
+  if (!is.null(error_code)) {
     error_info <- get_error_message(error_code, lang_val)
     error_title <- error_info$title
     error_desc <- error_info$desc
     
-    # 构建带错误代码的消息
-    if(nchar(error_desc) > 0) {
-      error_msg <- paste0("[", error_code, "] ", error_title, ": ", error_desc)
+    if (nchar(error_desc) > 0) {
+      translated_msg <- paste0("[", error_code, "] ", error_title, ": ", error_desc)
       # 如果原始错误消息有额外信息，也添加上
-      if(nchar(e$message) > 0) {
-        error_msg <- paste0(error_msg, " | ", e$message)
+      if (nchar(e$message) > 0) {
+        translated_msg <- paste0(translated_msg, " | ", e$message)
       }
-    } else {
-      error_msg <- paste0("[", error_code, "] ", error_msg)
+      error_msg <- translated_msg
     }
   }
   
-  # 添加上下文信息
-  if(nchar(context) > 0) {
-    full_msg <- paste0("[", context, "] ", error_msg)
+  if (isTRUE(log_to_file)) {
+    itc_log_error(error_msg, context = context, log_to_file = TRUE)
   } else {
-    full_msg <- error_msg
+    message("ERROR: ", error_msg)
   }
-  
-  # 记录到日志文件
-  if(log_to_file) {
-    tryCatch({
-      log_file <- if(exists("FILE_PATHS")) {
-        FILE_PATHS$error_log
-      } else {
-        "error.log"
-      }
-      
-      log_entry <- paste0(timestamp, " | ", full_msg, "\n")
-      cat(log_entry, file = log_file, append = TRUE)
-    }, error = function(log_e) {
-      # 如果日志记录失败，至少输出到控制台
-      if(exists("tr")) {
-        warning_msg <- tr("error_log_failed", lang_val)
-      } else {
-        warning_msg <- "Failed to write to error log"
-      }
-      warning(warning_msg, ": ", log_e$message)
-    })
-  }
-  
-  # 输出到控制台（用于开发调试）
-  message("ERROR: ", full_msg)
   
   # 向用户显示通知
-  if(show_to_user) {
+  if (show_to_user) {
     tryCatch({
       # 构建用户友好的通知消息
-      if(!is.null(error_title)) {
+      if (!is.null(error_title)) {
         # 使用翻译的错误标题
         notif_title <- error_title
         notif_msg <- if(nchar(error_desc) > 0) error_desc else error_msg
@@ -149,12 +171,12 @@ handle_error <- function(e,
       }
       
       # 如果有上下文，添加到消息中
-      if(nchar(context) > 0) {
+      if (nchar(context) > 0) {
         notif_msg <- paste0(context, ": ", notif_msg)
       }
       
       # 显示通知
-      duration <- if(exists("NOTIFICATION_DURATION")) {
+      duration <- if (exists("NOTIFICATION_DURATION")) {
         NOTIFICATION_DURATION$error
       } else {
         10
@@ -203,7 +225,7 @@ safe_execute <- function(expr,
     eval(expr, envir = parent.frame())
   }, error = function(e) {
     handle_error(e, context = context, show_to_user = show_error, lang_val = lang_val)
-    return(default)
+    default
   })
 }
 
@@ -213,32 +235,7 @@ safe_execute <- function(expr,
 #' @param context 上下文
 #' @param log_to_file 是否记录到文件
 log_warning <- function(message, context = "", log_to_file = TRUE) {
-  timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-  
-  if(nchar(context) > 0) {
-    full_msg <- paste0("[", context, "] ", message)
-  } else {
-    full_msg <- message
-  }
-  
-  # 输出到控制台
-  warning(full_msg)
-  
-  # 记录到文件
-  if(log_to_file) {
-    tryCatch({
-      log_file <- if(exists("FILE_PATHS")) {
-        FILE_PATHS$error_log
-      } else {
-        "error.log"
-      }
-      
-      log_entry <- paste0(timestamp, " | WARNING: ", full_msg, "\n")
-      cat(log_entry, file = log_file, append = TRUE)
-    }, error = function(e) {
-      # 忽略日志记录错误
-    })
-  }
+  itc_log_warn(message = message, context = context, log_to_file = log_to_file)
 }
 
 #' 记录信息到会话日志
@@ -246,30 +243,7 @@ log_warning <- function(message, context = "", log_to_file = TRUE) {
 #' @param message 信息消息
 #' @param context 上下文
 log_info <- function(message, context = "") {
-  timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-  
-  if(nchar(context) > 0) {
-    full_msg <- paste0("[", context, "] ", message)
-  } else {
-    full_msg <- message
-  }
-  
-  # 输出到控制台
-  message("INFO: ", full_msg)
-  
-  # 记录到会话日志
-  tryCatch({
-    log_file <- if(exists("FILE_PATHS")) {
-      FILE_PATHS$session_log
-    } else {
-      "session.log"
-    }
-    
-    log_entry <- paste0(timestamp, " | INFO: ", full_msg, "\n")
-    cat(log_entry, file = log_file, append = TRUE)
-  }, error = function(e) {
-    # 忽略日志记录错误
-  })
+  itc_log_info(message = message, context = context, log_to_file = TRUE)
 }
 
 # ==============================================================================

@@ -36,6 +36,16 @@ if (!exists("PARAM_BOUNDS", envir = .GlobalEnv)) {
 }
 
 # 2. 加载工具函数（包含错误处理）
+source("R/infrastructure/logging.R", local = FALSE)
+if (!exists("itc_log", envir = .GlobalEnv)) {
+  stop("Failed to load logging interface from R/infrastructure/logging.R.")
+}
+
+source("R/infrastructure/errors.R", local = FALSE)
+if (!exists("itc_error", envir = .GlobalEnv)) {
+  stop("Failed to load error interface from R/infrastructure/errors.R.")
+}
+
 source("R/utils.R", local = FALSE)
 if (!exists("handle_error", envir = .GlobalEnv)) {
   stop("Failed to load utility functions from R/utils.R. Please check the file.")
