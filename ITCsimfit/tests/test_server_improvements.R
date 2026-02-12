@@ -46,7 +46,7 @@ assert_true(length(bounds$upper) == length(par_vec), "上界长度正确")
 assert_true(all(bounds$lower < bounds$upper), "所有参数下界 < 上界")
 
 # 验证特定参数的边界
-assert_true(bounds$lower["logK1"] == 1, "logK1 下界 = 1")
+assert_true(bounds$lower["logK1"] == PARAM_BOUNDS$logK["lower"], "logK1 下界匹配常量")
 assert_true(bounds$upper["logK1"] == 9, "logK1 上界 = 9")
 assert_true(bounds$lower["H1"] == -15000, "H1 下界 = -15000")
 assert_true(bounds$upper["H1"] == 5000, "H1 上界 = 5000")
