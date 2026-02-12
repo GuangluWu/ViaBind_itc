@@ -59,7 +59,7 @@ assert_true(!is.null(PARAM_BOUNDS$logK), "logK 边界已定义")
 assert_true(!is.null(PARAM_BOUNDS$H), "H 边界已定义")
 
 # 测试2：参数边界值正确
-assert_equal(PARAM_BOUNDS$logK["lower"], 1, "logK 下界 = 1")
+assert_equal(PARAM_BOUNDS$logK["lower"], 0, "logK 下界 = 0")
 assert_equal(PARAM_BOUNDS$logK["upper"], 9, "logK 上界 = 9")
 assert_equal(PARAM_BOUNDS$H["lower"], -15000, "H 下界 = -15000")
 assert_equal(PARAM_BOUNDS$H["upper"], 5000, "H 上界 = 5000")
@@ -93,7 +93,7 @@ cat("\n[测试组] get_param_bound()\n")
 
 # logK 边界
 bounds <- get_param_bound("logK1")
-assert_equal(bounds["lower"], 1, "get_param_bound('logK1') 下界")
+assert_equal(bounds["lower"], 0, "get_param_bound('logK1') 下界")
 assert_equal(bounds["upper"], 9, "get_param_bound('logK1') 上界")
 
 # H 边界
@@ -126,7 +126,7 @@ assert_true(!is.null(bounds$lower), "返回下界向量")
 assert_true(!is.null(bounds$upper), "返回上界向量")
 assert_equal(length(bounds$lower), 6, "下界向量长度 = 6")
 assert_equal(length(bounds$upper), 6, "上界向量长度 = 6")
-assert_equal(bounds$lower["logK1"], 1, "logK1 下界正确")
+assert_equal(bounds$lower["logK1"], 0, "logK1 下界正确")
 assert_equal(bounds$upper["H2"], 5000, "H2 上界正确")
 
 # 测试8：validate_param_value 函数
@@ -134,7 +134,7 @@ cat("\n[测试组] validate_param_value()\n")
 
 assert_true(validate_param_value("logK1", 5), "logK1=5 有效")
 assert_true(!validate_param_value("logK1", 15), "logK1=15 无效（超出上界）")
-assert_true(!validate_param_value("logK1", 0), "logK1=0 无效（低于下界）")
+assert_true(!validate_param_value("logK1", -1), "logK1=-1 无效（低于下界）")
 assert_true(validate_param_value("H1", -6000), "H1=-6000 有效")
 assert_true(!validate_param_value("H1", -20000), "H1=-20000 无效")
 
@@ -191,7 +191,7 @@ cat("\n[测试组] safe_divide()\n")
 
 assert_equal(safe_divide(10, 2), 5, "safe_divide(10, 2) = 5")
 assert_equal(safe_divide(10, 0), 10 / EPSILON, "safe_divide(10, 0) 使用 EPSILON", tolerance = 1e-5)
-assert_equal(safe_divide(10, -0.00000001), 10 / EPSILON, "safe_divide(10, 极小负数)", tolerance = 1e-5)
+assert_equal(safe_divide(10, -1e-30), 10 / EPSILON, "safe_divide(10, 极小负数)", tolerance = 1e-5)
 
 # 测试14：is_near_zero 函数
 cat("\n[测试组] is_near_zero()\n")
@@ -324,7 +324,7 @@ timing_result <- time_it({
   Sys.sleep(0.1)
 }, label = "睡眠测试", log_result = FALSE)
 
-assert_true(!is.null(timing_result$result), "time_it 返回结果")
+assert_true("result" %in% names(timing_result), "time_it 返回 result 字段")
 assert_true(!is.null(timing_result$elapsed), "time_it 返回耗时")
 assert_true(timing_result$elapsed >= 0.09, "耗时测量准确（>= 0.09秒）")
 

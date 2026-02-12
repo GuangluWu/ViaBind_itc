@@ -85,20 +85,6 @@
       }
     }
 
-    pretty_key_fallback <- function(key) {
-      key_chr <- as.character(key)[1]
-      if (is.na(key_chr) || key_chr == "") return("")
-      txt <- gsub("_", " ", key_chr, fixed = TRUE)
-      txt <- gsub("\\s+", " ", txt, perl = TRUE)
-      txt <- trimws(txt)
-      words <- strsplit(txt, " ", fixed = TRUE)[[1]]
-      words <- vapply(words, function(w) {
-        if (!nzchar(w)) return(w)
-        paste0(toupper(substr(w, 1, 1)), substr(w, 2, nchar(w)))
-      }, FUN.VALUE = character(1))
-      paste(words, collapse = " ")
-    }
-
     tr_local <- function(key, lang = "en") {
       if (is.null(key) || length(key) == 0 || is.na(key) || key == "") return("")
       lang_norm <- if (identical(as.character(lang)[1], "zh")) "zh" else "en"
@@ -106,7 +92,9 @@
         val <- get(key, envir = tr_map, inherits = FALSE)[[lang_norm]]
         if (!is.null(val) && !is.na(val) && val != "") return(val)
       }
-      pretty_key_fallback(key)
+      # Contract: missing i18n key should return original key so callers can
+      # reliably detect fallback and apply domain-specific defaults.
+      as.character(key)[1]
     }
     trf_local <- function(key, lang = "en", ...) {
       template <- tr_local(key, lang)

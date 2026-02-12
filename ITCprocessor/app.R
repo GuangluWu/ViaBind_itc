@@ -38,7 +38,7 @@ ui <- fluidPage(
       margin: 6px 0 4px 0;
       box-sizing: border-box;
     }
-    .control-header h4 { margin: 0; font-size: 15px; font-weight: 700; min-width: 0; }
+    .control-header h4 { margin: 0; min-width: 0; }
     .control-header .btn { margin: 0 !important; max-width: 100%; box-sizing: border-box; }
     #ui_baseline_settings { overflow: hidden; }
     #ui_baseline_settings .control-header {

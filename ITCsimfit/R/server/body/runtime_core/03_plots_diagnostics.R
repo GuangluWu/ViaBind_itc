@@ -35,6 +35,7 @@
     p <- ggplot() + theme_minimal(base_size=14) + theme(legend.position="bottom")
     tr_with_fallback <- function(key, zh_default, en_default) {
       val <- tryCatch(tr(key, lang()), error = function(e) NA_character_)
+      # Missing-key detection relies on tr() returning the original key.
       if (is.null(val) || !nzchar(as.character(val)[1]) || identical(as.character(val)[1], key)) {
         return(if (identical(lang(), "zh")) zh_default else en_default)
       }
