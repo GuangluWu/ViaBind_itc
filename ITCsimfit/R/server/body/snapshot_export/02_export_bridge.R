@@ -183,13 +183,13 @@
     sim <- tryCatch(sim_results(), error = function(e) NULL)
     ok <- isTRUE(publish_step2_plot_payload(sim = sim))
     if (!ok) {
-      showNotification("No data available for Step 3.", type = "warning", duration = 3)
+      showNotification(tr("no_data_step3", lang()), type = "warning", duration = 3)
       return()
     }
     tryCatch({
-      updateTabsetPanel(session, "main_tabs", selected = "Step 3 Plot & Export")
+      updateTabsetPanel(session, "main_tabs", selected = "step3")
     }, error = function(e) NULL)
-    showNotification("Data sent to Step 3.", type = "message", duration = 2)
+    showNotification(tr("data_sent_step3", lang()), type = "message", duration = 2)
   }, ignoreInit = TRUE)
   
   # --- 6. 导出拟合数据（多 sheet xlsx，保留 ITCprocessor 原始数据 + 拟合结果）---

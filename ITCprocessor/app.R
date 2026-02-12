@@ -108,21 +108,21 @@ ui <- fluidPage(
       3,
       class = "step1-sidebar",
       div(uiOutput("label_choose_file")),
-      fileInput("file1", "", accept = c(".itc", ".txt")),
+      fileInput("file1", "", accept = c(".itc", ".txt"), buttonLabel = "Browse...", placeholder = "No file selected"),
       uiOutput("ui_view_controls"),
-      checkboxInput("zoom_baseline", "Auto-Zoom", value = TRUE),
+      checkboxInput("zoom_baseline", tr("zoom_baseline"), value = TRUE),
       hr(style = "margin: 8px 0;"),
       uiOutput("ui_baseline_settings"),
-      sliderInput("offset", "Anchor Offset (s):", min = 0, max = 10, value = 5, step = 1),
-      sliderInput("duration", "Anchor Width (s):", min = 5, max = 60, value = 20, step = 5),
-      sliderInput("spar", "Spline Spar (0-1):", min = 0, max = 1, value = 0.1, step = 0.01),
+      sliderInput("offset", tr("anchor_offset"), min = 0, max = 10, value = 5, step = 1),
+      sliderInput("duration", tr("anchor_width"), min = 5, max = 60, value = 20, step = 5),
+      sliderInput("spar", tr("spline_spar"), min = 0, max = 1, value = 0.1, step = 0.01),
       hr(style = "margin: 8px 0;"),
       uiOutput("ui_integration_settings"),
-      numericInput("int_start_offset", "Start Offset (pts to inj)", value = 0, step = 1),
-      checkboxInput("limit_integration", "Limit Integration End Point", value = TRUE),
+      numericInput("int_start_offset", tr("start_offset"), value = 0, step = 1),
+      checkboxInput("limit_integration", tr("limit_integration"), value = TRUE),
       conditionalPanel(
         condition = "input.limit_integration == true",
-        numericInput("integration_window", "End Offset (pts after inj)", min = 1, value = 15, step = 1)
+        numericInput("integration_window", tr("end_offset"), min = 1, value = 15, step = 1)
       ),
       hr(style = "margin: 8px 0;"),
       uiOutput("action_btn_ui")
@@ -154,10 +154,10 @@ ui <- fluidPage(
             div(class = "param-label", textOutput("ui_param_cell_vol")),
             div(class = "param-display", textOutput("display_cell_vol_mL", inline = TRUE))
           ),
-          numericInput("param_syringe_mM", "Syringe (mM)", value = NA, step = 0.001, width = "100%"),
-          numericInput("param_cell_mM", "Cell (mM)", value = NA, step = 0.001, width = "100%"),
-          numericInput("param_V_pre_ul", "V_pre (uL)", value = NA, step = 0.1, width = "100%"),
-          numericInput("param_V_inj_ul", "V_inj (uL)", value = NA, step = 0.1, width = "100%")
+          numericInput("param_syringe_mM", tr("syringe_mM"), value = NA, step = 0.001, width = "100%"),
+          numericInput("param_cell_mM", tr("cell_mM"), value = NA, step = 0.001, width = "100%"),
+          numericInput("param_V_pre_ul", tr("v_pre_ul"), value = NA, step = 0.1, width = "100%"),
+          numericInput("param_V_inj_ul", tr("v_inj_ul"), value = NA, step = 0.1, width = "100%")
         )
       )
     )
@@ -204,37 +204,71 @@ server <- function(input, output, session) {
     now_token
   }
 
-  # 语言切换
-  lang <- reactiveVal("en")
-  observeEvent(input$lang_btn, {
-    lang(if (lang() == "en") "zh" else "en")
+  session_i18n <- tryCatch({
+    x <- session$userData$itcsuite_i18n
+    if (is.null(x) || !is.list(x)) NULL else x
+  }, error = function(e) NULL)
+
+  normalize_lang <- function(x) {
+    lang_chr <- tolower(as.character(x %||% "en")[1])
+    if (identical(lang_chr, "zh")) "zh" else "en"
+  }
+
+  local_lang <- reactiveVal("en")
+  local_lang_token <- reactiveVal(0)
+  set_local_lang <- function(value) {
+    normalized <- normalize_lang(value)
+    if (!identical(local_lang(), normalized)) {
+      local_lang(normalized)
+      local_lang_token(local_lang_token() + 1)
+    }
+    invisible(normalized)
+  }
+
+  set_lang <- function(value) {
+    if (!is.null(session_i18n) && is.function(session_i18n$set_lang)) {
+      session_i18n$set_lang(normalize_lang(value))
+      return(invisible(NULL))
+    }
+    set_local_lang(value)
+  }
+
+  lang <- reactive({
+    if (!is.null(session_i18n) && is.function(session_i18n$lang_token)) {
+      session_i18n$lang_token()
+    } else {
+      local_lang_token()
+    }
+    if (!is.null(session_i18n) && is.function(session_i18n$get_lang)) {
+      return(normalize_lang(session_i18n$get_lang()))
+    }
+    normalize_lang(local_lang())
   })
 
-  # 动态 UI：标题、切换按钮、区块标题
+  observeEvent(input$lang_btn, {
+    set_lang(if (lang() == "en") "zh" else "en")
+  }, ignoreInit = TRUE)
+
   output$ui_title <- renderUI({ h3(tr("app_title", lang())) })
-  output$lang_switch_ui <- renderUI({
-    btn_label <- if (lang() == "en") "\U0001F1E8\U0001F1F3 \u7b80\u4f53\u4e2d\u6587" else "\U0001F1EC\U0001F1E7 English"
-    actionButton("lang_btn", btn_label,
-                 class = "btn btn-default btn-sm")
-  })
+  output$lang_switch_ui <- renderUI(NULL)
   baseline_defaults <- reactiveValues(duration = 20, offset = 5, spar = 0.1, ready = FALSE)
 
-  output$label_choose_file <- renderUI({ strong("Choose .itc file") })
-  output$ui_view_controls <- renderUI({ h4("View Control") })
+  output$label_choose_file <- renderUI({ strong(tr("choose_file", lang())) })
+  output$ui_view_controls <- renderUI({ h4(tr("view_controls", lang())) })
   output$ui_baseline_settings <- renderUI({
     div(
       class = "control-header",
       style = "width:100%;box-sizing:border-box;overflow:hidden;",
-      h4("Baseline Settings (Spline)"),
-      actionButton("reset_baseline", "Reset", class = "btn btn-default btn-xs", width = "70px")
+      h4(tr("baseline_settings", lang())),
+      actionButton("reset_baseline", tr("reset", lang()), class = "btn btn-default btn-xs", width = "70px")
     )
   })
-  output$ui_integration_settings <- renderUI({ h4("Integration Range") })
-  output$ui_expt_params <- renderUI({ h4("Expt Params") })
-  output$ui_param_n_inj <- renderText({ "N inj" })
-  output$ui_param_interval <- renderText({ "Interval (s)" })
-  output$ui_param_temp <- renderText({ "Temp (C)" })
-  output$ui_param_cell_vol <- renderText({ "Cell vol (mL)" })
+  output$ui_integration_settings <- renderUI({ h4(tr("integration_settings", lang())) })
+  output$ui_expt_params <- renderUI({ h4(tr("expt_params", lang())) })
+  output$ui_param_n_inj <- renderText({ tr("n_inj", lang()) })
+  output$ui_param_interval <- renderText({ tr("interval_s", lang()) })
+  output$ui_param_temp <- renderText({ tr("temp_c", lang()) })
+  output$ui_param_cell_vol <- renderText({ tr("cell_vol", lang()) })
   # 仅在有可导出数据时显示导出按钮，否则显示提示
   canExport <- reactive({
     tryCatch({
@@ -249,11 +283,11 @@ server <- function(input, output, session) {
     div(
       class = "action-btn-row",
       style = "width:100%;box-sizing:border-box;overflow:hidden;",
-      div(style = "min-width:0;", actionButton("btn_data_to_fit", "Data -> Fit", width = "100%")),
+      div(style = "min-width:0;", actionButton("btn_data_to_fit", tr("data_to_fit", lang()), width = "100%")),
       div(
         style = "min-width:0;",
         tagAppendAttributes(
-          downloadButton("downloadData_processor", "Export P. Data"),
+          downloadButton("downloadData_processor", tr("export_processor_data", lang())),
           style = "width:100%;max-width:100%;box-sizing:border-box;"
         )
       )
@@ -262,19 +296,20 @@ server <- function(input, output, session) {
 
   # 语言变化时更新所有输入控件的 label
   observeEvent(lang(), {
-    updateSliderInput(session, "duration", label = "Anchor Width (s)")
-    updateSliderInput(session, "offset", label = "Anchor Offset (s)")
-    updateSliderInput(session, "spar", label = "Spline Spar (0-1)")
-    updateNumericInput(session, "int_start_offset", label = "Start Offset (pts to inj)")
-    updateCheckboxInput(session, "limit_integration", label = "Limit Integration End Point")
+    l <- lang()
+    updateSliderInput(session, "duration", label = tr("anchor_width", l))
+    updateSliderInput(session, "offset", label = tr("anchor_offset", l))
+    updateSliderInput(session, "spar", label = tr("spline_spar", l))
+    updateNumericInput(session, "int_start_offset", label = tr("start_offset", l))
+    updateCheckboxInput(session, "limit_integration", label = tr("limit_integration", l))
     tryCatch({
-      updateNumericInput(session, "integration_window", label = "End Offset (pts after inj)")
+      updateNumericInput(session, "integration_window", label = tr("end_offset", l))
     }, error = function(e) NULL)
-    updateCheckboxInput(session, "zoom_baseline", label = "Auto-Zoom")
-    updateNumericInput(session, "param_syringe_mM", label = "Syringe (mM)")
-    updateNumericInput(session, "param_cell_mM", label = "Cell (mM)")
-    updateNumericInput(session, "param_V_pre_ul", label = "V_pre (uL)")
-    updateNumericInput(session, "param_V_inj_ul", label = "V_inj (uL)")
+    updateCheckboxInput(session, "zoom_baseline", label = tr("zoom_baseline", l))
+    updateNumericInput(session, "param_syringe_mM", label = tr("syringe_mM", l))
+    updateNumericInput(session, "param_cell_mM", label = tr("cell_mM", l))
+    updateNumericInput(session, "param_V_pre_ul", label = tr("v_pre_ul", l))
+    updateNumericInput(session, "param_V_inj_ul", label = tr("v_inj_ul", l))
   }, ignoreInit = FALSE)
 
   # Y 轴 zoom 相关常量
@@ -541,9 +576,9 @@ server <- function(input, output, session) {
     payload$created_at <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
     bridge_set("step1_payload", payload)
     tryCatch({
-      updateTabsetPanel(session, "main_tabs", selected = "Step 2 Simulation & Fitting")
+      updateTabsetPanel(session, "main_tabs", selected = "step2")
     }, error = function(e) NULL)
-    showNotification("Data sent to Step 2.", type = "message", duration = 2)
+    showNotification(tr("data_sent_to_step2", lang()), type = "message", duration = 2)
   }, ignoreInit = TRUE)
 
   # ---------------------------------------------------------
@@ -634,29 +669,29 @@ server <- function(input, output, session) {
                                                baseline_offset = input$offset)
     
     p <- plot_ly(x = ~time_min, source = "plot_raw") %>%
-      add_lines(y = ~df$Power, name = "Raw",
+      add_lines(y = ~df$Power, name = tr("raw_data", lang()),
                 line = list(color = 'black', width = 1)) %>%
-      add_lines(y = ~base, name = "Base",
+      add_lines(y = ~base, name = tr("baseline", lang()),
                 line = list(color = 'blue', width = 2))
 
     if (nrow(spline_anchors) > 0) {
       p <- p %>% add_markers(x = spline_anchors$x / 60, y = spline_anchors$y,
-                             name = "Spline",
+                             name = tr("spline_anchors", lang()),
                              marker = list(color = 'orange', size = 7, symbol = "x"))
     }
     
     if (length(injections) > 0) {
       p <- p %>% 
-        add_markers(x = inj_times_min, y = inj_powers, name = "Inj",
+        add_markers(x = inj_times_min, y = inj_powers, name = tr("injection", lang()),
                     marker = list(color = 'red', size = 10, symbol = "triangle-down")) %>%
-        add_markers(x = anchor_end_times_min, y = anchor_vals, name = "Anchor",
+        add_markers(x = anchor_end_times_min, y = anchor_vals, name = tr("anchor", lang()),
                     marker = list(color = 'green', size = 8, symbol = "circle"))
     }
     
     layout_args <- list(
-      title = list(text = "Baseline", font = list(size = 16), x = 0, xanchor = "left", y = 0.98, yanchor = "top"),
+      title = list(text = tr("baseline", lang()), font = list(size = 16), x = 0, xanchor = "left", y = 0.98, yanchor = "top"),
       xaxis = list(
-        title = list(text = "Time (min)", standoff = 7),
+        title = list(text = tr("time_min", lang()), standoff = 7),
         side = "top",
         showgrid = TRUE,
         ticks = "outside",
@@ -666,7 +701,7 @@ server <- function(input, output, session) {
         range = x_full
       ),
       yaxis = list(
-        title = "Power (ucal/s)",
+        title = tr("power_ucal", lang()),
         showline = TRUE,
         automargin = FALSE
       ),
@@ -712,9 +747,9 @@ server <- function(input, output, session) {
     
     p <- plot_ly(source = "plot_corrected") %>%
       add_lines(x = ~time_min, y = ~corrected, 
-            line = list(color = 'green', width = 1), name = "Corrected") %>%
+            line = list(color = 'green', width = 1), name = tr("corrected_power", lang())) %>%
       layout(
-        title = list(text = "Corrected Baseline", font = list(size = 16), x = 0, xanchor = "left", y = 0.98, yanchor = "top"),
+        title = list(text = tr("corrected_baseline", lang()), font = list(size = 16), x = 0, xanchor = "left", y = 0.98, yanchor = "top"),
         xaxis = list(
           title = "",
           showticklabels = FALSE,
@@ -723,7 +758,7 @@ server <- function(input, output, session) {
           automargin = FALSE,
           range = x_full
         ),
-        yaxis = list(title = "Delta Power (ucal/s)", showline = TRUE, automargin = FALSE),
+        yaxis = list(title = paste0(tr("delta_power", lang()), " (ucal/s)"), showline = TRUE, automargin = FALSE),
         margin = list(l = 72, r = 14, t = 28, b = 8),
         legend = list(
           orientation = "h",
@@ -750,7 +785,7 @@ server <- function(input, output, session) {
          }
          
          p <- p %>% add_lines(x = ~time_min, y = fill_y,
-                              name = "Area",
+                              name = tr("integrated_area", lang()),
                               line = list(width = 0),
                               fill = 'tozeroy',
                               fillcolor = 'rgba(255, 165, 0, 0.5)',
@@ -759,10 +794,10 @@ server <- function(input, output, session) {
          start_vals <- approx(df$Time, corrected, xout = start_times)$y
          end_vals <- approx(df$Time, corrected, xout = end_times)$y
          p <- p %>% add_markers(x = start_times/60, y = start_vals, 
-                                name = "Int start",
+                                name = tr("integration_start", lang()),
                                 marker = list(color = 'blue', size = 8, symbol = "circle-open")) %>%
            add_markers(x = end_times/60, y = end_vals, 
-                       name = "Int end",
+                       name = tr("integration_end", lang()),
                        marker = list(color = 'purple', size = 8, symbol = "x"))
       }
     }
@@ -802,7 +837,7 @@ server <- function(input, output, session) {
        
        if (length(baseline_vals) > 0) {
            layout_args$yaxis <- list(
-             title = "Delta Power (ucal/s)",
+             title = paste0(tr("delta_power", lang()), " (ucal/s)"),
              showline = TRUE,
              automargin = FALSE,
              range = auto_zoom_range(
@@ -833,14 +868,14 @@ server <- function(input, output, session) {
        }
        if (!is.null(user_zoom_corrected$y)) {
          layout_args$yaxis <- list(
-           title = "Delta Power (ucal/s)",
+           title = paste0(tr("delta_power", lang()), " (ucal/s)"),
            showline = TRUE,
            automargin = FALSE,
            range = user_zoom_corrected$y
          )
        } else {
          layout_args$yaxis <- list(
-           title = "Delta Power (ucal/s)",
+           title = paste0(tr("delta_power", lang()), " (ucal/s)"),
            showline = TRUE,
            automargin = FALSE,
            range = padded_range(corrected, MIN_SPAN_CORRECTED, bottom_pad = 0.15, top_pad = 0.45)
@@ -878,18 +913,18 @@ server <- function(input, output, session) {
     
     if (nrow(int_res) == 0) {
       return(plot_ly() %>% layout(
-        title = list(text = "Integration", font = list(size = 16), x = 0, xanchor = "left"),
+        title = list(text = tr("integration", lang()), font = list(size = 16), x = 0, xanchor = "left"),
         xaxis = list(showticklabels = FALSE, title = ""),
-        yaxis = list(title = "Heat (ucal)")
+        yaxis = list(title = tr("heat_ucal", lang()))
       ))
     }
     
     plot_ly(data = int_res, x = ~Injection, y = ~Heat_ucal, type = 'scatter', mode = 'markers',
             marker = list(size = 10, color = 'black', symbol = 'circle')) %>%
       layout(
-        title = list(text = "Integration", font = list(size = 16), x = 0, xanchor = "left", y = 0.98, yanchor = "top"),
+        title = list(text = tr("integration", lang()), font = list(size = 16), x = 0, xanchor = "left", y = 0.98, yanchor = "top"),
         xaxis = list(showticklabels = FALSE, ticks = "", title = "", showline = TRUE, automargin = FALSE),
-        yaxis = list(title = "Heat (ucal)", showline = TRUE, automargin = FALSE),
+        yaxis = list(title = tr("heat_ucal", lang()), showline = TRUE, automargin = FALSE),
         margin = list(l = 72, r = 14, t = 28, b = 8),
         showlegend = FALSE
       )

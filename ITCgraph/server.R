@@ -6,8 +6,44 @@ server <- function(input, output, session) {
   `%||%` <- function(x, y) if (is.null(x)) y else x
   
   # ============================================================
-  # 1. Language mode (English only for now)
+  # 1. Language mode (prefer host shared i18n channel)
   # ============================================================
+  session_i18n <- tryCatch({
+    x <- session$userData$itcsuite_i18n
+    if (is.null(x) || !is.list(x)) NULL else x
+  }, error = function(e) NULL)
+
+  local_lang <- reactiveVal("en")
+  local_lang_token <- reactiveVal(0)
+
+  lang <- reactive({
+    if (!is.null(session_i18n) && is.function(session_i18n$lang_token)) {
+      session_i18n$lang_token()
+    } else {
+      local_lang_token()
+    }
+    if (!is.null(session_i18n) && is.function(session_i18n$get_lang)) {
+      return(graph_normalize_lang(session_i18n$get_lang()))
+    }
+    graph_normalize_lang(local_lang())
+  })
+
+  is_step3_tab_selected <- function(tab_value) {
+    tab_chr <- as.character(tab_value %||% "")[1]
+    tab_chr %in% c("step3", "Step 3 Plot & Export", "步骤 3 绘图与导出", "步骤 3 绘图 & 导出")
+  }
+
+  push_static_i18n <- function(lang_val) {
+    session$sendCustomMessage("itcgraph_i18n_static", list(
+      import_data = graph_tr("import_data", lang_val),
+      no_file_selected = graph_tr("no_file_selected", lang_val),
+      load_sets = graph_tr("load_sets", lang_val),
+      json_placeholder = graph_tr("json_placeholder", lang_val),
+      export_pdf = graph_tr("export_pdf", lang_val),
+      export_png = graph_tr("export_png", lang_val),
+      export_tiff = graph_tr("export_tiff", lang_val)
+    ))
+  }
   
   # ============================================================
   # 2. 数据存储
@@ -113,7 +149,8 @@ server <- function(input, output, session) {
   }
 
   reset_plot_controls_to_defaults <- function() {
-    updateTextInput(session, "top_xlab", value = PLOT_DEFAULTS$top_xlab)
+    lang_val <- tryCatch(lang(), error = function(e) "en")
+    updateTextInput(session, "top_xlab", value = graph_tr("time_min_label", lang_val))
     updateTextInput(session, "top_ylab", value = unit_label("top_ylab", PLOT_DEFAULTS$energy_unit))
     updateSelectInput(session, "top_time_unit", selected = PLOT_DEFAULTS$top_time_unit)
     update_color_input("top_line_color", PLOT_DEFAULTS$top_line_color)
@@ -299,7 +336,7 @@ server <- function(input, output, session) {
   }
 
   observeEvent(input$main_tabs, {
-    if (!identical(input$main_tabs, "Step 3 Plot & Export")) return(invisible(FALSE))
+    if (!is_step3_tab_selected(input$main_tabs)) return(invisible(FALSE))
     payload <- latest_step2_plot_payload()
     if (is.null(payload) || !is.list(payload)) return(invisible(FALSE))
     consume_step2_plot_payload(payload, replay_only = TRUE)
@@ -410,7 +447,7 @@ server <- function(input, output, session) {
 
   observeEvent(input$main_tabs, {
     if (!isTRUE(get_bridge_pending_autorange())) return(invisible())
-    if (!identical(input$main_tabs, "Step 3 Plot & Export")) return(invisible())
+    if (!is_step3_tab_selected(input$main_tabs)) return(invisible())
     off <- get_bridge_pending_offset()
     tryCatch(
       apply_auto_ranges(offset_override = off, apply_ratio = get_ratio_correction_enabled()),
@@ -420,100 +457,102 @@ server <- function(input, output, session) {
   }, ignoreInit = TRUE)
   
   # ============================================================
-  # 3. Static UI labels (English only)
+  # 3. Dynamic UI labels (i18n)
   # ============================================================
   
   output$preview_header <- renderUI({
-    h4("Figure Preview")
+    h4(graph_tr("preview_header", lang()))
   })
   
   output$section_import_ui <- renderUI({
-    h4("Data Import")
+    h4(graph_tr("section_import", lang()))
   })
   
   output$data_summary_ui <- renderUI({
     if (is.null(imported_data$filename)) {
-      return(div(class = "data-summary", em("No data loaded.")))
+      return(div(class = "data-summary", em(graph_tr("no_data_loaded", lang()))))
     }
     n_power <- if (!is.null(imported_data$power)) nrow(imported_data$power) else 0
     n_int   <- if (!is.null(imported_data$integration)) nrow(imported_data$integration) else 0
     n_sim   <- if (!is.null(imported_data$simulation)) nrow(imported_data$simulation) else 0
     
     div(class = "data-summary",
-      tags$b("File: "), imported_data$filename, br(),
-      "Power points: ", tags$span(class = "badge", n_power), br(),
-      "Integration points: ", tags$span(class = "badge", n_int), br(),
-      "Simulation points: ", tags$span(class = "badge", n_sim)
+      tags$b(paste0(graph_tr("file_label", lang()), ": ")), imported_data$filename, br(),
+      paste0(graph_tr("power_points", lang()), ": "), tags$span(class = "badge", n_power), br(),
+      paste0(graph_tr("integration_points", lang()), ": "), tags$span(class = "badge", n_int), br(),
+      paste0(graph_tr("simulation_points", lang()), ": "), tags$span(class = "badge", n_sim)
     )
   })
   
   output$heat_offset_label_ui <- renderUI({
     fluidRow(
-      column(6, tags$label("Baseline Heat Offset (cal/mol)", style = "font-size: 12px;")),
-      column(6, tags$label("Energy Unit", style = "font-size: 12px;"))
+      column(6, tags$label(graph_tr("baseline_heat_offset", lang()), style = "font-size: 12px;")),
+      column(6, tags$label(graph_tr("energy_unit", lang()), style = "font-size: 12px;"))
     )
   })
   
   output$section_top_ui <- renderUI({
     tagList(
-      h4("Top Panel (Thermogram)"),
+      h4(graph_tr("section_top", lang())),
       fluidRow(
-        column(4, tags$label("X Label", style = "display: block; margin-bottom: 5px;")),
-        column(5, tags$label("Y Label", style = "display: block; margin-bottom: 5px;")),
-        column(3, tags$label("Time Unit", style = "display: block; margin-bottom: 5px;"))
+        column(4, tags$label(graph_tr("x_label", lang()), style = "display: block; margin-bottom: 5px;")),
+        column(5, tags$label(graph_tr("y_label", lang()), style = "display: block; margin-bottom: 5px;")),
+        column(3, tags$label(graph_tr("time_unit", lang()), style = "display: block; margin-bottom: 5px;"))
       )
     )
   })
   
   # 时间单位选择器
   output$time_unit_ui <- renderUI({
+    selected_unit <- isolate(input$top_time_unit) %||% PLOT_DEFAULTS$top_time_unit
     selectInput("top_time_unit", label = NULL,
       choices = c("min" = "min", "s" = "s"),
-      selected = PLOT_DEFAULTS$top_time_unit
+      selected = selected_unit
     )
   })
   
   # 上 Panel X 轴范围：标签 + Min + Max + Auto range 同一行
   output$top_xrange_ui <- renderUI({
     div(class = "range-one-row",
-      tags$span(class = "range-label", "X Range:"),
+      tags$span(class = "range-label", graph_tr("x_range", lang())),
       div(class = "range-min",
-        numericInput("top_xmin", "Min", value = isolate(input$top_xmin) %||% 0, step = 5)),
+        numericInput("top_xmin", graph_tr("min", lang()), value = isolate(input$top_xmin) %||% 0, step = 5)),
       div(class = "range-max",
-        numericInput("top_xmax", "Max", value = isolate(input$top_xmax) %||% 100, step = 5)),
-      actionButton("top_auto_xrange", "Auto Range", class = "btn-sm btn-info")
+        numericInput("top_xmax", graph_tr("max", lang()), value = isolate(input$top_xmax) %||% 100, step = 5)),
+      actionButton("top_auto_xrange", graph_tr("auto_range", lang()), class = "btn-sm btn-info")
     )
   })
   
   # 上 Panel Y 轴范围：标签 + Min + Max + Auto range 同一行
   output$top_yrange_ui <- renderUI({
     div(class = "range-one-row",
-      tags$span(class = "range-label", "Y Range:"),
+      tags$span(class = "range-label", graph_tr("y_range", lang())),
       div(class = "range-min",
-        numericInput("top_ymin", "Min", value = isolate(input$top_ymin) %||% -5, step = 0.5)),
+        numericInput("top_ymin", graph_tr("min", lang()), value = isolate(input$top_ymin) %||% -5, step = 0.5)),
       div(class = "range-max",
-        numericInput("top_ymax", "Max", value = isolate(input$top_ymax) %||% 5, step = 0.5)),
-      actionButton("top_auto_yrange", "Auto Range", class = "btn-sm btn-info")
+        numericInput("top_ymax", graph_tr("max", lang()), value = isolate(input$top_ymax) %||% 5, step = 0.5)),
+      actionButton("top_auto_yrange", graph_tr("auto_range", lang()), class = "btn-sm btn-info")
     )
   })
   
   # 上 Panel 颜色
   output$top_color_ui <- renderUI({
+    color_val <- isolate(input$top_line_color) %||% PLOT_DEFAULTS$top_line_color
     if (requireNamespace("colourpicker", quietly = TRUE)) {
-      colourpicker::colourInput("top_line_color", "Line Color",
-                                value = PLOT_DEFAULTS$top_line_color, showColour = "both")
+      colourpicker::colourInput("top_line_color", graph_tr("line_color", lang()),
+                                value = color_val, showColour = "both")
     } else {
-      textInput("top_line_color", "Line Color", value = PLOT_DEFAULTS$top_line_color)
+      textInput("top_line_color", graph_tr("line_color", lang()), value = color_val)
     }
   })
   
   # ---- 下 Panel 设置标签 ----
   output$section_bot_ui <- renderUI({
     tagList(
-      h4("Bottom Panel (Isotherm)"),
+      h4(graph_tr("section_bottom", lang())),
       fluidRow(
-        column(6, tags$label("X Label")),
-        column(6, tags$label("Y Label"))
+        column(6, tags$label(graph_tr("x_label", lang()))),
+        column(6, tags$label(graph_tr("y_label", lang())))
       )
     )
   })
@@ -521,24 +560,24 @@ server <- function(input, output, session) {
   # 下 Panel X 轴范围：标签 + Min + Max + Auto range 同一行
   output$bot_xrange_ui <- renderUI({
     div(class = "range-one-row",
-      tags$span(class = "range-label", "X Range:"),
+      tags$span(class = "range-label", graph_tr("x_range", lang())),
       div(class = "range-min",
-        numericInput("bot_xmin", "Min", value = isolate(input$bot_xmin) %||% 0, step = 0.1)),
+        numericInput("bot_xmin", graph_tr("min", lang()), value = isolate(input$bot_xmin) %||% 0, step = 0.1)),
       div(class = "range-max",
-        numericInput("bot_xmax", "Max", value = isolate(input$bot_xmax) %||% 3, step = 0.1)),
-      actionButton("bot_auto_xrange", "Auto Range", class = "btn-sm btn-info")
+        numericInput("bot_xmax", graph_tr("max", lang()), value = isolate(input$bot_xmax) %||% 3, step = 0.1)),
+      actionButton("bot_auto_xrange", graph_tr("auto_range", lang()), class = "btn-sm btn-info")
     )
   })
   
   # 下 Panel Y 轴范围：标签 + Min + Max + Auto range 同一行
   output$bot_yrange_ui <- renderUI({
     div(class = "range-one-row",
-      tags$span(class = "range-label", "Y Range:"),
+      tags$span(class = "range-label", graph_tr("y_range", lang())),
       div(class = "range-min",
-        numericInput("bot_ymin", "Min", value = isolate(input$bot_ymin) %||% -20, step = 0.5)),
+        numericInput("bot_ymin", graph_tr("min", lang()), value = isolate(input$bot_ymin) %||% -20, step = 0.5)),
       div(class = "range-max",
-        numericInput("bot_ymax", "Max", value = isolate(input$bot_ymax) %||% 5, step = 0.5)),
-      actionButton("bot_auto_yrange", "Auto Range", class = "btn-sm btn-info")
+        numericInput("bot_ymax", graph_tr("max", lang()), value = isolate(input$bot_ymax) %||% 5, step = 0.5)),
+      actionButton("bot_auto_yrange", graph_tr("auto_range", lang()), class = "btn-sm btn-info")
     )
   })
 
@@ -552,68 +591,84 @@ server <- function(input, output, session) {
   
   # 下 Panel 散点颜色
   output$bot_point_color_ui <- renderUI({
+    color_val <- isolate(input$bot_point_color) %||% PLOT_DEFAULTS$bot_point_color
     if (requireNamespace("colourpicker", quietly = TRUE)) {
-      colourpicker::colourInput("bot_point_color", "Point Border",
-                                value = PLOT_DEFAULTS$bot_point_color, showColour = "both")
+      colourpicker::colourInput("bot_point_color", graph_tr("point_border", lang()),
+                                value = color_val, showColour = "both")
     } else {
-      textInput("bot_point_color", "Point Border", value = PLOT_DEFAULTS$bot_point_color)
+      textInput("bot_point_color", graph_tr("point_border", lang()), value = color_val)
     }
   })
   
   # 下 Panel 散点填充颜色
   output$bot_point_fill_ui <- renderUI({
+    color_val <- isolate(input$bot_point_fill) %||% PLOT_DEFAULTS$bot_point_fill
     if (requireNamespace("colourpicker", quietly = TRUE)) {
-      colourpicker::colourInput("bot_point_fill", "Point Fill",
-                                value = PLOT_DEFAULTS$bot_point_fill, showColour = "both")
+      colourpicker::colourInput("bot_point_fill", graph_tr("point_fill", lang()),
+                                value = color_val, showColour = "both")
     } else {
-      textInput("bot_point_fill", "Point Fill", value = PLOT_DEFAULTS$bot_point_fill)
+      textInput("bot_point_fill", graph_tr("point_fill", lang()), value = color_val)
     }
   })
   
   # 散点形状（selectize=FALSE 使下拉由浏览器原生渲染，浮于最上层不被遮挡）
   output$bot_shape_ui <- renderUI({
-    selectInput("bot_point_shape", "Point Shape",
-      choices = c(
-        "Open circle (21)"    = 21,
-        "Filled circle (19)"  = 19,
-        "Open square (22)"    = 22,
-        "Open diamond (23)"   = 23,
-        "Open triangle (24)"  = 24,
-        "Cross (4)"           = 4
-      ),
-      selected = PLOT_DEFAULTS$bot_point_shape,
+    selected_shape <- as.character(isolate(input$bot_point_shape) %||% PLOT_DEFAULTS$bot_point_shape)
+    shape_choices <- setNames(
+      c(21, 19, 22, 23, 24, 4),
+      c(
+        graph_tr("shape_open_circle", lang()),
+        graph_tr("shape_filled_circle", lang()),
+        graph_tr("shape_open_square", lang()),
+        graph_tr("shape_open_diamond", lang()),
+        graph_tr("shape_open_triangle", lang()),
+        graph_tr("shape_cross", lang())
+      )
+    )
+    selectInput("bot_point_shape", graph_tr("point_shape", lang()),
+      choices = shape_choices,
+      selected = selected_shape,
       selectize = FALSE
     )
   })
   
   # 拟合线颜色
   output$bot_line_color_ui <- renderUI({
+    color_val <- isolate(input$bot_line_color) %||% PLOT_DEFAULTS$bot_line_color
     if (requireNamespace("colourpicker", quietly = TRUE)) {
-      colourpicker::colourInput("bot_line_color", "Fit Line Color",
-                                value = PLOT_DEFAULTS$bot_line_color, showColour = "both")
+      colourpicker::colourInput("bot_line_color", graph_tr("fit_line_color", lang()),
+                                value = color_val, showColour = "both")
     } else {
-      textInput("bot_line_color", "Fit Line Color", value = PLOT_DEFAULTS$bot_line_color)
+      textInput("bot_line_color", graph_tr("fit_line_color", lang()), value = color_val)
     }
   })
   
   # 拟合线型
   output$bot_line_linetype_ui <- renderUI({
+    selected_linetype <- as.character(isolate(input$bot_line_linetype) %||% PLOT_DEFAULTS$bot_line_linetype)
     choices <- setNames(
       c("solid", "dashed", "dotted", "dotdash", "longdash"),
-      c("Solid", "Dashed", "Dotted", "Dotdash", "Longdash")
+      c(
+        graph_tr("linetype_solid", lang()),
+        graph_tr("linetype_dashed", lang()),
+        graph_tr("linetype_dotted", lang()),
+        graph_tr("linetype_dotdash", lang()),
+        graph_tr("linetype_longdash", lang())
+      )
     )
-    selectInput("bot_line_linetype", "Fit Line Type",
-                choices = choices, selected = PLOT_DEFAULTS$bot_line_linetype,
+    selectInput("bot_line_linetype", graph_tr("fit_line_type", lang()),
+                choices = choices, selected = selected_linetype,
                 selectize = FALSE)
   })
   
   output$bot_layer_order_ui <- renderUI({
+    selected_layer <- as.character(isolate(input$bot_layer_order) %||% PLOT_DEFAULTS$bot_layer_order)
     choices <- setNames(
       c("points_over_line", "line_over_points"),
-      c("Points over line", "Line over points")
+      c(graph_tr("layer_points_over_line", lang()), graph_tr("layer_line_over_points", lang()))
     )
-    selectInput("bot_layer_order", "Layer Order",
-                choices = choices, selected = PLOT_DEFAULTS$bot_layer_order,
+    selectInput("bot_layer_order", graph_tr("layer_order", lang()),
+                choices = choices, selected = selected_layer,
                 selectize = FALSE)
   })
   
@@ -623,7 +678,7 @@ server <- function(input, output, session) {
     selected <- resolve_no_dim_range(current_range, n_inj)
     sliderInput(
       "bot_no_dim_range",
-      "Not dimmed injection range",
+      graph_tr("not_dimmed_range", lang()),
       min = 1,
       max = n_inj,
       value = selected,
@@ -636,25 +691,25 @@ server <- function(input, output, session) {
   # ---- Global settings labels ----
   output$section_global_ui <- renderUI({
     tagList(
-      h4("Global Settings"),
+      h4(graph_tr("section_global", lang())),
       fluidRow(
-        column(3, tags$label("Base Font")),
-        column(3, tags$label("Top Ratio")),
-        column(3, tags$label("Bottom Ratio")),
-        column(3, tags$label("Border Width"))
+        column(3, tags$label(graph_tr("base_font", lang()))),
+        column(3, tags$label(graph_tr("top_ratio", lang()))),
+        column(3, tags$label(graph_tr("bottom_ratio", lang()))),
+        column(3, tags$label(graph_tr("border_width", lang())))
       )
     )
   })
   
   # ---- Save/load settings labels ----
   output$settings_save_hint_ui <- renderUI({
-    div(class = "settings-hint", "Save settings")
+    div(class = "settings-hint", graph_tr("settings_save_hint", lang()))
   })
   output$settings_import_hint_ui <- renderUI({
-    div(class = "settings-hint", "Load a JSON preset.")
+    div(class = "settings-hint", graph_tr("settings_import_hint", lang()))
   })
   output$save_settings_ui <- renderUI({
-    downloadButton("save_settings", label = "Save Sets", icon = NULL, class = "btn-success btn-save-settings")
+    downloadButton("save_settings", label = graph_tr("save_sets", lang()), icon = NULL, class = "btn-success btn-save-settings")
   })
   output$import_settings_ui <- renderUI({
     reset_settings_nonce()
@@ -663,23 +718,42 @@ server <- function(input, output, session) {
       div(
         class = "settings-load-wrap",
         fileInput("import_settings_file", label = NULL,
-                  accept = ".json", buttonLabel = "Load Sets", placeholder = "JSON")
+                  accept = ".json", buttonLabel = graph_tr("load_sets", lang()), placeholder = graph_tr("json_placeholder", lang()))
       ),
-      actionButton("reset_settings", label = "Reset", class = "btn-default btn-reset-settings")
+      actionButton("reset_settings", label = graph_tr("reset", lang()), class = "btn-default btn-reset-settings")
     )
   })
   
   # ---- Export labels ----
   output$section_export_ui <- renderUI({
     tagList(
-      h4("Export Figure"),
+      h4(graph_tr("section_export", lang())),
       fluidRow(
-        column(4, tags$label("Width (in)")),
-        column(4, tags$label("Height (in)")),
-        column(4, tags$label("DPI"))
+        column(4, tags$label(graph_tr("width_in", lang()))),
+        column(4, tags$label(graph_tr("height_in", lang()))),
+        column(4, tags$label(graph_tr("dpi", lang())))
       )
     )
   })
+
+  observeEvent(lang(), {
+    l <- lang()
+    time_unit <- input$top_time_unit %||% "min"
+    time_default <- if (identical(time_unit, "s")) graph_tr("time_s_label", l) else graph_tr("time_min_label", l)
+    updateTextInput(session, "top_xlab", value = time_default)
+
+    updateNumericInput(session, "top_line_width", label = graph_tr("line_width", l))
+    updateNumericInput(session, "bot_point_size", label = graph_tr("point_size", l))
+    updateNumericInput(session, "bot_point_fill_alpha", label = graph_tr("point_fill_alpha", l))
+    updateNumericInput(session, "bot_line_width", label = graph_tr("fit_line_width", l))
+    updateTextInput(session, "graph_fh_display", label = "fH")
+    updateTextInput(session, "graph_fg_display", label = "fG")
+    updateCheckboxInput(session, "graph_apply_ratio_correction", label = graph_tr("apply_ratio_correction", l))
+    push_static_i18n(l)
+    session$onFlushed(function() {
+      push_static_i18n(l)
+    }, once = TRUE)
+  }, ignoreInit = FALSE)
   
   # ============================================================
   # 4. 数据导入
@@ -769,7 +843,7 @@ server <- function(input, output, session) {
       # 通知
       has_any <- !is.null(imported_data$power) || !is.null(imported_data$integration) || !is.null(imported_data$simulation)
       if (has_any) {
-        showNotification("Data imported successfully.", type = "message", duration = 3)
+        showNotification(graph_tr("data_import_success", lang()), type = "message", duration = 3)
       }
       
       # 导入后统一执行自动范围（与 Step2->Step3 桥接路径一致）
@@ -782,7 +856,7 @@ server <- function(input, output, session) {
       )
       
     }, error = function(e) {
-      showNotification(paste0("Import failed: ", e$message), type = "error", duration = 8)
+      showNotification(paste0(graph_tr("import_failed_prefix", lang()), e$message), type = "error", duration = 8)
     })
   })
   
@@ -791,7 +865,7 @@ server <- function(input, output, session) {
   # ============================================================
   observeEvent(input$top_auto_xrange, {
     if (is.null(imported_data$power) || !("Time_s" %in% colnames(imported_data$power))) {
-      showNotification("No data loaded.", type = "message", duration = 2)
+      showNotification(graph_tr("no_data_warning", lang()), type = "message", duration = 2)
       return(invisible())
     }
     time_unit <- input$top_time_unit %||% "min"
@@ -803,7 +877,7 @@ server <- function(input, output, session) {
   
   observeEvent(input$top_auto_yrange, {
     if (is.null(imported_data$power) || !("Power_corrected_ucal_s" %in% colnames(imported_data$power))) {
-      showNotification("No data loaded.", type = "message", duration = 2)
+      showNotification(graph_tr("no_data_warning", lang()), type = "message", duration = 2)
       return(invisible())
     }
     y_raw <- imported_data$power$Power_corrected_ucal_s
@@ -821,7 +895,7 @@ server <- function(input, output, session) {
     has_int <- !is.null(int_data) && nrow(int_data) > 0 && "Ratio_App" %in% colnames(int_data)
     has_sim <- !is.null(sim_data) && nrow(sim_data) > 0 && "Ratio_App" %in% colnames(sim_data)
     if (!has_int && !has_sim) {
-      showNotification("No data loaded.", type = "message", duration = 2)
+      showNotification(graph_tr("no_data_warning", lang()), type = "message", duration = 2)
       return(invisible())
     }
     x_vals <- c(
@@ -841,7 +915,7 @@ server <- function(input, output, session) {
     has_int <- !is.null(int_data) && nrow(int_data) > 0
     has_sim <- !is.null(sim_data) && nrow(sim_data) > 0
     if (!has_int && !has_sim) {
-      showNotification("No data loaded.", type = "message", duration = 2)
+      showNotification(graph_tr("no_data_warning", lang()), type = "message", duration = 2)
       return(invisible())
     }
     offset_for_range <- as.numeric(input$graph_heat_offset %||% PLOT_DEFAULTS$heat_offset)
@@ -911,11 +985,17 @@ server <- function(input, output, session) {
   # ============================================================
   observeEvent(input$top_time_unit, {
     time_unit <- input$top_time_unit %||% "min"
-    default_xlab <- if (identical(time_unit, "s")) "Time (s)" else "Time (min)"
+    default_xlab <- if (identical(time_unit, "s")) graph_tr("time_s_label", lang()) else graph_tr("time_min_label", lang())
     current_xlab <- isolate(input$top_xlab %||% "")
+    default_labels <- unique(c(
+      graph_tr("time_min_label", "en"),
+      graph_tr("time_s_label", "en"),
+      graph_tr("time_min_label", "zh"),
+      graph_tr("time_s_label", "zh")
+    ))
 
     # Keep custom labels untouched; only auto-sync default time labels.
-    if (!nzchar(current_xlab) || current_xlab %in% c("Time (min)", "Time (s)")) {
+    if (!nzchar(current_xlab) || current_xlab %in% default_labels) {
       updateTextInput(session, "top_xlab", value = default_xlab)
     }
 
@@ -940,7 +1020,7 @@ server <- function(input, output, session) {
     )
     params <- list(
       # 上 Panel
-      top_xlab       = input$top_xlab %||% PLOT_DEFAULTS$top_xlab,
+      top_xlab       = input$top_xlab %||% graph_tr("time_min_label", lang()),
       top_ylab       = top_ylab,
       top_line_color = input$top_line_color %||% PLOT_DEFAULTS$top_line_color,
       top_line_width = input$top_line_width %||% PLOT_DEFAULTS$top_line_width,
@@ -1022,7 +1102,7 @@ server <- function(input, output, session) {
     if (is.null(fig)) {
       # 空白占位图
       ggplot() +
-        annotate("text", x = 0.5, y = 0.5, label = "No data loaded.",
+        annotate("text", x = 0.5, y = 0.5, label = graph_tr("no_data_loaded", lang()),
                  size = 6, color = "grey60") +
         theme_void()
     } else {
@@ -1050,7 +1130,7 @@ server <- function(input, output, session) {
     content = function(file) {
       fig <- current_figure()
       if (is.null(fig)) {
-        showNotification("No data loaded.", type = "warning")
+        showNotification(graph_tr("no_data_warning", lang()), type = "warning")
         return()
       }
       ggsave(file, plot = fig, device = "pdf",
@@ -1066,7 +1146,7 @@ server <- function(input, output, session) {
     content = function(file) {
       fig <- current_figure()
       if (is.null(fig)) {
-        showNotification("No data loaded.", type = "warning")
+        showNotification(graph_tr("no_data_warning", lang()), type = "warning")
         return()
       }
       ggsave(file, plot = fig, device = "png",
@@ -1083,7 +1163,7 @@ server <- function(input, output, session) {
     content = function(file) {
       fig <- current_figure()
       if (is.null(fig)) {
-        showNotification("No data loaded.", type = "warning")
+        showNotification(graph_tr("no_data_warning", lang()), type = "warning")
         return()
       }
       ggsave(file, plot = fig, device = "tiff",
@@ -1106,7 +1186,7 @@ server <- function(input, output, session) {
     )
     list(
       version = 2L,
-      top_xlab       = as.character(input$top_xlab %||% PLOT_DEFAULTS$top_xlab),
+      top_xlab       = as.character(input$top_xlab %||% graph_tr("time_min_label", lang())),
       top_ylab       = as.character(input$top_ylab %||% unit_label("top_ylab", input$energy_unit %||% "cal")),
       top_time_unit  = as.character(input$top_time_unit %||% PLOT_DEFAULTS$top_time_unit),
       top_xmin       = as.numeric(input$top_xmin %||% 0),
@@ -1155,7 +1235,7 @@ server <- function(input, output, session) {
     content = function(file) {
       settings <- get_settings_list()
       write(jsonlite::toJSON(settings, pretty = TRUE, auto_unbox = TRUE), file)
-      showNotification("Settings saved.", type = "message", duration = 2)
+      showNotification(graph_tr("settings_saved", lang()), type = "message", duration = 2)
     }
   )
   
@@ -1240,15 +1320,15 @@ server <- function(input, output, session) {
           updateTextInput(session, "bot_line_color", value = as.character(s$bot_line_color))
         }
       }
-      showNotification("Settings imported.", type = "message", duration = 3)
+      showNotification(graph_tr("settings_imported", lang()), type = "message", duration = 3)
     }, error = function(e) {
-      showNotification(paste0("Failed to import settings: ", e$message), type = "error", duration = 8)
+      showNotification(paste0(graph_tr("settings_import_failed_prefix", lang()), e$message), type = "error", duration = 8)
     })
   })
 
   observeEvent(input$reset_settings, {
     reset_plot_controls_to_defaults()
     reset_settings_nonce(isolate(reset_settings_nonce()) + 1L)
-    showNotification("Settings reset to defaults.", type = "message", duration = 3)
+    showNotification(graph_tr("settings_reset", lang()), type = "message", duration = 3)
   })
 }

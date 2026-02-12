@@ -121,15 +121,38 @@
   trf <- simfit_i18n$trf
   
   # ============================================================================
-  # [i18n] English-first mode (language switch disabled for now)
+  # [i18n] 语言状态：优先使用宿主共享语言（ITCSuiteWeb），否则回退本地
   # ============================================================================
-  current_lang <- reactiveVal("en")
-  lang_switching <- reactiveVal(FALSE)
+  session_i18n <- tryCatch({
+    x <- session$userData$itcsuite_i18n
+    if (is.null(x) || !is.list(x)) NULL else x
+  }, error = function(e) NULL)
 
-  lang <- reactive("en")
+  normalize_lang <- function(x) {
+    lang_chr <- tolower(as.character(x %||% "en")[1])
+    if (identical(lang_chr, "zh")) "zh" else "en"
+  }
+
+  local_lang <- reactiveVal("en")
+  local_lang_token <- reactiveVal(0)
+
+  current_lang <- reactive({
+    if (!is.null(session_i18n) && is.function(session_i18n$lang_token)) {
+      session_i18n$lang_token()
+    } else {
+      local_lang_token()
+    }
+    if (!is.null(session_i18n) && is.function(session_i18n$get_lang)) {
+      return(normalize_lang(session_i18n$get_lang()))
+    }
+    normalize_lang(local_lang())
+  })
+
+  lang_switching <- reactiveVal(FALSE)
+  lang <- reactive(current_lang())
 
   get_lang_safe <- function() {
-    "en"
+    normalize_lang(tryCatch(lang(), error = function(e) "en"))
   }
 
   output$app_title_dynamic <- renderUI(NULL)

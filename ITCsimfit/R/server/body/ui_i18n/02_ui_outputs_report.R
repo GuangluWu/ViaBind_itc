@@ -4,11 +4,11 @@
   
   # 左栏 - 参数快照
   output$download_data_button <- renderUI({
-    downloadButton("simfit_downloadData", "Export F. Data", class = "btn-success btn-sm btn-block")
+    downloadButton("simfit_downloadData", tr("btn_export_fit_data", lang()), class = "btn-success btn-sm btn-block")
   })
 
   output$data_to_plot_button <- renderUI({
-    actionButton("data_to_plot", "Data -> Plot", class = "btn-info btn-sm btn-block")
+    actionButton("data_to_plot", tr("btn_data_to_plot", lang()), class = "btn-info btn-sm btn-block")
   })
   
   # [新增] 模拟→实验按钮
@@ -19,7 +19,7 @@
   })
 
   output$rm_exp_button <- renderUI({
-    actionButton("rm_exp", "rm Exp", class = "btn-default btn-sm")
+    actionButton("rm_exp", tr("btn_rm_exp", lang()), class = "btn-default btn-sm")
   })
   
   output$section_param_snapshot_title <- renderUI({
@@ -88,11 +88,11 @@
   
   # 中栏 - 变量手调区
   output$section_manual_adjust_title <- renderUI({
-    "2. Variables (dH: cal/mol)"
+    paste0("2. ", tr("section_manual_adjust", lang()))
   })
   
   output$section_manual_adjust_desc <- renderUI({
-    "dH: cal/mol"
+    tr("section_manual_adjust_desc", lang())
   })
   
   output$reset_defaults_button <- renderUI({
@@ -170,6 +170,16 @@
   })
 
   # Expt Data input labels are now static English in ui.R.
+  observeEvent(lang(), {
+    current_lang <- lang()
+    updateNumericInput(session, "H_cell_0", label = tr("exp_H_cell", current_lang))
+    updateNumericInput(session, "G_syringe", label = tr("exp_G_syringe", current_lang))
+    updateNumericInput(session, "V_cell", label = tr("exp_V_cell", current_lang))
+    updateNumericInput(session, "V_inj", label = tr("exp_V_inj", current_lang))
+    updateNumericInput(session, "n_inj", label = tr("exp_n_inj", current_lang))
+    updateNumericInput(session, "V_pre", label = tr("exp_V_pre", current_lang))
+    updateNumericInput(session, "Temp", label = tr("exp_temp", current_lang))
+  }, ignoreInit = FALSE)
   
   # 右栏 - 拟合
   output$section_fitting_title <- renderUI({
@@ -203,10 +213,13 @@
   })
 
   output$report_button <- renderUI({
-    actionButton("report_btn", strong("Report"), class = "btn-info btn-sm", style="flex:1 0 20%; min-width:80px; background-color: #9b59b6; border-color: #8e44ad; color: white;")
+    actionButton("report_btn", strong(tr("btn_report", lang())), class = "btn-info btn-sm", style="flex:1 0 20%; min-width:80px; background-color: #9b59b6; border-color: #8e44ad; color: white;")
   })
 
   build_fitting_report_text <- function() {
+    l <- lang()
+    txt <- function(zh, en) if (identical(l, "zh")) zh else en
+
     safe_num <- function(id, default = NA_real_) {
       val <- suppressWarnings(as.numeric(input[[id]]))
       if (length(val) < 1 || !is.finite(val[1])) return(default)
@@ -214,7 +227,7 @@
     }
 
     file_name <- values$imported_xlsx_filename
-    if (is.null(file_name) || !nzchar(file_name)) file_name <- "Unknown File"
+    if (is.null(file_name) || !nzchar(file_name)) file_name <- tr("unknown_file", lang())
 
     h_cell <- safe_num("H_cell_0", UI_DEFAULTS$conc_cell_default)
     v_cell <- safe_num("V_cell", UI_DEFAULTS$v_cell_default)
@@ -229,13 +242,13 @@
     heat_offset <- safe_num("heat_offset", DEFAULT_PARAMS$offset)
 
     t_info <- paste0(
-      "Data Name: ", file_name, "\n",
-      "Titration Info:\n",
-      "  Cell: [H] = ", h_cell, " mM, V = ", v_cell, " mL\n",
-      "  Syringe: [G] = ", g_syr, " mM\n",
-      "  Injection: V_inj = ", v_inj, " uL, Count = ", n_inj, "\n",
-      "  Recorded 1st Inj Vol: V_pre = ", v_pre, " uL\n",
-      "  Temperature: ", temp_k, " K\n"
+      txt("数据名称: ", "Data Name: "), file_name, "\n",
+      txt("滴定信息:\n", "Titration Info:\n"),
+      "  ", txt("样品池", "Cell"), ": [H] = ", h_cell, " mM, V = ", v_cell, " mL\n",
+      "  ", txt("注射器", "Syringe"), ": [G] = ", g_syr, " mM\n",
+      "  ", txt("注射参数", "Injection"), ": V_inj = ", v_inj, " uL, ", txt("针数", "Count"), " = ", n_inj, "\n",
+      "  ", txt("记录首针体积", "Recorded 1st Inj Vol"), ": V_pre = ", v_pre, " uL\n",
+      "  ", txt("温度", "Temperature"), ": ", temp_k, " K\n"
     )
 
     get_se_raw <- function(param) {
@@ -254,11 +267,11 @@
     }
 
     p_info <- paste0(
-      "Global Parameters:\n",
-      "  Correction Factor of [H]: fH = ", f_h, fmt_se(get_se_raw("fH")), "\n",
-      "  Correction Factor of [G]: fG = ", f_g, fmt_se(get_se_raw("fG")), "\n",
-      "  Fitted 1st Inj Vol: V_init = ", v_init, fmt_se(get_se_raw("V_init")), " uL\n",
-      "  Baseline Heat Subtraction: Offset = ", heat_offset, fmt_se(get_se_raw("Offset")), " cal/mol\n"
+      txt("全局参数:\n", "Global Parameters:\n"),
+      "  ", txt("[H] 校正因子", "Correction Factor of [H]"), ": fH = ", f_h, fmt_se(get_se_raw("fH")), "\n",
+      "  ", txt("[G] 校正因子", "Correction Factor of [G]"), ": fG = ", f_g, fmt_se(get_se_raw("fG")), "\n",
+      "  ", txt("拟合首针体积", "Fitted 1st Inj Vol"), ": V_init = ", v_init, fmt_se(get_se_raw("V_init")), " uL\n",
+      "  ", txt("基线热扣除", "Baseline Heat Subtraction"), ": Offset = ", heat_offset, fmt_se(get_se_raw("Offset")), " cal/mol\n"
     )
 
     R_const <- 1.9872
@@ -268,7 +281,7 @@
     calc_thermo <- function(logK, dH_cal, name, logK_se, dH_se_cal) {
       if (!is.finite(logK) || !is.finite(dH_cal)) {
         return(paste0(
-          "Path: ", name, "\n",
+          txt("路径", "Path"), ": ", name, "\n",
           "  logK = NA\n",
           "  dH = NA kcal/mol\n",
           "  dG = NA kcal/mol\n",
@@ -284,7 +297,7 @@
       TdS_se_kcal <- if (is.na(dH_se_kcal) || is.na(dG_se_kcal)) NA else sqrt(dH_se_kcal^2 + dG_se_kcal^2)
 
       paste0(
-        "Path: ", name, "\n",
+        txt("路径", "Path"), ": ", name, "\n",
         "  logK = ", logK, fmt_se(logK_se), "\n",
         "  dH = ", dH_kcal, fmt_se(dH_se_kcal), " kcal/mol\n",
         "  dG = ", sprintf("%.2f", dG_kcal), fmt_se(dG_se_kcal), " kcal/mol\n",
@@ -293,7 +306,7 @@
       )
     }
 
-    path_info <- "Thermodynamic Analysis:\n"
+    path_info <- txt("热力学分析:\n", "Thermodynamic Analysis:\n")
     path_info <- paste0(path_info, calc_thermo(
       safe_num("logK1", DEFAULT_PARAMS$logK),
       safe_num("H1", DEFAULT_PARAMS$H),
@@ -344,20 +357,20 @@
 
     report_text <- paste0(
       "==================================================\n",
-      "                  FITTING REPORT                  \n",
+      txt("                    拟合报告                    \n", "                  FITTING REPORT                  \n"),
       "==================================================\n\n",
       t_info, "\n",
       p_info, "\n",
       path_info,
       "==================================================\n",
-      "Generated by ITCsimfit on ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n"
+      txt("由 ITCsimfit 生成于 ", "Generated by ITCsimfit on "), format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n"
     )
 
     if (length(report_text) < 1 || is.null(report_text) || !nzchar(report_text[1])) {
       report_text <- paste0(
-        "FITTING REPORT\n",
-        "Generated by ITCsimfit on ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n",
-        "Data Name: ", file_name, "\n"
+        txt("拟合报告\n", "FITTING REPORT\n"),
+        txt("由 ITCsimfit 生成于 ", "Generated by ITCsimfit on "), format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n",
+        txt("数据名称: ", "Data Name: "), file_name, "\n"
       )
     }
     as.character(report_text[1])
@@ -369,35 +382,45 @@
     # Store in values for download handler
     values$current_report <- full_report
     
+    js_escape <- function(x) {
+      x <- as.character(x %||% "")[1]
+      x <- gsub("\\\\", "\\\\\\\\", x)
+      x <- gsub("'", "\\\\'", x, fixed = TRUE)
+      x <- gsub("\n", "\\\\n", x, fixed = TRUE)
+      x
+    }
+    copy_success <- js_escape(tr("report_copy_success", lang()))
+    copy_failed <- js_escape(tr("report_copy_failed", lang()))
+
     # Show Modal
     showModal(modalDialog(
-      title = "Fitting Report",
+      title = tr("report_title", lang()),
       textAreaInput("report_content", NULL, value = full_report, rows = 15, width = "100%", resize = "vertical"),
       footer = tagList(
-        downloadButton("save_report_txt", "Save as TXT", class = "btn-success"),
+        downloadButton("save_report_txt", tr("report_save_txt", lang()), class = "btn-success"),
         # JS Copy Button
         tags$button(
           id = "copy_report_btn",
           class = "btn btn-info action-button",
-          onclick = "
+          onclick = paste0("
             var copyText = document.getElementById('report_content');
             copyText.select();
             copyText.setSelectionRange(0, 99999);
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 navigator.clipboard.writeText(copyText.value).then(function() {
-                    alert('Report copied to clipboard!');
+                    alert('", copy_success, "');
                 }, function(err) {
-                    try { document.execCommand('copy'); alert('Report copied to clipboard!'); }
-                    catch (e) { alert('Failed to copy: ' + err); }
+                    try { document.execCommand('copy'); alert('", copy_success, "'); }
+                    catch (e) { alert('", copy_failed, ": ' + err); }
                 });
             } else {
-                try { document.execCommand('copy'); alert('Report copied to clipboard!'); }
-                catch (e) { alert('Failed to copy.'); }
+                try { document.execCommand('copy'); alert('", copy_success, "'); }
+                catch (e) { alert('", copy_failed, "'); }
             }
-          ",
-          icon("copy"), "Copy to Clipboard"
+          "),
+          icon("copy"), tr("report_copy_clipboard", lang())
         ),
-        modalButton("Close")
+        modalButton(tr("report_close", lang()))
       ),
       size = "l",
       easyClose = TRUE

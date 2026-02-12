@@ -33,6 +33,20 @@
   output$itcPlot <- renderPlot({
     # 初始化空图
     p <- ggplot() + theme_minimal(base_size=14) + theme(legend.position="bottom")
+    tr_with_fallback <- function(key, zh_default, en_default) {
+      val <- tryCatch(tr(key, lang()), error = function(e) NA_character_)
+      if (is.null(val) || !nzchar(as.character(val)[1]) || identical(as.character(val)[1], key)) {
+        return(if (identical(lang(), "zh")) zh_default else en_default)
+      }
+      as.character(val)[1]
+    }
+    sim_ratio_label <- tr_with_fallback("axis_simulated_ratio", "模拟 G/H 比", "Simulated G/H Ratio")
+    exp_ratio_label <- tr_with_fallback("axis_experimental_ratio", "实验 G/H 比", "Experimental G/H Ratio")
+    heat_per_inj_label <- tr_with_fallback("axis_heat_per_inj", "每针热量 (kcal/mol)", "Heat per Inj (kcal/mol)")
+    legend_simulation <- tr_with_fallback("legend_simulation", "模拟", "Simulation")
+    legend_experiment <- tr_with_fallback("legend_experiment", "实验", "Experiment")
+    legend_excluded <- tr_with_fallback("legend_excluded", "排除点", "Excluded")
+    legend_solver_fail <- tr_with_fallback("legend_solver_fail", "求解失败", "Solver Fail")
     
     sim <- sim_results()
     exp_df <- tryCatch(exp_data_processed(), error=function(e) NULL)
@@ -75,23 +89,23 @@
     # 主轴: Injection Index -> 显示 Sim Ratio
     # 次轴: Injection Index -> 显示 Exp Ratio
     p <- p + scale_x_continuous(
-      name = "Simulated G/H Ratio",
+      name = sim_ratio_label,
       breaks = breaks_seq,
       labels = labels_bottom,
-      sec.axis = sec_axis(~., name = "Experimental G/H Ratio", breaks = breaks_seq, labels = labels_top)
-    ) + labs(y = "Heat per Inj (kcal/mol)")
+      sec.axis = sec_axis(~., name = exp_ratio_label, breaks = breaks_seq, labels = labels_top)
+    ) + labs(y = heat_per_inj_label)
     
     # 纵坐标统一为 kcal/mol：内部数据为 cal/mol，绘图时除以 1000（与 ITCprocessor 积分图一致）
     if(!is.null(sim) && nrow(sim) > 0) {
       sim_plot <- sim %>% mutate(dQ_kcal = dQ_App / 1000)
-      p <- p + geom_line(data=sim_plot, aes(x=Inj, y=dQ_kcal, color="Simulation"), linewidth=1)
+      p <- p + geom_line(data=sim_plot, aes(x=Inj, y=dQ_kcal, color=legend_simulation), linewidth=1)
       sim_ok <- sim_plot[sim_plot$Fallback == 0, ]
       if(nrow(sim_ok) > 0) {
-        p <- p + geom_point(data=sim_ok, aes(x=Inj, y=dQ_kcal, color="Simulation"), size=2)
+        p <- p + geom_point(data=sim_ok, aes(x=Inj, y=dQ_kcal, color=legend_simulation), size=2)
       }
       sim_fb <- sim_plot[sim_plot$Fallback == 1, ]
       if(nrow(sim_fb) > 0) {
-        p <- p + geom_point(data=sim_fb, aes(x=Inj, y=dQ_kcal, color="Solver Fail"), size=3, shape=1, stroke=1.5)
+        p <- p + geom_point(data=sim_fb, aes(x=Inj, y=dQ_kcal, color=legend_solver_fail), size=3, shape=1, stroke=1.5)
       }
     }
     
@@ -99,17 +113,27 @@
       try({
         range_lim <- input$fit_data_range
         ed <- exp_df %>% mutate(Sel = Inj >= range_lim[1] & Inj <= range_lim[2], Heat_kcal = Heat_Raw / 1000)
-        p <- p + geom_point(data=ed[!ed$Sel,], aes(x=Inj, y=Heat_kcal, color="Excluded"), alpha=1, size=3, shape=1)
-        p <- p + geom_point(data=ed[ed$Sel,], aes(x=Inj, y=Heat_kcal, color="Experiment"), size=3, shape=18)
+        p <- p + geom_point(data=ed[!ed$Sel,], aes(x=Inj, y=Heat_kcal, color=legend_excluded), alpha=1, size=3, shape=1)
+        p <- p + geom_point(data=ed[ed$Sel,], aes(x=Inj, y=Heat_kcal, color=legend_experiment), size=3, shape=18)
       })
     }
     
-    p + scale_color_manual(values=c("Simulation"="#e74c3c", "Experiment"="#2980b9", "Excluded"="grey", "Solver Fail"="#8e44ad"))
+    p + scale_color_manual(
+      name = NULL,
+      values = setNames(c("#e74c3c", "#2980b9", "grey", "#8e44ad"),
+                        c(legend_simulation, legend_experiment, legend_excluded, legend_solver_fail))
+    )
   })
   
   output$distPlot <- renderPlot({
     sim <- sim_results()
     if(is.null(sim)) return(NULL)
+    legend_species <- tryCatch(tr("legend_species", lang()), error = function(e) "")
+    if (is.null(legend_species) || !nzchar(as.character(legend_species)[1]) || identical(as.character(legend_species)[1], "legend_species")) {
+      legend_species <- if (identical(lang(), "zh")) "物种" else "Species"
+    } else {
+      legend_species <- as.character(legend_species)[1]
+    }
     
     cols_to_plot <- c("H_pct", "M_pct")
     if("rxn_D" %in% input$active_paths) cols_to_plot <- c(cols_to_plot, "D_pct")
@@ -135,8 +159,8 @@
       mutate(Species = factor(Species, levels = names(lbl_map), labels = lbl_map)) %>%
       ggplot(aes(x=Ratio_App, y=Frac, fill=Species)) + 
       geom_area(alpha=0.8, color="white", linewidth=0.1) +
-      scale_fill_brewer(palette="Set3") + 
-      labs(x="Simulated G/H Ratio", y="Fraction (based on H)") +
+      scale_fill_brewer(palette="Set3", name = legend_species) + 
+      labs(x=tr("axis_simulated_ratio", lang()), y=tr("axis_fraction_based_on_h", lang())) +
       theme_minimal(base_size=14) + theme(legend.position="bottom")
   })
   
@@ -260,7 +284,7 @@
     }, error = function(e) {
       ggplot() + 
         annotate("text", x = 0.5, y = 0.5, 
-                label = paste("Plot error:", e$message), size = 4) +
+                label = paste0(tr("plot_error", lang()), e$message), size = 4) +
         theme_void()
     })
   })
@@ -280,7 +304,7 @@
     }, error = function(e) {
       ggplot() + 
         annotate("text", x = 0.5, y = 0.5, 
-                label = paste("Plot error:", e$message), size = 4) +
+                label = paste0(tr("plot_error", lang()), e$message), size = 4) +
         theme_void()
     })
   })

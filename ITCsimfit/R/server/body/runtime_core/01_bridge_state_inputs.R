@@ -73,6 +73,16 @@
     tryCatch(shiny::isolate(rv_fun()), error = function(e) default)
   }
 
+  is_step2_tab_selected <- function(tab_value = safe_input_get("main_tabs")) {
+    tab_chr <- as.character(tab_value %||% "")[1]
+    tab_chr %in% c(
+      "step2",
+      "Step 2 Simulation & Fitting",
+      "步骤 2 模拟 & 拟合",
+      "步骤 2 模拟与拟合"
+    )
+  }
+
   update_numeric_if_present <- function(id, value) {
     if (is.null(safe_input_get(id))) return(invisible(FALSE))
     value_num <- suppressWarnings(as.numeric(value))
@@ -293,7 +303,7 @@
       sig_state$consumed <- sig
       set_step1_signature_state(sig_state)
     }
-    showNotification("Loaded Step 1 data into Step 2.", type = "message", duration = 2)
+    showNotification(tr("step1_loaded_to_step2", lang()), type = "message", duration = 2)
     TRUE
   }
 
@@ -317,7 +327,7 @@
         consume_step1_payload(payload),
         error = function(e) {
           showNotification(
-            paste0("Step1 bridge payload skipped: ", conditionMessage(e)),
+            trf("step1_payload_skipped", lang(), conditionMessage(e)),
             type = "warning",
             duration = 5
           )
@@ -329,7 +339,7 @@
 
   ensure_step1_payload_inputs_synced <- function(payload = get_latest_step1_payload()) {
     current_tab <- as.character(safe_input_get("main_tabs") %||% "")
-    if (!identical(current_tab, "Step 2 Simulation & Fitting")) return(invisible(FALSE))
+    if (!is_step2_tab_selected(current_tab)) return(invisible(FALSE))
     if (is.null(payload) || !is.list(payload)) return(invisible(FALSE))
     sig <- payload_signature(payload)
     sig_state <- get_step1_signature_state()
@@ -368,7 +378,7 @@
 
     session$onFlushed(function() {
       current_tab <- as.character(safe_input_get("main_tabs") %||% "")
-      if (identical(current_tab, "Step 2 Simulation & Fitting")) {
+      if (is_step2_tab_selected(current_tab)) {
         tryCatch(ensure_step1_payload_inputs_synced(payload), error = function(e) NULL)
       }
       if (pass_n > 1L) {
@@ -403,7 +413,7 @@
       if (!is.finite(rem) || rem <= 0L) return(invisible(FALSE))
 
       current_tab <- as.character(safe_input_get("main_tabs") %||% "")
-      if (identical(current_tab, "Step 2 Simulation & Fitting")) {
+      if (is_step2_tab_selected(current_tab)) {
         tryCatch(ensure_step1_payload_inputs_synced(payload), error = function(e) NULL)
         sig_state <- get_step1_signature_state()
         if (!is.na(sig_state$input) && identical(sig_state$input, expected_sig)) {
@@ -432,7 +442,7 @@
   }, ignoreNULL = TRUE)
 
   observeEvent(input$main_tabs, {
-    if (!identical(input$main_tabs, "Step 2 Simulation & Fitting")) return()
+    if (!is_step2_tab_selected(input$main_tabs)) return()
     payload <- get_latest_step1_payload()
     ensure_step1_payload_inputs_synced(payload)
     replay_step1_sync_after_flush(payload = payload, passes = 2L)
@@ -788,7 +798,7 @@
     values$imported_xlsx_base_name <- NULL
     values$imported_xlsx_filename <- NULL
     values$exp_data_disabled <- TRUE
-    showNotification("Experimental data removed. Simulation-only mode.", type = "message", duration = 3)
+    showNotification(tr("exp_data_removed_sim_only", lang()), type = "message", duration = 3)
   }, ignoreInit = TRUE)
   
   # 缓存当前导入的 xlsx 文件路径，用于与 reactive 共享已读取的 sheets，避免重复读取且保证参数更新与导入同步
@@ -830,7 +840,7 @@
     build_exp_from_integration <- function(int_df) {
       if (is.null(int_df) || nrow(int_df) == 0) return(NULL)
       if (!("Heat_ucal" %in% colnames(int_df))) {
-        showNotification("Missing Heat_ucal in integration; cannot recalculate heat from current parameters.", type = "warning", duration = 5)
+        showNotification(tr("missing_heat_ucal_integration", lang()), type = "warning", duration = 5)
         return(NULL)
       }
 

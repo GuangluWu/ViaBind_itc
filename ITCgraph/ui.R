@@ -146,6 +146,41 @@ ui <- fluidPage(
             .addClass('readonly-fit-factor');
         });
       }
+      function updateGraphFileInputLabel(id, buttonLabel, placeholder) {
+        function apply(attempt) {
+          var $node = $('#' + id);
+          var $root = $node.filter('.shiny-input-container');
+          if ($root.length < 1) $root = $node.closest('.shiny-input-container');
+          if ($root.length < 1) {
+            $root = $('div.shiny-input-container').has('input[type=\"file\"]#' + id).first();
+          }
+          if ($root.length < 1) {
+            if (attempt < 6) setTimeout(function(){ apply(attempt + 1); }, 60);
+            return;
+          }
+          var $btn = $root.find('.btn-file').first();
+          if ($btn.length > 0 && typeof buttonLabel === 'string') {
+            $btn.contents().filter(function() {
+              return this.nodeType === 3;
+            }).remove();
+            $btn.prepend(document.createTextNode(buttonLabel + ' '));
+          } else if (attempt < 6) {
+            setTimeout(function(){ apply(attempt + 1); }, 60);
+          }
+          if (typeof placeholder === 'string') {
+            $root.find('.form-control').attr('placeholder', placeholder);
+          }
+        }
+        apply(0);
+      }
+      Shiny.addCustomMessageHandler('itcgraph_i18n_static', function(msg) {
+        if (!msg) return;
+        if (msg.export_pdf) $('#export_pdf').text(msg.export_pdf);
+        if (msg.export_png) $('#export_png').text(msg.export_png);
+        if (msg.export_tiff) $('#export_tiff').text(msg.export_tiff);
+        updateGraphFileInputLabel('xlsx_file', msg.import_data, msg.no_file_selected);
+        updateGraphFileInputLabel('import_settings_file', msg.load_sets, msg.json_placeholder);
+      });
       $(document).on('shiny:connected shiny:reconnected shown.bs.tab', function() {
         markGraphReadonlyFields();
       });

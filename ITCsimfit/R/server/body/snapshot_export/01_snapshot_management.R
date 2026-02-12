@@ -170,11 +170,11 @@
     # [修复] 防止在语言切换时触发
     if(lang_switching()) return()
     showModal(modalDialog(
-      title = "Confirm Reset",
-      "Reset all variables to default values? This action cannot be undone. Save a snapshot first if needed.",
+      title = tr("reset_confirm_title", lang()),
+      tr("reset_confirm_msg", lang()),
       footer = tagList(
-        modalButton("Cancel"),
-        actionButton("confirm_reset", "Confirm", class = "btn-danger")
+        modalButton(tr("reset_confirm_cancel", lang())),
+        actionButton("confirm_reset", tr("reset_confirm_ok", lang()), class = "btn-danger")
       )
     ))
   })
