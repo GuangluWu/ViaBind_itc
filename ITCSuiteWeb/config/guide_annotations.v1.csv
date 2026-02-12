@@ -1,0 +1,5 @@
+schema_version,app,guide_id,control_id,control_type,lang_zh,lang_en,severity,status,since_version,until_version,order,notes
+itcsuite.guide_annotation.v1,ITCSuiteWeb,step1_tab_hint,main_tabs,other,此标签页用于 Step 1 数据处理。,"This tab is used for Step 1 data processing.",info,active,1.0.0,,10,Phase4 seed
+itcsuite.guide_annotation.v1,ITCSuiteWeb,step2_tab_hint,main_tabs,other,此标签页用于 Step 2 拟合。,"This tab is used for Step 2 fitting.",info,active,1.0.0,,20,Phase4 seed
+itcsuite.guide_annotation.v1,ITCSuiteWeb,step3_tab_hint,main_tabs,other,此标签页用于 Step 3 绘图导出。,"This tab is used for Step 3 plotting/export.",info,active,1.0.0,,30,Phase4 seed
+itcsuite.guide_annotation.v1,ITCSuiteWeb,legacy_inactive_note,legacy_simfit_ui,uioutput,旧版说明（停用）。,"Legacy note (inactive).",info,inactive,0.9.0,1.0.0,40,Status filter sample

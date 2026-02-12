@@ -1,9 +1,21 @@
   # ============================================================================
   # 原有代码继续
   # ============================================================================
+  # [COMMENT_STD][MODULE_HEADER]
+  # 模块职责：维护 Step2 运行态、桥接输入同步与拟合前状态归一。
+  # 依赖：shiny reactive API、constants.R、bridge helper 函数族。
+  # 对外接口：通过当前 server 环境暴露 reset/apply/publish 等内部函数。
+  # 副作用：更新 UI 控件值、写入 reactiveValues、触发通知与桥接通道。
+  # 变更历史：2026-02-12 - 增加 Phase 4 注释规范样板。
   
   # 使用同步拟合模式：拟合时界面会暂时无响应，确保用户不会在拟合时进行其他操作
   
+  # [COMMENT_STD][IO_CONTRACT]
+  # 输入来源：Shiny input/session、Step1 bridge payload、缓存 reactive 状态。
+  # 字段/类型：input[[id]] 以 scalar/list 为主；payload 为 list 且含 schema/token/meta/integration。
+  # 单位：体积统一按 uL，浓度按 mM，温度按 K（与 constants/UI 约定一致）。
+  # 空值策略：safe_input_get/safe_rv_get 吞掉读取异常并返回 NULL/默认值。
+  # 输出保证：状态更新函数返回 invisible(TRUE/FALSE) 或结构化 list，避免抛出未处理异常。
   values <- reactiveValues(is_fitting = FALSE, param_list = data.frame(), error_analysis = NULL, 
                            error_analysis_info = NULL,  # 存储误差分析可靠性信息
                            residuals_data = NULL,       # 存储残差数据（用于残差图）

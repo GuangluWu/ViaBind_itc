@@ -2,3 +2,7 @@
 [PERF] 2026-02-12 18:58:44 | test | 步骤时间测试 | 0.472s | steps=2, step_timings=list(list(label = "快速步骤", elapsed = 0.165345191955566), list(label = "慢速步骤", elapsed = 0.18887209892273)) 
 [PERF] 2026-02-12 18:58:48 | test | 我的函数 | 0.135s | Mem: +0.00 MB | SLOW 
 [PERF] 2026-02-12 18:58:48 | workflow | 批量流程 | 0.302s | SLOW | steps=2, step_timings=list(list(label = "子步骤1", elapsed = 0.106905937194824), list(label = "子步骤2", elapsed = 0.11089301109314)) 
+[PERF] 2026-02-12 19:33:29 | test | 批量测试 | 0.532s | steps=3, step_timings=list(list(label = "步骤1", elapsed = 0.134512901306152), list(label = "步骤2", elapsed = 0.141225099563599), list(label = "步骤3", elapsed = 0.125952959060669)) 
+[PERF] 2026-02-12 19:33:30 | test | 步骤时间测试 | 0.416s | steps=2, step_timings=list(list(label = "快速步骤", elapsed = 0.138661861419678), list(label = "慢速步骤", elapsed = 0.185957908630371)) 
+[PERF] 2026-02-12 19:33:34 | test | 我的函数 | 0.129s | Mem: +0.00 MB | SLOW 
+[PERF] 2026-02-12 19:33:34 | workflow | 批量流程 | 0.298s | SLOW | steps=2, step_timings=list(list(label = "子步骤1", elapsed = 0.109834909439087), list(label = "子步骤2", elapsed = 0.107628107070923)) 

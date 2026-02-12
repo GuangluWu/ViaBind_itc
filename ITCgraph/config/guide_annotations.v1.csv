@@ -1,0 +1,6 @@
+schema_version,app,guide_id,control_id,control_type,lang_zh,lang_en,severity,status,since_version,until_version,order,notes
+itcsuite.guide_annotation.v1,ITCgraph,import_step2_xlsx,xlsx_file,fileinput,导入 Step2 导出的拟合结果文件。,"Import Step2 fitted data workbook.",info,active,1.0.0,,10,Phase4 seed
+itcsuite.guide_annotation.v1,ITCgraph,energy_unit_toggle,energy_unit,selectinput,切换能量单位会同步影响坐标标签。,"Switching energy unit also updates axis labels.",info,active,1.0.0,,20,Phase4 seed
+itcsuite.guide_annotation.v1,ITCgraph,ratio_correction_switch,graph_apply_ratio_correction,checkboxinput,按需启用 fG/fH 比值修正。,"Enable fG/fH ratio correction when needed.",warning,active,1.0.0,,30,Phase4 seed
+itcsuite.guide_annotation.v1,ITCgraph,export_pdf_hint,export_pdf,downloadbutton,导出当前图形为 PDF。,"Export current figure as PDF.",info,active,1.0.0,,40,Phase4 seed
+itcsuite.guide_annotation.v1,ITCgraph,legacy_disabled_note,graph_fh_display,textinput,旧版 fH 说明（停用）。,"Legacy fH note (inactive).",info,inactive,0.9.0,1.0.0,50,Status filter sample

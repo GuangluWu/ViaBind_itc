@@ -2,6 +2,12 @@
 # R/fitting.R - 拟合相关函数
 # ==============================================================================
 # 包含拟合相关的辅助函数
+# [COMMENT_STD][MODULE_HEADER]
+# 模块职责：衔接 UI 参数与核心模拟引擎，输出拟合阶段可直接使用的数据结构。
+# 依赖：core_logic.R（run_sim_modular）、constants.R（默认值/边界）。
+# 对外接口：calculate_simulation()、calculate_ratio_app()。
+# 副作用：无文件 I/O；参数不合法时通过 stop 中断。
+# 变更历史：2026-02-12 - 增加 Phase 4 注释规范样板。
 
 #' 模拟计算包装函数
 #' 
@@ -13,6 +19,18 @@
 #' @param active_paths character vector 激活的反应路径
 #' @return data.frame 模拟结果，包含 Ratio_App 和 dQ_App
 calculate_simulation <- function(p, active_paths) {
+  # [COMMENT_STD][KEY_ALGO]
+  # 算法目标：将名义实验参数映射到真实计算参数，并把模拟输出回算为 UI 语义字段。
+  # 输入约束：p 必须是非空 list，且可解析出浓度、体积、修正因子及注射序列。
+  # 数值稳定策略：对 active_paths 进行空值归一，保证至少存在基础路径 rxn_M。
+  # 失败回退：run_sim_modular 返回 NULL 时原样返回 NULL，由上层 UI 决定提示逻辑。
+  # 复杂度：主耗时继承自 run_sim_modular；本函数自身主要为 O(n_inj) 的向量后处理。
+  # [COMMENT_STD][IO_CONTRACT]
+  # 输入来源：Shiny input/state 组装出的参数列表 p。
+  # 字段/类型：p$H_cell_0/p$G_syringe/fH/fG/Offset 为 numeric；active_paths 为 character vector。
+  # 单位：输入浓度为 mM、体积为 uL；内部统一换算到 M 和 mL 再调用模拟引擎。
+  # 空值策略：active_paths 为空时自动归一；缺失 V_inj_vec 时由 V_inj+n_inj 推导。
+  # 输出保证：成功时返回含 Ratio_App/dQ_App 的 data.frame；失败时返回 NULL。
   # 参数验证
   if(is.null(p) || !is.list(p)) {
     stop("Parameter p must be a non-null list")

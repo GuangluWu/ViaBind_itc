@@ -1,6 +1,12 @@
 # ==============================================================================
 # bridge_plot_helpers.R - Step2 -> Step3 bridge helper functions
 # ==============================================================================
+# [COMMENT_STD][MODULE_HEADER]
+# 模块职责：提供 Step2 到 Step3 的 payload 归一、来源解析与参数同步辅助函数。
+# 依赖：base R；由 server.R 调用。
+# 对外接口：bridge_plot_* 系列纯函数。
+# 副作用：无外部副作用，函数返回新对象。
+# 变更历史：2026-02-12 - 增加 Phase 4 注释规范样板。
 
 bridge_plot_safe_num_scalar <- function(x, default = NA_real_) {
   v <- suppressWarnings(as.numeric(x)[1])
@@ -60,6 +66,12 @@ bridge_plot_resolve_step2_payload_source <- function(payload, token = NA_real_) 
 }
 
 bridge_plot_extract_step2_payload_frames <- function(payload) {
+  # [COMMENT_STD][IO_CONTRACT]
+  # 输入来源：Step2 bridge payload（list）或其 sheets 子结构。
+  # 字段/类型：期望 data.frame 字段如 power_original/power_corrected/integration_rev/simulation/fit_params/meta_rev。
+  # 单位：沿用 Step2 导出语义（功率、热量与浓度单位不在此函数做换算）。
+  # 空值策略：缺失字段返回 NULL，不抛异常；优先使用 sheets，其次回退 payload 顶层字段。
+  # 输出保证：返回统一 list，固定包含 sheets/power_original/power/integration/simulation/fit_params/meta。
   sheets <- payload$sheets
   power_original_df <- NULL
   power_df <- NULL

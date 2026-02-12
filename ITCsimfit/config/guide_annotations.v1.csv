@@ -1,0 +1,7 @@
+schema_version,app,guide_id,control_id,control_type,lang_zh,lang_en,severity,status,since_version,until_version,order,notes
+itcsuite.guide_annotation.v1,ITCsimfit,sim_to_exp_primary,sim_to_exp,actionbutton,将当前模拟结果回填到实验数据区。,"Push current simulation output into experimental data inputs.",info,active,1.0.0,,10,Phase4 seed
+itcsuite.guide_annotation.v1,ITCsimfit,exp_file_upload,exp_file,fileinput,导入 Step1 导出的实验数据文件。,"Import experiment data exported from Step 1.",info,active,1.0.0,,20,Phase4 seed
+itcsuite.guide_annotation.v1,ITCsimfit,fit_global_search,fit_global,actionbutton,启动全局拟合，耗时较长。,"Run global fitting; this may take longer than local fitting.",warning,active,1.2.0,,30,Version-gated sample
+itcsuite.guide_annotation.v1,ITCsimfit,heat_offset_adjust,heat_offset,sliderinput,调整热偏移以修正基线。,"Adjust heat offset to correct baseline bias.",info,active,1.0.0,,40,Phase4 seed
+itcsuite.guide_annotation.v1,ITCsimfit,heat_offset_legacy,heat_offset,sliderinput,旧版热偏移提示（已停用）。,"Legacy heat offset helper (inactive).",info,inactive,0.9.0,1.0.0,41,Used for status filter tests
+itcsuite.guide_annotation.v1,ITCsimfit,active_paths_select,active_paths,checkboxgroupinput,选择参与拟合的反应路径。,"Select reaction paths to include in fitting.",info,active,1.0.0,,50,Phase4 seed

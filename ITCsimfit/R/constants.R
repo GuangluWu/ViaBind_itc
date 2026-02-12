@@ -162,9 +162,32 @@ NOTIFICATION_DURATION <- list(
 # 文件路径
 FILE_PATHS <- list(
   i18n_table = "i18n_translation_table.csv",
+  guide_annotations = file.path("config", "guide_annotations.v1.csv"),
   error_log = "error.log",
   session_log = "session.log"
 )
+
+# ==============================================================================
+# 引导注释配置常量（Phase 4）
+# ==============================================================================
+
+# 引导注释 schema 版本（仅用于配置校验，不影响现有业务 schema）
+GUIDE_SCHEMA_VERSION <- "itcsuite.guide_annotation.v1"
+
+# 引导注释默认配置路径
+GUIDE_ANNOTATIONS_PATH <- file.path("config", "guide_annotations.v1.csv")
+
+# 当前应用标识（用于 resolver 默认 app 过滤）
+GUIDE_APP_ID <- "ITCsimfit"
+
+# 枚举定义（校验器统一转小写后比较）
+GUIDE_ALLOWED_CONTROL_TYPES <- c(
+  "actionbutton", "numericinput", "sliderinput", "fileinput",
+  "checkboxinput", "checkboxgroupinput", "downloadbutton",
+  "textinput", "plotoutput", "dtoutput", "uioutput", "other"
+)
+GUIDE_ALLOWED_SEVERITY <- c("info", "warning", "critical")
+GUIDE_ALLOWED_STATUS <- c("active", "inactive", "deprecated")
 
 # 文件格式
 FILE_FORMATS <- list(

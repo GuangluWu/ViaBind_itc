@@ -3,11 +3,23 @@ library(plotly)
 library(DT)
 library(writexl)
 
+# [COMMENT_STD][MODULE_HEADER]
+# 模块职责：Step1 应用入口，负责原始 ITC 数据导入、基线处理、积分与向 Step2 桥接导出。
+# 依赖：R/data_parser.R、R/baseline.R、R/integration.R、R/i18n.R、R/guide_annotations.R。
+# 对外接口：ui、server、shinyApp(ui, server)。
+# 副作用：读文件、写导出 xlsx、通过 session bridge 推送 payload。
+# 变更历史：2026-02-12 - 增加 Phase 4 注释规范与 guide annotations 预埋加载。
+
 # 加载模块（需在项目根目录运行，如 runApp(".") 或 setwd 到项目根目录后 runApp()）
 source("R/data_parser.R")
 source("R/baseline.R")
 source("R/integration.R")
 source("R/i18n.R")
+source("R/guide_annotations.R")
+
+if (!exists("load_guide_annotations", mode = "function")) {
+  stop("Failed to load guide annotation module from R/guide_annotations.R", call. = FALSE)
+}
 
 ui <- fluidPage(
   tags$head(tags$style(HTML("
@@ -156,6 +168,12 @@ ui <- fluidPage(
 )
 
 server <- function(input, output, session) {
+  # [COMMENT_STD][ERROR_SEMANTICS]
+  # 错误码/类别：输入文件解析/桥接导出失败属于运行时错误。
+  # 触发条件：文件读取失败、必需字段缺失、bridge channel 不可用。
+  # 用户可见性：通过通知与控制台错误可见；关键初始化错误直接 stop。
+  # 日志级别：运行时 warning/error；初始化阶段 error。
+  # 恢复动作：保持当前 UI 状态并允许重新导入或重试导出。
   `%||%` <- function(x, y) if (is.null(x)) y else x
 
   session_bridge <- tryCatch({

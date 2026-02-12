@@ -1,3 +1,9 @@
+  # [COMMENT_STD][MODULE_HEADER]
+  # 模块职责：负责 Step2 快照导出、Step3 bridge payload 组装与导出文件写入。
+  # 依赖：writexl、snapshot helper、bridge helper、Shiny downloadHandler。
+  # 对外接口：output$export_params、publish_step2_plot_payload()、output$simfit_downloadData。
+  # 副作用：写出 xlsx、更新 bridge channel、触发通知与 tab 切换。
+  # 变更历史：2026-02-12 - 增加 Phase 4 注释规范样板。
   # --- 5. 导出参数快照 (xlsx，参数名带单位后缀) ---
   output$export_params <- downloadHandler(
     filename = function() {
@@ -23,6 +29,12 @@
     }
   )
   
+  # [COMMENT_STD][IO_CONTRACT]
+  # 输入来源：当前 UI 输入（input）、计算结果（sim_results）、导入缓存（values$imported_xlsx_sheets）。
+  # 字段/类型：bundle 为 list，含 sheets(list<data.frame>) / fit_params(data.frame) / simulation(data.frame)。
+  # 单位：沿用 Step2 语义（浓度 mM、体积 uL/mL、热量 cal/mol）；导出时保持与 bridge 约定一致。
+  # 空值策略：关键数据缺失时返回 NULL；导出 handler 兜底写入错误提示 sheet。
+  # 输出保证：成功返回可序列化 list，且包含 Step3 所需 schema 字段。
   build_fit_export_bundle <- function(sim = NULL) {
     sim_use <- if (is.null(sim)) tryCatch(sim_results(), error = function(e) NULL) else sim
     if (is.null(sim_use)) return(NULL)

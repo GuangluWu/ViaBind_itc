@@ -28,6 +28,60 @@ results[["ITCSuiteWeb bridge contract"]] <- run_testthat_file(
 )
 required_keys <- c(required_keys, "ITCSuiteWeb bridge contract")
 
+results[["ITCSuiteWeb guide annotation schema"]] <- run_testthat_file(
+  file.path(repo_root, "ITCSuiteWeb", "tests", "testthat", "test-guide-annotations-schema.R"),
+  label = "ITCSuiteWeb/test-guide-annotations-schema.R"
+)
+required_keys <- c(required_keys, "ITCSuiteWeb guide annotation schema")
+
+results[["ITCSuiteWeb guide annotation resolver"]] <- run_testthat_file(
+  file.path(repo_root, "ITCSuiteWeb", "tests", "testthat", "test-guide-annotations-resolver.R"),
+  label = "ITCSuiteWeb/test-guide-annotations-resolver.R"
+)
+required_keys <- c(required_keys, "ITCSuiteWeb guide annotation resolver")
+
+results[["ITCSuiteWeb comment standard minimal"]] <- run_testthat_file(
+  file.path(repo_root, "ITCSuiteWeb", "tests", "testthat", "test-commenting-standard-minimal.R"),
+  label = "ITCSuiteWeb/test-commenting-standard-minimal.R"
+)
+required_keys <- c(required_keys, "ITCSuiteWeb comment standard minimal")
+
+results[["ITCgraph guide annotation schema"]] <- run_testthat_file(
+  file.path(repo_root, "ITCgraph", "tests", "testthat", "test-guide-annotations-schema.R"),
+  label = "ITCgraph/test-guide-annotations-schema.R"
+)
+required_keys <- c(required_keys, "ITCgraph guide annotation schema")
+
+results[["ITCgraph guide annotation resolver"]] <- run_testthat_file(
+  file.path(repo_root, "ITCgraph", "tests", "testthat", "test-guide-annotations-resolver.R"),
+  label = "ITCgraph/test-guide-annotations-resolver.R"
+)
+required_keys <- c(required_keys, "ITCgraph guide annotation resolver")
+
+results[["ITCgraph comment standard minimal"]] <- run_testthat_file(
+  file.path(repo_root, "ITCgraph", "tests", "testthat", "test-commenting-standard-minimal.R"),
+  label = "ITCgraph/test-commenting-standard-minimal.R"
+)
+required_keys <- c(required_keys, "ITCgraph comment standard minimal")
+
+results[["ITCprocessor guide annotation schema"]] <- run_testthat_file(
+  file.path(repo_root, "ITCprocessor", "tests", "testthat", "test-guide-annotations-schema.R"),
+  label = "ITCprocessor/test-guide-annotations-schema.R"
+)
+required_keys <- c(required_keys, "ITCprocessor guide annotation schema")
+
+results[["ITCprocessor guide annotation resolver"]] <- run_testthat_file(
+  file.path(repo_root, "ITCprocessor", "tests", "testthat", "test-guide-annotations-resolver.R"),
+  label = "ITCprocessor/test-guide-annotations-resolver.R"
+)
+required_keys <- c(required_keys, "ITCprocessor guide annotation resolver")
+
+results[["ITCprocessor comment standard minimal"]] <- run_testthat_file(
+  file.path(repo_root, "ITCprocessor", "tests", "testthat", "test-commenting-standard-minimal.R"),
+  label = "ITCprocessor/test-commenting-standard-minimal.R"
+)
+required_keys <- c(required_keys, "ITCprocessor comment standard minimal")
+
 root_testthat_dir <- file.path(repo_root, "tests", "testthat")
 if (dir.exists(root_testthat_dir)) {
   results[["Root testthat suite"]] <- run_testthat_dir(
@@ -36,6 +90,24 @@ if (dir.exists(root_testthat_dir)) {
   )
   required_keys <- c(required_keys, "Root testthat suite")
 }
+
+results[["ITCsimfit guide annotation schema"]] <- run_testthat_file(
+  file.path(repo_root, "ITCsimfit", "tests", "test_guide_annotations_schema.R"),
+  label = "ITCsimfit/tests/test_guide_annotations_schema.R"
+)
+required_keys <- c(required_keys, "ITCsimfit guide annotation schema")
+
+results[["ITCsimfit guide annotation resolver"]] <- run_testthat_file(
+  file.path(repo_root, "ITCsimfit", "tests", "test_guide_annotations_resolver.R"),
+  label = "ITCsimfit/tests/test_guide_annotations_resolver.R"
+)
+required_keys <- c(required_keys, "ITCsimfit guide annotation resolver")
+
+results[["ITCsimfit comment standard minimal"]] <- run_testthat_file(
+  file.path(repo_root, "ITCsimfit", "tests", "test_commenting_standard_minimal.R"),
+  label = "ITCsimfit/tests/test_commenting_standard_minimal.R"
+)
+required_keys <- c(required_keys, "ITCsimfit comment standard minimal")
 
 required_legacy_scripts <- c(
   "tests/test_core_logic.R",

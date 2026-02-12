@@ -4,8 +4,20 @@ fail_fast <- function(...) {
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
+# [COMMENT_STD][MODULE_HEADER]
+# 模块职责：作为 ITCSuite 宿主应用，加载三步 legacy 子应用并提供跨步桥接总线。
+# 依赖：shiny、bridge_contract.R、legacy 子应用 app.R、guide_annotations.R。
+# 对外接口：ui、server、bridge_*_server() 模块函数。
+# 副作用：启动时执行路径探测和子应用加载；运行时写入 session$userData。
+# 变更历史：2026-02-12 - 增加 Phase 4 注释规范与 guide annotations 预埋加载。
+
 library(shiny)
 source("R/bridge_contract.R")
+source("R/guide_annotations.R")
+
+if (!exists("load_guide_annotations", mode = "function")) {
+  fail_fast("Startup check failed: guide annotation loader is unavailable.")
+}
 
 detect_repo_root <- function() {
   candidates <- unique(c(getwd(), dirname(getwd())))
@@ -81,6 +93,12 @@ load_legacy_app <- function(app_dir, label, required_symbols = character(0)) {
 }
 
 bridge_bus_server <- function(id) {
+  # [COMMENT_STD][IO_CONTRACT]
+  # 输入来源：moduleServer session 生命周期内的桥接读写调用。
+  # 字段/类型：step1_payload/step2_plot_payload 为 list 载荷，内部含 schema_version/token 等字段。
+  # 单位：token 采用 numeric 标量；时间戳由 payload 自身定义（ISO 字符串）。
+  # 空值策略：validator 拒绝无效 payload；显式传入 NULL 时清空 channel。
+  # 输出保证：返回包含两个 channel function 的 list，供步骤间共享。
   moduleServer(id, function(input, output, session) {
     step1_payload <- make_bridge_channel(sanitize_step1_payload, "step1_payload")
     step2_plot_payload <- make_bridge_channel(sanitize_step2_plot_payload, "step2_plot_payload")
@@ -150,6 +168,12 @@ ui <- fluidPage(
 )
 
 server <- function(input, output, session) {
+  # [COMMENT_STD][ERROR_SEMANTICS]
+  # 错误码/类别：启动错误统一走 fail_fast；运行态桥接错误由 validator 拒绝并 warning。
+  # 触发条件：缺失子应用符号、bridge payload 不合法、路径探测失败。
+  # 用户可见性：启动失败为阻断错误；运行态桥接拒绝为非阻断告警。
+  # 日志级别：启动阶段 error；运行阶段 warning。
+  # 恢复动作：启动阶段停止应用；运行阶段忽略本次无效 payload 并保留既有状态。
   bridge_bus <- bridge_bus_server("bridge_bus")
   bridge_s1s2 <- bridge_step1_to_step2_server("bridge_s1s2", bridge_bus)
   bridge_s2s3 <- bridge_step2_to_step3_server("bridge_s2s3", bridge_bus)

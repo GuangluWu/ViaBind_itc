@@ -63,7 +63,13 @@ if (!exists("trf", envir = .GlobalEnv)) {
   stop("Failed to load trf() function from R/i18n.R. Please check the file path and syntax.")
 }
 
-# 4. 加载性能监控模块
+# 4. 加载引导注释预埋模块（Phase 4，配置驱动，默认不启用 UI）
+source("R/guide_annotations.R", local = FALSE)
+if (!exists("load_guide_annotations", envir = .GlobalEnv)) {
+  stop("Failed to load guide annotation module from R/guide_annotations.R.")
+}
+
+# 5. 加载性能监控模块
 source("R/performance.R", local = FALSE)
 if (!exists("perf_monitor", envir = .GlobalEnv)) {
   warning("Failed to load performance monitoring module from R/performance.R.")

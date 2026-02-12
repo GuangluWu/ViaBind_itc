@@ -27,6 +27,12 @@
 # 
 # 更新日期：2026-01-26
 # ==============================================================================
+# [COMMENT_STD][MODULE_HEADER]
+# 模块职责：提供平衡求解与滴定模拟引擎，供拟合流程与图形流程复用。
+# 依赖：constants.R（数值常量/默认参数）、utils.R（数值辅助）、rootSolve。
+# 对外接口：solve_equi_modular()、run_sim_modular()。
+# 副作用：纯计算模块，理论上无 I/O；错误通过 return/stop 暴露给上层。
+# 变更历史：2026-02-12 - 增加 Phase 4 注释规范样板。
 
 # ==============================================================================
 # 1. 核心平衡求解函数 (解析解锚定 + 混合求解)
@@ -46,6 +52,18 @@
 #' @return numeric vector c(G_free, H_free, is_fallback)
 #'         is_fallback=1 表示数值求解失败，回退到了解析解锚点。
 solve_equi_modular <- function(G_tot, H_tot, p, active_paths, last_guess) {
+  # [COMMENT_STD][KEY_ALGO]
+  # 算法目标：在多反应路径下稳定求解游离浓度，并为后续滴定模拟提供可用状态。
+  # 输入约束：总浓度非负；参数列表包含 K1/H1；活跃路径为字符向量；last_guess 至少含 2 个数值。
+  # 数值稳定策略：先用二次方程锚点，再执行 log-space 求解，失败时再尝试线性缩放求解。
+  # 失败回退：任一求解器失败或结果越界时，返回解析锚点并置 is_fallback=1。
+  # 复杂度：每针主要开销来自 multiroot 迭代，近似 O(iterations * active_paths)。
+  # [COMMENT_STD][IO_CONTRACT]
+  # 输入来源：run_sim_modular() 在每针循环中传入的总浓度与参数。
+  # 字段/类型：G_tot/H_tot 为 numeric scalar；p 为 named list；active_paths 为 character vector。
+  # 单位：浓度统一为 M（mol/L），平衡常数为无量纲或其组合形式。
+  # 空值策略：参数验证失败直接 stop；路径为空时按基础路径处理。
+  # 输出保证：始终返回长度为 3 的 numeric 向量 (G_free, H_free, is_fallback)。
   
   # 参数验证
   stopifnot(

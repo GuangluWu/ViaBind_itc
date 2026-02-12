@@ -1,4 +1,10 @@
 # R/data_parser.R
+# [COMMENT_STD][MODULE_HEADER]
+# 模块职责：解析 ITC 原始文本中的元数据、注射事件与时序功率数据。
+# 依赖：base R 字符串与向量处理函数。
+# 对外接口：parse_itc_metadata()、read_itc()。
+# 副作用：读取文件内容；返回结构化 list/data.frame，不写外部状态。
+# 变更历史：2026-02-12 - 增加 Phase 4 注释规范样板。
 
 # 解析 ITC 文件头中的实验参数（参考 数据解释.md）
 # $ 块: 总滴定数、温度、每针体积(uL)（n_injections/V_pre_ul/V_inj_ul 会在 read_itc() 中被 @ 行解析结果覆盖）
@@ -80,6 +86,12 @@ parse_itc_metadata <- function(lines) {
 # 同时解析文件头中的实验参数，供拟合使用
 # 注意：n_injections、V_pre_ul、V_inj_ul 以 @ 行解析结果为准，会在 read_itc() 内覆盖文件头 ($ 19 与 $ 0.4, 0.8... 列表) 中的对应值
 read_itc <- function(file_path) {
+  # [COMMENT_STD][IO_CONTRACT]
+  # 输入来源：用户在 Step1 UI 中选择的 .itc/.txt 文件路径。
+  # 字段/类型：file_path 为单个字符串路径；输出包含 time/power/injection_indices/params 等结构。
+  # 单位：时间秒，功率常见为 ucal/s，体积 uL，浓度 mM，温度摄氏度（按源文件语义）。
+  # 空值策略：无法解析的字段保留 NA；注射序列不足时下游逻辑按空结果处理。
+  # 输出保证：返回可供 baseline/integration 继续处理的结构化对象（字段名稳定）。
   lines <- readLines(file_path)
   params <- parse_itc_metadata(lines)
   

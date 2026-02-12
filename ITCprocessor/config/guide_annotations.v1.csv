@@ -1,0 +1,6 @@
+schema_version,app,guide_id,control_id,control_type,lang_zh,lang_en,severity,status,since_version,until_version,order,notes
+itcsuite.guide_annotation.v1,ITCprocessor,import_itc_file,file1,fileinput,导入原始 ITC 文件（.itc/.txt）。,"Import raw ITC file (.itc/.txt).",info,active,1.0.0,,10,Phase4 seed
+itcsuite.guide_annotation.v1,ITCprocessor,baseline_offset_control,offset,sliderinput,调整基线锚点偏移。,"Adjust baseline anchor offset.",info,active,1.0.0,,20,Phase4 seed
+itcsuite.guide_annotation.v1,ITCprocessor,integration_window_control,integration_window,numericinput,限制积分终点窗口。,"Limit integration end window.",warning,active,1.0.0,,30,Phase4 seed
+itcsuite.guide_annotation.v1,ITCprocessor,to_fit_button,btn_data_to_fit,actionbutton,将 Step1 数据发送到 Step2。,"Send Step1 data to Step2.",info,active,1.0.0,,40,Phase4 seed
+itcsuite.guide_annotation.v1,ITCprocessor,legacy_disabled_note,param_V_inj_ul,numericinput,旧版注释（停用）。,"Legacy note (inactive).",info,inactive,0.9.0,1.0.0,50,Status filter sample
