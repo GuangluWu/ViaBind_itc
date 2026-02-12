@@ -80,11 +80,21 @@ ui <- fluidPage(
 
       /* ---- 保存/导入设置区域：左右两列，每列上字下钮对齐 ---- */
       .graph-root .settings-save-import { margin-top: 10px; padding-top: 10px; border-top: 1px solid #e9ecef; }
+      .graph-root .settings-save-import .row { margin-left: -2px; margin-right: -2px; }
+      .graph-root .settings-save-import [class*='col-'] { padding-left: 2px; padding-right: 2px; }
       .graph-root .settings-save-import .settings-col { display: flex; flex-direction: column; gap: 6px; }
       .graph-root .settings-save-import .settings-hint { font-size: 11px; color: #6c757d; line-height: 1.3; margin: 0; }
-      .graph-root .settings-save-import .btn-save-settings { width: 100%; min-width: 120px; font-weight: 500; }
+      .graph-root .settings-save-import .settings-action-row { display: flex; gap: 6px; width: 100%; min-width: 0; }
+      .graph-root .settings-save-import .settings-action-row .btn { min-width: 0; font-weight: 500; }
+      .graph-root .settings-save-import .settings-action-row .settings-load-wrap { flex: 1; min-width: 0; overflow: hidden; }
+      .graph-root .settings-save-import .settings-action-row .btn-reset-settings { flex: 0 0 auto; white-space: nowrap; }
+      .graph-root .settings-save-import .btn-save-settings { width: 100%; font-weight: 500; }
       .graph-root .settings-save-import .shiny-input-container { width: 100%; }
       .graph-root .settings-save-import .form-group { margin-bottom: 0; }
+      .graph-root .settings-save-import .settings-load-wrap .input-group { display: flex; width: 100%; min-width: 0; }
+      .graph-root .settings-save-import .settings-load-wrap .input-group-btn { width: auto; flex: 0 0 auto; }
+      .graph-root .settings-save-import .settings-load-wrap .btn-file { width: auto; }
+      .graph-root .settings-save-import .settings-load-wrap .form-control { flex: 1 1 0 !important; min-width: 0 !important; width: 1% !important; }
 
       /* ---- 下拉菜单浮于上方，不被 column 遮挡 (Point shape, Linetype 等) ---- */
       .graph-root .selectize-dropdown { z-index: 99999 !important; }
@@ -252,11 +262,11 @@ ui <- fluidPage(
           ),
           div(class = "settings-save-import",
             fluidRow(
-              column(6, div(class = "settings-col",
+              column(3, div(class = "settings-col",
                 uiOutput("settings_save_hint_ui"),
                 uiOutput("save_settings_ui")
               )),
-              column(6, div(class = "settings-col",
+              column(9, div(class = "settings-col",
                 uiOutput("settings_import_hint_ui"),
                 uiOutput("import_settings_ui")
               ))

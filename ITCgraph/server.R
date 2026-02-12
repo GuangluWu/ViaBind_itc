@@ -58,6 +58,7 @@ server <- function(input, output, session) {
   bridge_pending_autorange <- FALSE
   bridge_pending_offset <- NA_real_
   ratio_correction_enabled <- TRUE
+  reset_settings_nonce <- reactiveVal(0L)
 
   bridge_store_get_all <- function() {
     x <- get0(bridge_store_name, envir = .GlobalEnv, inherits = FALSE, ifnotfound = NULL)
@@ -685,18 +686,25 @@ server <- function(input, output, session) {
   
   # ---- Save/load settings labels ----
   output$settings_save_hint_ui <- renderUI({
-    div(class = "settings-hint", "Save all current figure settings as a JSON preset.")
+    div(class = "settings-hint", "Save settings")
   })
   output$settings_import_hint_ui <- renderUI({
-    div(class = "settings-hint", "Load a JSON preset and apply it to the current view.")
+    div(class = "settings-hint", "Load a JSON preset.")
   })
   output$save_settings_ui <- renderUI({
-    downloadButton("save_settings", label = "Save Settings",
-                  class = "btn-success btn-save-settings")
+    downloadButton("save_settings", label = "Save Sets", icon = NULL, class = "btn-success btn-save-settings")
   })
   output$import_settings_ui <- renderUI({
-    fileInput("import_settings_file", label = NULL,
-              accept = ".json", buttonLabel = "Load Settings", placeholder = "JSON")
+    reset_settings_nonce()
+    div(
+      class = "settings-action-row",
+      div(
+        class = "settings-load-wrap",
+        fileInput("import_settings_file", label = NULL,
+                  accept = ".json", buttonLabel = "Load Sets", placeholder = "JSON")
+      ),
+      actionButton("reset_settings", label = "Reset", class = "btn-default btn-reset-settings")
+    )
   })
   
   # ---- Export labels ----
@@ -1274,5 +1282,11 @@ server <- function(input, output, session) {
     }, error = function(e) {
       showNotification(paste0("Failed to import settings: ", e$message), type = "error", duration = 8)
     })
+  })
+
+  observeEvent(input$reset_settings, {
+    reset_plot_controls_to_defaults()
+    reset_settings_nonce(isolate(reset_settings_nonce()) + 1L)
+    showNotification("Settings reset to defaults.", type = "message", duration = 3)
   })
 }
