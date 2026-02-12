@@ -163,45 +163,27 @@ server <- function(input, output, session) {
     if (is.null(b) || !is.list(b)) NULL else b
   }, error = function(e) NULL)
 
-  bridge_store_name <- ".ITCSUITE_BRIDGE_STORE"
-  bridge_session_key <- tryCatch({
-    key <- as.character(session$token)
-    if (length(key) == 0 || !nzchar(key[1])) NA_character_ else key[1]
-  }, error = function(e) NA_character_)
-  if (is.na(bridge_session_key) || !nzchar(bridge_session_key)) {
-    bridge_session_key <- paste0("session_", format(Sys.time(), "%Y%m%d%H%M%OS6"))
-  }
-
-  bridge_store_get_all <- function() {
-    x <- get0(bridge_store_name, envir = .GlobalEnv, inherits = FALSE, ifnotfound = NULL)
-    if (is.null(x) || !is.list(x)) return(list())
-    x
-  }
-
-  bridge_store_put_all <- function(x) {
-    if (is.null(x) || !is.list(x)) x <- list()
-    assign(bridge_store_name, x, envir = .GlobalEnv)
-    invisible(NULL)
+  resolve_bridge_channel <- function(channel) {
+    ch <- if (!is.null(session_bridge)) session_bridge[[channel]] else NULL
+    if (is.function(ch)) return(ch)
+    NULL
   }
 
   bridge_set <- function(channel, payload) {
-    ch <- if (!is.null(session_bridge)) session_bridge[[channel]] else NULL
-    if (is.function(ch)) {
-      ch(payload)
-      return(invisible(NULL))
-    }
-    store <- bridge_store_get_all()
-    entry <- store[[bridge_session_key]]
-    if (is.null(entry) || !is.list(entry)) entry <- list()
-    if (is.null(payload)) {
-      entry[[channel]] <- NULL
-    } else {
-      entry[[channel]] <- payload
-      entry$updated_at <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-    }
-    store[[bridge_session_key]] <- entry
-    bridge_store_put_all(store)
+    ch <- resolve_bridge_channel(channel)
+    if (is.function(ch)) ch(payload)
     invisible(NULL)
+  }
+
+  bridge_last_token <- reactiveVal(as.numeric(Sys.time()))
+  next_bridge_token <- function() {
+    now_token <- as.numeric(Sys.time())
+    last_token <- suppressWarnings(as.numeric(bridge_last_token())[1])
+    if (is.finite(last_token) && is.finite(now_token) && now_token <= last_token) {
+      now_token <- last_token + 1e-6
+    }
+    bridge_last_token(now_token)
+    now_token
   }
 
   # 语言切换
@@ -502,11 +484,14 @@ server <- function(input, output, session) {
     )
 
     list(
-      token = as.numeric(Sys.time()),
+      schema_version = "itcsuite.step1.v1",
+      created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC"),
+      token = NA_real_,
       integration = pd$integration,
       meta = meta_df,
       source = if (is.null(input$file1$name) || input$file1$name == "") "ITCprocessor" else input$file1$name,
       bundle = list(
+        schema_version = "itcsuite.bundle.v1",
         meta = meta_df,
         power_original = data.frame(
           Time_s = rd$data$Time,
@@ -534,7 +519,8 @@ server <- function(input, output, session) {
     last_data_to_fit_click(click_id)
     payload <- step1_payload()
     if (is.null(payload)) return()
-    payload$token <- as.numeric(Sys.time())
+    payload$token <- next_bridge_token()
+    payload$created_at <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
     bridge_set("step1_payload", payload)
     tryCatch({
       updateTabsetPanel(session, "main_tabs", selected = "Step 2 Simulation & Fitting")

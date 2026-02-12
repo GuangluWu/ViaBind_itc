@@ -1,3 +1,3 @@
-id,itc_path,baseline_duration,baseline_offset,spar,limit_integration,integration_window,start_offset
-ada2cb7c,ITCprocessor/ada2cb7c.itc,20,5,0.1,TRUE,15,0
-c3-itc,ITCprocessor/c3-itc.itc,20,5,0.1,TRUE,15,0
+id,itc_path,baseline_duration,baseline_offset,spar,limit_integration,integration_window,start_offset,bridge_step1_required_keys,bridge_step1_required_columns,bridge_step2_required_keys,bridge_target_tabs
+ada2cb7c,ITCprocessor/ada2cb7c.itc,20,5,0.1,TRUE,15,0,"schema_version;created_at;token;source;bundle","Ratio_App;Heat_ucal;heat_cal_mol","schema_version;created_at;token;source;sheets;fit_params;simulation","Step 2 Simulation & Fitting;Step 3 Plot & Export"
+c3-itc,ITCprocessor/c3-itc.itc,20,5,0.1,TRUE,15,0,"schema_version;created_at;token;source;bundle","Ratio_App;Heat_ucal;heat_cal_mol","schema_version;created_at;token;source;sheets;fit_params;simulation","Step 2 Simulation & Fitting;Step 3 Plot & Export"

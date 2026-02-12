@@ -8,56 +8,33 @@ server <- function(input, output, session) {
     b <- session$userData$itcsuite_bridge
     if (is.null(b) || !is.list(b)) NULL else b
   }, error = function(e) NULL)
-  bridge_store_name <- ".ITCSUITE_BRIDGE_STORE"
-  bridge_session_key <- tryCatch({
-    key <- as.character(session$token)
-    if (length(key) == 0 || !nzchar(key[1])) NA_character_ else key[1]
-  }, error = function(e) NA_character_)
-  if (is.na(bridge_session_key) || !nzchar(bridge_session_key)) {
-    bridge_session_key <- paste0("session_", format(Sys.time(), "%Y%m%d%H%M%OS6"))
-  }
-  bridge_last_step1_token <- reactiveVal(NA_real_)
-  bridge_last_step1_input_token <- reactiveVal(NA_real_)
-  bridge_last_step1_reset_token <- reactiveVal(NA_real_)
-  
-  bridge_store_get_all <- function() {
-    x <- get0(bridge_store_name, envir = .GlobalEnv, inherits = FALSE, ifnotfound = NULL)
-    if (is.null(x) || !is.list(x)) return(list())
-    x
-  }
-  
-  bridge_store_put_all <- function(x) {
-    if (is.null(x) || !is.list(x)) x <- list()
-    assign(bridge_store_name, x, envir = .GlobalEnv)
-    invisible(NULL)
-  }
-  
-  bridge_get <- function(channel) {
+
+  resolve_bridge_channel <- function(channel) {
     ch <- if (!is.null(session_bridge)) session_bridge[[channel]] else NULL
-    if (is.function(ch)) return(ch())
-    store <- bridge_store_get_all()
-    entry <- store[[bridge_session_key]]
-    if (is.null(entry) || !is.list(entry)) return(NULL)
-    entry[[channel]]
+    if (is.function(ch)) return(ch)
+    NULL
   }
+
+  bridge_last_token <- reactiveVal(as.numeric(Sys.time()))
+  next_bridge_token <- function() {
+    now_token <- as.numeric(Sys.time())
+    last_token <- suppressWarnings(as.numeric(bridge_last_token())[1])
+    if (is.finite(last_token) && is.finite(now_token) && now_token <= last_token) {
+      now_token <- last_token + 1e-6
+    }
+    bridge_last_token(now_token)
+    now_token
+  }
+
+  bridge_last_step1_signature <- reactiveVal(list(
+    consumed = NA_character_,
+    reset = NA_character_,
+    input = NA_character_
+  ))
   
   bridge_set <- function(channel, payload) {
-    ch <- if (!is.null(session_bridge)) session_bridge[[channel]] else NULL
-    if (is.function(ch)) {
-      ch(payload)
-      return(invisible(NULL))
-    }
-    store <- bridge_store_get_all()
-    entry <- store[[bridge_session_key]]
-    if (is.null(entry) || !is.list(entry)) entry <- list()
-    if (is.null(payload)) {
-      entry[[channel]] <- NULL
-    } else {
-      entry[[channel]] <- payload
-      entry$updated_at <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-    }
-    store[[bridge_session_key]] <- entry
-    bridge_store_put_all(store)
+    ch <- resolve_bridge_channel(channel)
+    if (is.function(ch)) ch(payload)
     invisible(NULL)
   }
   
@@ -669,8 +646,39 @@ server <- function(input, output, session) {
     if (length(token_vec) >= 1) token_vec[1] else NA_real_
   }
 
+  payload_signature <- function(payload) {
+    build_step1_bridge_signature(payload)
+  }
+
+  default_step1_signature_state <- function() {
+    list(consumed = NA_character_, reset = NA_character_, input = NA_character_)
+  }
+
+  get_step1_signature_state <- function() {
+    st <- safe_rv_get(bridge_last_step1_signature, default = NULL)
+    if (!is.list(st)) return(default_step1_signature_state())
+    if (is.null(st$consumed)) st$consumed <- NA_character_
+    if (is.null(st$reset)) st$reset <- NA_character_
+    if (is.null(st$input)) st$input <- NA_character_
+    st
+  }
+
+  set_step1_signature_state <- function(st) {
+    if (!is.list(st)) st <- default_step1_signature_state()
+    bridge_last_step1_signature(st)
+    invisible(TRUE)
+  }
+
+  safe_input_get <- function(id) {
+    tryCatch(shiny::isolate(input[[id]]), error = function(e) NULL)
+  }
+
+  safe_rv_get <- function(rv_fun, default = NULL) {
+    tryCatch(shiny::isolate(rv_fun()), error = function(e) default)
+  }
+
   update_numeric_if_present <- function(id, value) {
-    if (is.null(input[[id]])) return(invisible(FALSE))
+    if (is.null(safe_input_get(id))) return(invisible(FALSE))
     value_num <- suppressWarnings(as.numeric(value))
     if (length(value_num) < 1 || !is.finite(value_num[1])) return(invisible(FALSE))
     updateNumericInput(session, id, value = value_num[1])
@@ -678,7 +686,7 @@ server <- function(input, output, session) {
   }
 
   update_checkbox_if_present <- function(id, value) {
-    if (is.null(input[[id]])) return(invisible(FALSE))
+    if (is.null(safe_input_get(id))) return(invisible(FALSE))
     updateCheckboxInput(session, id, value = isTRUE(value))
     invisible(TRUE)
   }
@@ -741,8 +749,7 @@ server <- function(input, output, session) {
   apply_meta_to_exp_inputs <- function(meta_df) {
     if (is.null(meta_df) || !all(c("parameter", "value") %in% colnames(meta_df))) return(invisible(FALSE))
     updated_any <- FALSE
-    vals <- suppressWarnings(as.numeric(trimws(as.character(meta_df$value))))
-    param_vals <- setNames(vals, trimws(as.character(meta_df$parameter)))
+    param_vals <- extract_step1_meta_numeric_map(meta_df)
     
     if ("H_cell_0_mM" %in% names(param_vals) && !is.na(param_vals[["H_cell_0_mM"]])) {
       updated_any <- isTRUE(update_numeric_if_present("H_cell_0", param_vals[["H_cell_0_mM"]])) || updated_any
@@ -773,22 +780,8 @@ server <- function(input, output, session) {
   apply_step1_inputs_from_payload <- function(payload) {
     if (is.null(payload) || !is.list(payload)) return(list(updated_any = FALSE, vinit_synced = FALSE))
 
-    bundle <- payload$bundle
-    meta_df <- NULL
-    if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$meta)) {
-      meta_df <- as.data.frame(bundle$meta)
-    }
-    if (is.null(meta_df) && is.data.frame(payload$meta)) {
-      meta_df <- as.data.frame(payload$meta)
-    }
-
-    int_df <- NULL
-    if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$integration)) {
-      int_df <- as.data.frame(bundle$integration)
-    }
-    if (is.null(int_df) && is.data.frame(payload$integration)) {
-      int_df <- as.data.frame(payload$integration)
-    }
+    meta_df <- get_step1_payload_meta_df(payload)
+    int_df <- get_step1_payload_integration_df(payload)
 
     updated_any <- FALSE
     if (!is.null(meta_df)) {
@@ -798,12 +791,9 @@ server <- function(input, output, session) {
     # Ensure V_init sync is explicitly verified. If Step 2 has not mounted the
     # V_init control yet, do not mark payload as fully consumed.
     vpre_from_meta <- NA_real_
-    if (!is.null(meta_df) && all(c("parameter", "value") %in% colnames(meta_df))) {
-      vals <- suppressWarnings(as.numeric(trimws(as.character(meta_df$value))))
-      param_vals <- setNames(vals, trimws(as.character(meta_df$parameter)))
-      if ("V_pre_uL" %in% names(param_vals) && is.finite(param_vals[["V_pre_uL"]])) {
-        vpre_from_meta <- param_vals[["V_pre_uL"]]
-      }
+    param_vals <- extract_step1_meta_numeric_map(meta_df)
+    if ("V_pre_uL" %in% names(param_vals) && is.finite(param_vals[["V_pre_uL"]])) {
+      vpre_from_meta <- param_vals[["V_pre_uL"]]
     }
 
     if (!is.null(int_df) && nrow(int_df) > 0) {
@@ -843,7 +833,7 @@ server <- function(input, output, session) {
       # Treat payload as fully consumed only when both V_pre and V_init are synced.
       vinit_synced <- isTRUE(vpre_synced && vinit_only_synced)
       updated_any <- vpre_synced || vinit_only_synced || updated_any
-    } else if (!is.null(input$V_init_val)) {
+    } else if (!is.null(safe_input_get("V_init_val"))) {
       # No V_pre source available, but input exists, so don't block consumption.
       vinit_synced <- TRUE
     }
@@ -853,35 +843,19 @@ server <- function(input, output, session) {
   
   consume_step1_payload <- function(payload) {
     if (is.null(payload) || !is.list(payload)) return(FALSE)
-    
+
     token <- payload_token(payload)
-    last_token <- bridge_last_step1_token()
-    if (is_finite_scalar(token) &&
-        is_finite_scalar(last_token) &&
-        identical(token, last_token)) {
+    sig <- payload_signature(payload)
+    sig_state <- get_step1_signature_state()
+    if (!is.na(sig) && identical(sig, sig_state$consumed)) {
       return(FALSE)
     }
     
-    bundle <- payload$bundle
-    meta_df <- NULL
-    if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$meta)) {
-      meta_df <- as.data.frame(bundle$meta)
-    }
-    if (is.null(meta_df) && is.data.frame(payload$meta)) {
-      meta_df <- as.data.frame(payload$meta)
-    }
-
-    int_df <- NULL
-    if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$integration)) {
-      int_df <- as.data.frame(bundle$integration)
-    }
-    if (is.null(int_df) && is.data.frame(payload$integration)) {
-      int_df <- as.data.frame(payload$integration)
-    }
+    meta_df <- get_step1_payload_meta_df(payload)
+    int_df <- get_step1_payload_integration_df(payload)
     if (is.null(int_df) || nrow(int_df) == 0) return(FALSE)
 
     reset_step2_ui_for_new_dataset(default_n_inj = nrow(int_df))
-    if (is_finite_scalar(token)) bridge_last_step1_reset_token(token)
     apply_meta_to_exp_inputs(meta_df)
     
     vinj_default <- suppressWarnings(as.numeric(input$V_inj))
@@ -892,38 +866,15 @@ server <- function(input, output, session) {
     if (length(g_syringe) >= 1) g_syringe <- g_syringe[1]
     if (!(length(g_syringe) == 1 && is.finite(g_syringe) && g_syringe > 0)) g_syringe <- UI_DEFAULTS$conc_syringe_default
     
-    V_inj_uL <- if ("V_titrate_uL" %in% colnames(int_df)) as.numeric(int_df$V_titrate_uL) else rep(vinj_default, nrow(int_df))
-    V_inj_uL[is.na(V_inj_uL)] <- vinj_default
-    
-    Heat_Raw <- if ("heat_cal_mol" %in% colnames(int_df)) {
-      as.numeric(int_df$heat_cal_mol)
-    } else if ("Heat_ucal" %in% colnames(int_df)) {
-      denom <- V_inj_uL * g_syringe
-      ifelse(is.finite(denom) & denom > 0, 1000 * as.numeric(int_df$Heat_ucal) / denom, NA_real_)
-    } else {
-      rep(NA_real_, nrow(int_df))
-    }
-    
-    Ratio_Raw <- if ("Ratio_App" %in% colnames(int_df)) as.numeric(int_df$Ratio_App) else rep(NA_real_, nrow(int_df))
-    exp_df <- data.frame(
-      Ratio_Raw = Ratio_Raw,
-      Heat_Raw = Heat_Raw,
-      V_inj_uL = V_inj_uL,
-      Inj = seq_len(nrow(int_df)),
-      stringsAsFactors = FALSE
+    exp_df <- build_step1_bridge_exp_df(
+      int_df = int_df,
+      vinj_default = vinj_default,
+      g_syringe = g_syringe
     )
-    exp_df <- exp_df[is.finite(exp_df$Heat_Raw), , drop = FALSE]
-    if (nrow(exp_df) == 0) return(FALSE)
-    exp_df$Inj <- seq_len(nrow(exp_df))
+    if (is.null(exp_df) || nrow(exp_df) == 0) return(FALSE)
     
-    power_df <- NULL
-    if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$power_corrected)) {
-      power_df <- as.data.frame(bundle$power_corrected)
-    }
-    power_original_df <- NULL
-    if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$power_original)) {
-      power_original_df <- as.data.frame(bundle$power_original)
-    }
+    power_df <- get_step1_payload_power_corrected_df(payload)
+    power_original_df <- get_step1_payload_power_original_df(payload)
     
     values$manual_exp_data <- exp_df
     values$manual_exp_source <- "step1_bridge"
@@ -935,40 +886,39 @@ server <- function(input, output, session) {
     if (!is.null(power_original_df)) cached_sheets[["power_original"]] <- power_original_df
     values$imported_xlsx_sheets <- cached_sheets
     
-    source_name <- as.character(payload$source %||% "Step1")
-    if (length(source_name) == 0 || !nzchar(source_name[1])) source_name <- "Step1"
-    source_name <- source_name[1]
+    source_name <- resolve_step1_bridge_source_name(payload, default = "Step1")
     values$imported_xlsx_filename <- source_name
     base_name <- tools::file_path_sans_ext(basename(source_name))
     values$imported_xlsx_base_name <- if (nzchar(base_name)) base_name else "ITC_data"
-    token_tag <- if (is_finite_scalar(token)) {
-      format(token, scientific = FALSE, trim = TRUE)
-    } else {
-      format(Sys.time(), "%Y%m%d%H%M%S")
-    }
+    token_tag <- resolve_step1_bridge_token_tag(token)
     values$imported_xlsx_file_path <- paste0("bridge://step1/", token_tag)
-
-    input_apply <- apply_step1_inputs_from_payload(payload)
-    if (isTRUE(input_apply$vinit_synced) && is_finite_scalar(token)) {
-      bridge_last_step1_input_token(token)
-    }
     
-    if (is_finite_scalar(token)) bridge_last_step1_token(token)
+    if (!is.na(sig)) {
+      sig_state$consumed <- sig
+      set_step1_signature_state(sig_state)
+    }
     showNotification("Loaded Step 1 data into Step 2.", type = "message", duration = 2)
     TRUE
   }
 
+  latest_step1_payload <- reactiveVal(NULL)
   get_latest_step1_payload <- function() {
-    if (!is.null(session_bridge) && is.function(session_bridge$step1_payload)) {
-      return(session_bridge$step1_payload())
-    }
-    bridge_get("step1_payload")
+    payload <- safe_rv_get(latest_step1_payload)
+    if (!is.null(payload)) return(payload)
+    bridge_step1_channel <- resolve_bridge_channel("step1_payload")
+    payload <- if (is.function(bridge_step1_channel)) bridge_step1_channel() else NULL
+    if (!is.null(payload) && is.list(payload)) latest_step1_payload(payload)
+    payload
   }
-  
-  if (!is.null(session_bridge) && is.function(session_bridge$step1_payload)) {
-    observeEvent(session_bridge$step1_payload(), {
+
+  bridge_step1_channel <- resolve_bridge_channel("step1_payload")
+  if (is.function(bridge_step1_channel)) {
+    observeEvent(bridge_step1_channel(), {
+      payload <- bridge_step1_channel()
+      if (is.null(payload) || !is.list(payload)) return(FALSE)
+      latest_step1_payload(payload)
       tryCatch(
-        consume_step1_payload(session_bridge$step1_payload()),
+        consume_step1_payload(payload),
         error = function(e) {
           showNotification(
             paste0("Step1 bridge payload skipped: ", conditionMessage(e)),
@@ -979,69 +929,119 @@ server <- function(input, output, session) {
         }
       )
     }, ignoreNULL = TRUE)
-  } else {
-    observe({
-      invalidateLater(300, session)
-      tryCatch(
-        consume_step1_payload(bridge_get("step1_payload")),
-        error = function(e) FALSE
-      )
-    })
   }
 
-  # Retry bridge consume for cases where Step 2 controls were not ready on first payload arrival.
-  observe({
-    invalidateLater(400, session)
-    tryCatch(
-      consume_step1_payload(get_latest_step1_payload()),
-      error = function(e) FALSE
-    )
-  })
+  ensure_step1_payload_inputs_synced <- function(payload = get_latest_step1_payload()) {
+    current_tab <- as.character(safe_input_get("main_tabs") %||% "")
+    if (!identical(current_tab, "Step 2 Simulation & Fitting")) return(invisible(FALSE))
+    if (is.null(payload) || !is.list(payload)) return(invisible(FALSE))
+    sig <- payload_signature(payload)
+    sig_state <- get_step1_signature_state()
 
-  # Ensure Step 1 parameters are applied after Step 2 controls are mounted.
-  # This fixes the first-click case where payload arrives before tab controls exist.
-  observe({
-    invalidateLater(250, session)
-    if (!identical(input$main_tabs, "Step 2 Simulation & Fitting")) return()
-    payload <- get_latest_step1_payload()
-    if (is.null(payload) || !is.list(payload)) return()
-    token <- payload_token(payload)
-
-    last_input_token <- bridge_last_step1_input_token()
-    if (is_finite_scalar(token) &&
-        is_finite_scalar(last_input_token) &&
-        identical(token, last_input_token)) {
-      return()
+    if (!is.na(sig) && identical(sig, sig_state$input)) {
+      return(invisible(FALSE))
     }
 
-    last_reset_token <- bridge_last_step1_reset_token()
-    need_reset <- !(is_finite_scalar(token) &&
-      is_finite_scalar(last_reset_token) &&
-      identical(token, last_reset_token))
+    need_reset <- is.na(sig) || !identical(sig, sig_state$reset)
     if (isTRUE(need_reset)) {
-      int_df <- NULL
-      bundle <- payload$bundle
-      if (!is.null(bundle) && is.list(bundle) && is.data.frame(bundle$integration)) {
-        int_df <- as.data.frame(bundle$integration)
-      }
-      if (is.null(int_df) && is.data.frame(payload$integration)) {
-        int_df <- as.data.frame(payload$integration)
-      }
+      int_df <- get_step1_payload_integration_df(payload)
       n_inj_default <- if (!is.null(int_df) && nrow(int_df) > 0) nrow(int_df) else NULL
       tryCatch(
         reset_step2_ui_for_new_dataset(default_n_inj = n_inj_default),
         error = function(e) NULL
       )
-      if (is_finite_scalar(token)) bridge_last_step1_reset_token(token)
+      if (!is.na(sig)) {
+        sig_state$reset <- sig
+      }
     }
     input_apply <- tryCatch(
       apply_step1_inputs_from_payload(payload),
       error = function(e) list(updated_any = FALSE, vinit_synced = FALSE)
     )
-    if (isTRUE(input_apply$vinit_synced) && is_finite_scalar(token)) {
-      bridge_last_step1_input_token(token)
+    if (isTRUE(input_apply$vinit_synced) && !is.na(sig)) {
+      sig_state$input <- sig
     }
-  })
+    set_step1_signature_state(sig_state)
+    invisible(TRUE)
+  }
+
+  replay_step1_sync_after_flush <- function(payload = get_latest_step1_payload(), passes = 2L) {
+    pass_n <- suppressWarnings(as.integer(passes)[1])
+    if (!is.finite(pass_n) || pass_n < 1L) return(invisible(FALSE))
+    if (is.null(payload) || !is.list(payload)) return(invisible(FALSE))
+
+    session$onFlushed(function() {
+      current_tab <- as.character(safe_input_get("main_tabs") %||% "")
+      if (identical(current_tab, "Step 2 Simulation & Fitting")) {
+        tryCatch(ensure_step1_payload_inputs_synced(payload), error = function(e) NULL)
+      }
+      if (pass_n > 1L) {
+        replay_step1_sync_after_flush(payload = payload, passes = pass_n - 1L)
+      }
+    }, once = TRUE)
+    invisible(TRUE)
+  }
+
+  step1_sync_retry <- new.env(parent = emptyenv())
+  step1_sync_retry$signature <- NA_character_
+  step1_sync_retry$remaining <- 0L
+
+  schedule_step1_sync_retry <- function(payload = get_latest_step1_payload(), attempts = 6L, delay_sec = 0.25) {
+    if (is.null(payload) || !is.list(payload)) return(invisible(FALSE))
+    if (!requireNamespace("later", quietly = TRUE)) return(invisible(FALSE))
+
+    sig <- payload_signature(payload)
+    if (is.na(sig)) sig <- paste0("na|", format(Sys.time(), "%Y%m%d%H%M%OS6"))
+
+    attempts_n <- suppressWarnings(as.integer(attempts)[1])
+    if (!is.finite(attempts_n) || attempts_n < 1L) return(invisible(FALSE))
+
+    step1_sync_retry$signature <- sig
+    step1_sync_retry$remaining <- attempts_n
+
+    run_attempt <- function(expected_sig) {
+      # Cancel stale retry chain if a newer payload token arrives.
+      if (!identical(step1_sync_retry$signature, expected_sig)) return(invisible(FALSE))
+
+      rem <- suppressWarnings(as.integer(step1_sync_retry$remaining)[1])
+      if (!is.finite(rem) || rem <= 0L) return(invisible(FALSE))
+
+      current_tab <- as.character(safe_input_get("main_tabs") %||% "")
+      if (identical(current_tab, "Step 2 Simulation & Fitting")) {
+        tryCatch(ensure_step1_payload_inputs_synced(payload), error = function(e) NULL)
+        sig_state <- get_step1_signature_state()
+        if (!is.na(sig_state$input) && identical(sig_state$input, expected_sig)) {
+          step1_sync_retry$remaining <- 0L
+          return(invisible(TRUE))
+        }
+      }
+
+      step1_sync_retry$remaining <- rem - 1L
+      if (step1_sync_retry$remaining > 0L) {
+        later::later(function() run_attempt(expected_sig), delay = delay_sec)
+      }
+      invisible(FALSE)
+    }
+
+    later::later(function() run_attempt(sig), delay = delay_sec)
+    invisible(TRUE)
+  }
+
+  # Ensure Step 1 parameters are applied after Step 2 controls are mounted.
+  observeEvent(latest_step1_payload(), {
+    payload <- latest_step1_payload()
+    ensure_step1_payload_inputs_synced(payload)
+    replay_step1_sync_after_flush(payload = payload, passes = 3L)
+    schedule_step1_sync_retry(payload = payload, attempts = 8L, delay_sec = 0.25)
+  }, ignoreNULL = TRUE)
+
+  observeEvent(input$main_tabs, {
+    if (!identical(input$main_tabs, "Step 2 Simulation & Fitting")) return()
+    payload <- get_latest_step1_payload()
+    ensure_step1_payload_inputs_synced(payload)
+    replay_step1_sync_after_flush(payload = payload, passes = 2L)
+    schedule_step1_sync_retry(payload = payload, attempts = 5L, delay_sec = 0.25)
+  }, ignoreInit = TRUE)
   
   output$status_indicator <- renderUI({
     if(values$is_fitting) {
@@ -3620,33 +3620,38 @@ server <- function(input, output, session) {
     file_path <- if (length(file_path) == 0) "" else file_path[1]
     has_real_file <- nzchar(file_path) && !startsWith(file_path, "bridge://")
 
-    src <- ""
+    source <- "bridge"
+    label <- "Step1 bridge"
     if (identical(source_mode, "step1_bridge")) {
-      # Step1 bridge may not always carry a filename.
-      src <- file_name
-      if (!nzchar(src)) src <- "Step1 bridge"
+      source <- "bridge"
+      if (nzchar(file_name)) label <- file_name
     } else if (identical(source_mode, "sim_to_exp")) {
-      src <- ""
+      source <- "sim_to_exp"
+      label <- "Simulation to experiment"
     } else if (has_real_file) {
-      src <- file_name
+      source <- "file"
+      label <- if (nzchar(file_name)) file_name else "Imported file"
     }
 
-    if (!nzchar(src)) return(NULL)
-    src
+    list(source = source, source_label = label)
   }
 
   publish_step2_plot_payload <- function(sim = NULL) {
     bundle <- build_fit_export_bundle(sim = sim)
     if (is.null(bundle)) return(invisible(FALSE))
-    src <- resolve_step2_plot_source()
+    src_info <- resolve_step2_plot_source()
+    token <- next_bridge_token()
     bridge_set("step2_plot_payload", list(
-      token = as.numeric(Sys.time()),
-      source = src,
-      sheets = bundle$sheets,
-      integration_rev = bundle$integration_rev,
-      meta_rev = bundle$meta_rev,
-      fit_params = bundle$fit_params,
-      simulation = bundle$simulation
+      schema_version = "itcsuite.step2_plot.v1",
+      created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC"),
+      token = token,
+      source = src_info$source %||% "bridge",
+      source_label = src_info$source_label %||% "",
+      sheets = bundle$sheets %||% list(),
+      integration_rev = bundle$integration_rev %||% NULL,
+      meta_rev = bundle$meta_rev %||% NULL,
+      fit_params = bundle$fit_params %||% data.frame(),
+      simulation = bundle$simulation %||% data.frame()
     ))
     invisible(TRUE)
   }

@@ -5,6 +5,7 @@ fail_fast <- function(...) {
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
 library(shiny)
+source("R/bridge_contract.R")
 
 detect_repo_root <- function() {
   candidates <- unique(c(getwd(), dirname(getwd())))
@@ -81,8 +82,8 @@ load_legacy_app <- function(app_dir, label, required_symbols = character(0)) {
 
 bridge_bus_server <- function(id) {
   moduleServer(id, function(input, output, session) {
-    step1_payload <- reactiveVal(NULL)
-    step2_plot_payload <- reactiveVal(NULL)
+    step1_payload <- make_bridge_channel(sanitize_step1_payload, "step1_payload")
+    step2_plot_payload <- make_bridge_channel(sanitize_step2_plot_payload, "step2_plot_payload")
     list(
       step1_payload = step1_payload,
       step2_plot_payload = step2_plot_payload

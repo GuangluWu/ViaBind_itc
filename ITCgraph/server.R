@@ -45,40 +45,42 @@ server <- function(input, output, session) {
     b <- session$userData$itcsuite_bridge
     if (is.null(b) || !is.list(b)) NULL else b
   }, error = function(e) NULL)
-  bridge_store_name <- ".ITCSUITE_BRIDGE_STORE"
-  bridge_session_key <- tryCatch({
-    key <- as.character(session$token)
-    if (length(key) == 0 || !nzchar(key[1])) NA_character_ else key[1]
-  }, error = function(e) NA_character_)
-  if (is.na(bridge_session_key) || !nzchar(bridge_session_key)) {
-    bridge_session_key <- paste0("session_", format(Sys.time(), "%Y%m%d%H%M%OS6"))
+  resolve_bridge_channel <- function(channel) {
+    ch <- if (!is.null(session_bridge)) session_bridge[[channel]] else NULL
+    if (is.function(ch)) return(ch)
+    NULL
   }
+
+  bridge_pending_autorange <- reactiveVal(FALSE)
+  bridge_pending_offset <- reactiveVal(NA_real_)
+  ratio_correction_enabled <- reactiveVal(TRUE)
+
   bridge_last_token <- reactiveVal(NA_real_)
   bridge_last_source <- reactiveVal("")
-  bridge_pending_autorange <- FALSE
-  bridge_pending_offset <- NA_real_
-  ratio_correction_enabled <- TRUE
   reset_settings_nonce <- reactiveVal(0L)
-
-  bridge_store_get_all <- function() {
-    x <- get0(bridge_store_name, envir = .GlobalEnv, inherits = FALSE, ifnotfound = NULL)
-    if (is.null(x) || !is.list(x)) return(list())
-    x
-  }
-
-  bridge_get <- function(channel) {
-    ch <- if (!is.null(session_bridge)) session_bridge[[channel]] else NULL
-    if (is.function(ch)) return(ch())
-    store <- bridge_store_get_all()
-    entry <- store[[bridge_session_key]]
-    if (is.null(entry) || !is.list(entry)) return(NULL)
-    entry[[channel]]
-  }
 
   safe_num_scalar <- function(x, default = NA_real_) {
     v <- suppressWarnings(as.numeric(x)[1])
     if (!is.finite(v)) return(default)
     v
+  }
+
+  rv_get <- function(rv_fun, default = NULL) {
+    tryCatch(shiny::isolate(rv_fun()), error = function(e) default)
+  }
+
+  get_ratio_correction_enabled <- function(default = TRUE) {
+    val <- suppressWarnings(as.logical(rv_get(ratio_correction_enabled, default = default))[1])
+    if (isTRUE(is.na(val))) return(default)
+    isTRUE(val)
+  }
+
+  get_bridge_pending_autorange <- function(default = FALSE) {
+    isTRUE(rv_get(bridge_pending_autorange, default = default))
+  }
+
+  get_bridge_pending_offset <- function(default = NA_real_) {
+    safe_num_scalar(rv_get(bridge_pending_offset, default = default), default = default)
   }
 
   normalize_factor <- function(v, default = 1) {
@@ -136,7 +138,7 @@ server <- function(input, output, session) {
     updateNumericInput(session, "bot_point_fill_alpha", value = PLOT_DEFAULTS$bot_point_fill_alpha)
     updateSelectInput(session, "bot_point_shape", selected = as.character(PLOT_DEFAULTS$bot_point_shape))
     updateSelectInput(session, "bot_layer_order", selected = PLOT_DEFAULTS$bot_layer_order)
-    n_inj <- get_valid_injection_count(apply_ratio = ratio_correction_enabled)
+    n_inj <- get_valid_injection_count(apply_ratio = get_ratio_correction_enabled())
     no_dim_range <- resolve_no_dim_range(NULL, n_inj)
     updateSliderInput(session, "bot_no_dim_range", min = 1, max = n_inj, value = no_dim_range)
     update_color_input("bot_line_color", PLOT_DEFAULTS$bot_line_color)
@@ -146,7 +148,7 @@ server <- function(input, output, session) {
     updateNumericInput(session, "graph_heat_offset", value = PLOT_DEFAULTS$heat_offset)
     updateSelectInput(session, "energy_unit", selected = PLOT_DEFAULTS$energy_unit)
     updateCheckboxInput(session, "graph_apply_ratio_correction", value = TRUE)
-    ratio_correction_enabled <<- TRUE
+    ratio_correction_enabled(TRUE)
     sync_ratio_factor_display(1, 1)
 
     updateNumericInput(session, "base_size", value = PLOT_DEFAULTS$base_size)
@@ -159,14 +161,14 @@ server <- function(input, output, session) {
     invisible(TRUE)
   }
 
-  get_ratio_multiplier <- function(apply_ratio = ratio_correction_enabled) {
+  get_ratio_multiplier <- function(apply_ratio = get_ratio_correction_enabled()) {
     if (!isTRUE(apply_ratio)) return(1)
     fh <- normalize_factor(imported_data$ratio_fh, 1)
     fg <- normalize_factor(imported_data$ratio_fg, 1)
     fg / fh
   }
 
-  get_bottom_plot_data <- function(apply_ratio = ratio_correction_enabled) {
+  get_bottom_plot_data <- function(apply_ratio = get_ratio_correction_enabled()) {
     int_data <- imported_data$integration
     sim_data <- imported_data$simulation
     mult <- get_ratio_multiplier(apply_ratio = apply_ratio)
@@ -183,7 +185,7 @@ server <- function(input, output, session) {
     list(integration = int_data, simulation = sim_data)
   }
 
-  get_valid_injection_count <- function(apply_ratio = ratio_correction_enabled) {
+  get_valid_injection_count <- function(apply_ratio = get_ratio_correction_enabled()) {
     bottom_data <- get_bottom_plot_data(apply_ratio = apply_ratio)
     int_data <- bottom_data$integration
     if (is.null(int_data) || !is.data.frame(int_data)) return(1L)
@@ -222,7 +224,7 @@ server <- function(input, output, session) {
     c(start, end)
   }
 
-  reset_no_dim_range_to_default <- function(apply_ratio = ratio_correction_enabled) {
+  reset_no_dim_range_to_default <- function(apply_ratio = get_ratio_correction_enabled()) {
     n_inj <- get_valid_injection_count(apply_ratio = apply_ratio)
     no_dim_range <- resolve_no_dim_range(NULL, n_inj)
     updateSliderInput(session, "bot_no_dim_range", min = 1, max = n_inj, value = no_dim_range)
@@ -230,92 +232,30 @@ server <- function(input, output, session) {
   }
 
   resolve_step2_payload_source <- function(payload, token = NA_real_) {
-    src <- as.character(payload$source %||% "")
-    src <- if (length(src) == 0) "" else src[1]
-    if (!nzchar(src)) {
-      if (is.finite(token)) {
-        src <- paste0("Step2 bridge @ ", format(token, scientific = FALSE, trim = TRUE))
-      } else {
-        src <- "Step2 bridge"
-      }
+    source_mode <- as.character(payload$source %||% "bridge")
+    source_mode <- if (length(source_mode) == 0) "bridge" else trimws(source_mode[1])
+    if (!source_mode %in% c("bridge", "file", "sim_to_exp")) source_mode <- "bridge"
+
+    source_label <- as.character(payload$source_label %||% "")
+    source_label <- if (length(source_label) == 0) "" else trimws(source_label[1])
+
+    if (identical(source_mode, "file") && nzchar(source_label)) {
+      return(source_label)
     }
-    src
+    if (identical(source_mode, "sim_to_exp")) {
+      return("Simulation to experiment")
+    }
+    if (nzchar(source_label)) {
+      return(source_label)
+    }
+    if (is.finite(token)) return(paste0("Step2 bridge @ ", format(token, scientific = FALSE, trim = TRUE)))
+    "Step2 bridge"
   }
 
-  consume_step2_plot_payload <- function(payload) {
-    if (is.null(payload) || !is.list(payload)) return(FALSE)
-    token <- suppressWarnings(as.numeric(payload$token)[1])
-    payload_source <- resolve_step2_payload_source(payload, token)
-    if (is.finite(token) &&
-        !is.na(bridge_last_token()) &&
-        identical(token, bridge_last_token()) &&
-        identical(payload_source, bridge_last_source())) {
-      return(FALSE)
-    }
-
-    reset_imported_data()
-    reset_plot_controls_to_defaults()
-
-    sheets <- payload$sheets
-    power_original_df <- NULL
-    power_df <- NULL
-    integration_df <- NULL
-    simulation_df <- NULL
-    fit_params_df <- NULL
-    meta_df <- NULL
-
-    if (!is.null(sheets) && is.list(sheets)) {
-      if ("power_original" %in% names(sheets) && is.data.frame(sheets$power_original)) {
-        power_original_df <- as.data.frame(sheets$power_original)
-      }
-      if ("power_corrected" %in% names(sheets) && is.data.frame(sheets$power_corrected)) {
-        power_df <- as.data.frame(sheets$power_corrected)
-      }
-      if ("integration_rev" %in% names(sheets) && is.data.frame(sheets$integration_rev)) {
-        integration_df <- as.data.frame(sheets$integration_rev)
-      } else if ("integration" %in% names(sheets) && is.data.frame(sheets$integration)) {
-        integration_df <- as.data.frame(sheets$integration)
-      }
-      if ("simulation" %in% names(sheets) && is.data.frame(sheets$simulation)) {
-        simulation_df <- as.data.frame(sheets$simulation)
-      }
-      if ("fit_params" %in% names(sheets) && is.data.frame(sheets$fit_params)) {
-        fit_params_df <- as.data.frame(sheets$fit_params)
-      }
-      if ("meta_rev" %in% names(sheets) && is.data.frame(sheets$meta_rev)) {
-        meta_df <- as.data.frame(sheets$meta_rev)
-      } else if ("meta" %in% names(sheets) && is.data.frame(sheets$meta)) {
-        meta_df <- as.data.frame(sheets$meta)
-      }
-    }
-
-    if (is.null(integration_df) && !is.null(payload$integration_rev) && is.data.frame(payload$integration_rev)) {
-      integration_df <- as.data.frame(payload$integration_rev)
-    }
-    if (is.null(simulation_df) && !is.null(payload$simulation) && is.data.frame(payload$simulation)) {
-      simulation_df <- as.data.frame(payload$simulation)
-    }
-    if (is.null(fit_params_df) && !is.null(payload$fit_params) && is.data.frame(payload$fit_params)) {
-      fit_params_df <- as.data.frame(payload$fit_params)
-    }
-    if (is.null(meta_df) && !is.null(payload$meta_rev) && is.data.frame(payload$meta_rev)) {
-      meta_df <- as.data.frame(payload$meta_rev)
-    }
-
-    # Replace the whole Step 3 data snapshot to avoid stale data bleed-through.
-    imported_data$power_original <- power_original_df
-    imported_data$power <- power_df
-    imported_data$integration <- integration_df
-    imported_data$simulation <- simulation_df
-    imported_data$fit_params <- fit_params_df
-    imported_data$meta <- meta_df
-    imported_data$sheets <- if (!is.null(sheets) && is.list(sheets)) sheets else NULL
-
-    imported_data$source <- "step2_bridge"
-    imported_data$filename <- payload_source
-
+  apply_step2_payload_plot_settings <- function() {
     offset_from_fit <- PLOT_DEFAULTS$heat_offset
     updateNumericInput(session, "graph_heat_offset", value = offset_from_fit)
+
     fp <- fit_param_map(imported_data$fit_params)
     if (!is.null(fp)) {
       off <- get_fit_param_num(fp, "Offset_cal", default = NA_real_)
@@ -329,28 +269,119 @@ server <- function(input, output, session) {
       imported_data$ratio_fh <- 1
       imported_data$ratio_fg <- 1
     }
-    sync_ratio_factor_display(imported_data$ratio_fh, imported_data$ratio_fg)
-    reset_no_dim_range_to_default(apply_ratio = ratio_correction_enabled)
 
-    # Bridge import should behave like file import: run auto-range immediately,
-    # then replay once after UI flush to avoid first-hop race conditions.
+    sync_ratio_factor_display(imported_data$ratio_fh, imported_data$ratio_fg)
+    reset_no_dim_range_to_default(apply_ratio = get_ratio_correction_enabled())
+
+    # Run auto-range immediately and queue one replay for first-time tab mount.
     schedule_bridge_autorange(offset_override = offset_from_fit)
+    invisible(TRUE)
+  }
+
+  consume_step2_plot_payload <- function(payload, replay_only = FALSE) {
+    if (is.null(payload) || !is.list(payload)) return(FALSE)
+    token <- suppressWarnings(as.numeric(payload$token)[1])
+    payload_source <- resolve_step2_payload_source(payload, token)
+    if (is.finite(token) &&
+        !is.na(bridge_last_token()) &&
+        identical(token, bridge_last_token()) &&
+        identical(payload_source, bridge_last_source())) {
+      if (isTRUE(replay_only)) {
+        apply_step2_payload_plot_settings()
+        return(TRUE)
+      }
+      return(FALSE)
+    }
+
+    if (!isTRUE(replay_only)) {
+      reset_imported_data()
+      reset_plot_controls_to_defaults()
+    }
+
+    if (!isTRUE(replay_only)) {
+      sheets <- payload$sheets
+      power_original_df <- NULL
+      power_df <- NULL
+      integration_df <- NULL
+      simulation_df <- NULL
+      fit_params_df <- NULL
+      meta_df <- NULL
+
+      if (!is.null(sheets) && is.list(sheets)) {
+        if ("power_original" %in% names(sheets) && is.data.frame(sheets$power_original)) {
+          power_original_df <- as.data.frame(sheets$power_original)
+        }
+        if ("power_corrected" %in% names(sheets) && is.data.frame(sheets$power_corrected)) {
+          power_df <- as.data.frame(sheets$power_corrected)
+        }
+        if ("integration_rev" %in% names(sheets) && is.data.frame(sheets$integration_rev)) {
+          integration_df <- as.data.frame(sheets$integration_rev)
+        } else if ("integration" %in% names(sheets) && is.data.frame(sheets$integration)) {
+          integration_df <- as.data.frame(sheets$integration)
+        }
+        if ("simulation" %in% names(sheets) && is.data.frame(sheets$simulation)) {
+          simulation_df <- as.data.frame(sheets$simulation)
+        }
+        if ("fit_params" %in% names(sheets) && is.data.frame(sheets$fit_params)) {
+          fit_params_df <- as.data.frame(sheets$fit_params)
+        }
+        if ("meta_rev" %in% names(sheets) && is.data.frame(sheets$meta_rev)) {
+          meta_df <- as.data.frame(sheets$meta_rev)
+        } else if ("meta" %in% names(sheets) && is.data.frame(sheets$meta)) {
+          meta_df <- as.data.frame(sheets$meta)
+        }
+      }
+
+      if (is.null(integration_df) && !is.null(payload$integration_rev) && is.data.frame(payload$integration_rev)) {
+        integration_df <- as.data.frame(payload$integration_rev)
+      }
+      if (is.null(simulation_df) && !is.null(payload$simulation) && is.data.frame(payload$simulation)) {
+        simulation_df <- as.data.frame(payload$simulation)
+      }
+      if (is.null(fit_params_df) && !is.null(payload$fit_params) && is.data.frame(payload$fit_params)) {
+        fit_params_df <- as.data.frame(payload$fit_params)
+      }
+      if (is.null(meta_df) && !is.null(payload$meta_rev) && is.data.frame(payload$meta_rev)) {
+        meta_df <- as.data.frame(payload$meta_rev)
+      }
+
+      # Replace the whole Step 3 data snapshot to avoid stale data bleed-through.
+      imported_data$power_original <- power_original_df
+      imported_data$power <- power_df
+      imported_data$integration <- integration_df
+      imported_data$simulation <- simulation_df
+      imported_data$fit_params <- fit_params_df
+      imported_data$meta <- meta_df
+      imported_data$sheets <- if (!is.null(sheets) && is.list(sheets)) sheets else NULL
+
+      imported_data$source <- "step2_bridge"
+      imported_data$filename <- payload_source
+    }
+
+    apply_step2_payload_plot_settings()
 
     if (is.finite(token)) bridge_last_token(token)
     bridge_last_source(payload_source)
     TRUE
   }
 
-  if (!is.null(session_bridge) && is.function(session_bridge$step2_plot_payload)) {
-    observeEvent(session_bridge$step2_plot_payload(), {
-      consume_step2_plot_payload(session_bridge$step2_plot_payload())
+  latest_step2_plot_payload <- reactiveVal(NULL)
+  bridge_step2_channel <- resolve_bridge_channel("step2_plot_payload")
+  if (is.function(bridge_step2_channel)) {
+    observeEvent(bridge_step2_channel(), {
+      payload <- bridge_step2_channel()
+      if (is.null(payload) || !is.list(payload)) return(invisible(FALSE))
+      latest_step2_plot_payload(payload)
+      consume_step2_plot_payload(payload)
     }, ignoreNULL = TRUE)
-  } else {
-    observe({
-      invalidateLater(300, session)
-      consume_step2_plot_payload(bridge_get("step2_plot_payload"))
-    })
   }
+
+  observeEvent(input$main_tabs, {
+    if (!identical(input$main_tabs, "Step 3 Plot & Export")) return(invisible(FALSE))
+    payload <- latest_step2_plot_payload()
+    if (is.null(payload) || !is.list(payload)) return(invisible(FALSE))
+    consume_step2_plot_payload(payload, replay_only = TRUE)
+  }, ignoreInit = TRUE)
   
   expand_limits <- function(v, mult = 0.05) {
     r <- range(v, na.rm = TRUE)
@@ -373,7 +404,7 @@ server <- function(input, output, session) {
     off
   }
 
-  apply_auto_ranges <- function(offset_override = NA_real_, apply_ratio = ratio_correction_enabled) {
+  apply_auto_ranges <- function(offset_override = NA_real_, apply_ratio = get_ratio_correction_enabled()) {
     if (!is.null(imported_data$power) && nrow(imported_data$power) > 0 &&
         "Time_s" %in% colnames(imported_data$power)) {
       time_unit <- input$top_time_unit %||% "min"
@@ -435,26 +466,35 @@ server <- function(input, output, session) {
 
   schedule_bridge_autorange <- function(offset_override = NA_real_) {
     off <- suppressWarnings(as.numeric(offset_override)[1])
-    bridge_pending_offset <<- off
-    bridge_pending_autorange <<- TRUE
+    bridge_pending_offset(off)
+    bridge_pending_autorange(TRUE)
 
     # 1) Immediate apply for already-mounted controls.
-    tryCatch(apply_auto_ranges(offset_override = off, apply_ratio = ratio_correction_enabled), error = function(e) NULL)
+    tryCatch(
+      apply_auto_ranges(offset_override = off, apply_ratio = get_ratio_correction_enabled()),
+      error = function(e) NULL
+    )
 
     # 2) Deferred apply after flush, for first navigation where controls may
     # not be fully bound when the bridge payload arrives.
     session$onFlushed(function() {
-      off2 <- bridge_pending_offset
-      tryCatch(apply_auto_ranges(offset_override = off2, apply_ratio = ratio_correction_enabled), error = function(e) NULL)
+      off2 <- get_bridge_pending_offset()
+      tryCatch(
+        apply_auto_ranges(offset_override = off2, apply_ratio = get_ratio_correction_enabled()),
+        error = function(e) NULL
+      )
     }, once = TRUE)
   }
 
   observeEvent(input$main_tabs, {
-    if (!isTRUE(bridge_pending_autorange)) return(invisible())
+    if (!isTRUE(get_bridge_pending_autorange())) return(invisible())
     if (!identical(input$main_tabs, "Step 3 Plot & Export")) return(invisible())
-    off <- bridge_pending_offset
-    tryCatch(apply_auto_ranges(offset_override = off, apply_ratio = ratio_correction_enabled), error = function(e) NULL)
-    bridge_pending_autorange <<- FALSE
+    off <- get_bridge_pending_offset()
+    tryCatch(
+      apply_auto_ranges(offset_override = off, apply_ratio = get_ratio_correction_enabled()),
+      error = function(e) NULL
+    )
+    bridge_pending_autorange(FALSE)
   }, ignoreInit = TRUE)
   
   # ============================================================
@@ -934,11 +974,11 @@ server <- function(input, output, session) {
   }, ignoreInit = TRUE)
 
   observeEvent(input$graph_apply_ratio_correction, {
-    ratio_correction_enabled <<- isTRUE(input$graph_apply_ratio_correction)
+    ratio_correction_enabled(isTRUE(input$graph_apply_ratio_correction))
     tryCatch(
       apply_auto_ranges(
         offset_override = get_effective_offset(),
-        apply_ratio = ratio_correction_enabled
+        apply_ratio = get_ratio_correction_enabled()
       ),
       error = function(e) NULL
     )
