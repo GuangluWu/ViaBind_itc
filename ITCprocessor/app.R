@@ -592,11 +592,32 @@ server <- function(input, output, session) {
   # 辅助函数：解析 plotly relayout 事件为 zoom 状态更新
   parse_relayout_to_zoom <- function(ed) {
     if (is.null(ed)) return(list(reset = FALSE, x = NULL, y = NULL))
-    if (!is.null(ed$`xaxis.autorange`) && ed$`xaxis.autorange` == TRUE) {
+    ed_names <- names(ed)
+    has_autorange <- any(vapply(ed_names, function(k) {
+      grepl("autorange$", k) && isTRUE(ed[[k]])
+    }, logical(1)))
+    if (isTRUE(ed$autosize) || has_autorange) {
       return(list(reset = TRUE, x = NULL, y = NULL))
     }
-    x <- if (!is.null(ed$`xaxis.range[0]`)) c(ed$`xaxis.range[0]`, ed$`xaxis.range[1]`) else NULL
-    y <- if (!is.null(ed$`yaxis.range[0]`)) c(ed$`yaxis.range[0]`, ed$`yaxis.range[1]`) else NULL
+    extract_axis_range <- function(axis_prefix) {
+      k0 <- paste0(axis_prefix, ".range[0]")
+      k1 <- paste0(axis_prefix, ".range[1]")
+      kv <- paste0(axis_prefix, ".range")
+      if (!is.null(ed[[k0]]) && !is.null(ed[[k1]])) {
+        out <- c(suppressWarnings(as.numeric(ed[[k0]])[1]), suppressWarnings(as.numeric(ed[[k1]])[1]))
+        if (all(is.finite(out))) return(out)
+      }
+      if (!is.null(ed[[kv]])) {
+        vv <- suppressWarnings(as.numeric(unlist(ed[[kv]], use.names = FALSE)))
+        if (length(vv) >= 2) {
+          out <- vv[1:2]
+          if (all(is.finite(out))) return(out)
+        }
+      }
+      NULL
+    }
+    x <- extract_axis_range("xaxis")
+    y <- extract_axis_range("yaxis")
     list(reset = FALSE, x = x, y = y)
   }
 
@@ -650,7 +671,6 @@ server <- function(input, output, session) {
     injections <- rawData()$injections
     raw_inj_times <- rawData()$injection_times
     time_min <- df$Time / 60
-    x_full <- range(time_min, na.rm = TRUE)
     
     inj_times <- if (length(injections) > 0) {
       if (!is.null(raw_inj_times)) raw_inj_times else df$Time[injections]
@@ -698,12 +718,13 @@ server <- function(input, output, session) {
         showline = TRUE,
         mirror = FALSE,
         automargin = FALSE,
-        range = x_full
+        zeroline = FALSE
       ),
       yaxis = list(
         title = tr("power_ucal", lang()),
         showline = TRUE,
-        automargin = FALSE
+        automargin = FALSE,
+        zeroline = FALSE
       ),
       margin = list(l = 72, r = 14, t = 38, b = 8),
       legend = list(
@@ -722,9 +743,7 @@ server <- function(input, output, session) {
         top_frac = 0.10,
         top_abs = 0.015
       )
-      if (!is.null(user_zoom$x)) layout_args$xaxis$range <- user_zoom$x
     } else {
-      if (!is.null(user_zoom$x)) layout_args$xaxis$range <- user_zoom$x
       if (!is.null(user_zoom$y)) {
         layout_args$yaxis$range <- user_zoom$y
       } else {
@@ -743,7 +762,6 @@ server <- function(input, output, session) {
     corrected <- processedData()$corrected_power
     int_res <- processedData()$integration
     time_min <- df$Time / 60
-    x_full <- range(time_min, na.rm = TRUE)
     
     p <- plot_ly(source = "plot_corrected") %>%
       add_lines(x = ~time_min, y = ~corrected, 
@@ -756,9 +774,9 @@ server <- function(input, output, session) {
           ticks = "",
           showline = TRUE,
           automargin = FALSE,
-          range = x_full
+          zeroline = FALSE
         ),
-        yaxis = list(title = paste0(tr("delta_power", lang()), " (ucal/s)"), showline = TRUE, automargin = FALSE),
+        yaxis = list(title = paste0(tr("delta_power", lang()), " (ucal/s)"), showline = TRUE, automargin = FALSE, zeroline = FALSE),
         margin = list(l = 72, r = 14, t = 28, b = 8),
         legend = list(
           orientation = "h",
@@ -840,6 +858,7 @@ server <- function(input, output, session) {
              title = paste0(tr("delta_power", lang()), " (ucal/s)"),
              showline = TRUE,
              automargin = FALSE,
+             zeroline = FALSE,
              range = auto_zoom_range(
                baseline_vals,
                MIN_SPAN_CORRECTED,
@@ -850,27 +869,13 @@ server <- function(input, output, session) {
            )
        }
        
-       if (!is.null(user_zoom_corrected$x)) {
-         layout_args$xaxis <- list(
-           title = "", showticklabels = FALSE, ticks = "",
-           showline = TRUE, automargin = FALSE,
-           range = user_zoom_corrected$x
-         )
-       }
-       
     } else {
-       if (!is.null(user_zoom_corrected$x)) {
-         layout_args$xaxis <- list(
-           title = "", showticklabels = FALSE, ticks = "",
-           showline = TRUE, automargin = FALSE,
-           range = user_zoom_corrected$x
-         )
-       }
        if (!is.null(user_zoom_corrected$y)) {
          layout_args$yaxis <- list(
            title = paste0(tr("delta_power", lang()), " (ucal/s)"),
            showline = TRUE,
            automargin = FALSE,
+           zeroline = FALSE,
            range = user_zoom_corrected$y
          )
        } else {
@@ -878,6 +883,7 @@ server <- function(input, output, session) {
            title = paste0(tr("delta_power", lang()), " (ucal/s)"),
            showline = TRUE,
            automargin = FALSE,
+           zeroline = FALSE,
            range = padded_range(corrected, MIN_SPAN_CORRECTED, bottom_pad = 0.15, top_pad = 0.45)
          )
        }
@@ -914,8 +920,8 @@ server <- function(input, output, session) {
     if (nrow(int_res) == 0) {
       return(plot_ly() %>% layout(
         title = list(text = tr("integration", lang()), font = list(size = 16), x = 0, xanchor = "left"),
-        xaxis = list(showticklabels = FALSE, title = ""),
-        yaxis = list(title = tr("heat_ucal", lang()))
+        xaxis = list(showticklabels = FALSE, title = "", zeroline = FALSE),
+        yaxis = list(title = tr("heat_ucal", lang()), zeroline = FALSE)
       ))
     }
     
@@ -923,8 +929,15 @@ server <- function(input, output, session) {
             marker = list(size = 10, color = 'black', symbol = 'circle')) %>%
       layout(
         title = list(text = tr("integration", lang()), font = list(size = 16), x = 0, xanchor = "left", y = 0.98, yanchor = "top"),
-        xaxis = list(showticklabels = FALSE, ticks = "", title = "", showline = TRUE, automargin = FALSE),
-        yaxis = list(title = tr("heat_ucal", lang()), showline = TRUE, automargin = FALSE),
+        xaxis = list(
+          showticklabels = FALSE,
+          ticks = "",
+          title = "",
+          showline = TRUE,
+          automargin = FALSE,
+          zeroline = FALSE
+        ),
+        yaxis = list(title = tr("heat_ucal", lang()), showline = TRUE, automargin = FALSE, zeroline = FALSE),
         margin = list(l = 72, r = 14, t = 28, b = 8),
         showlegend = FALSE
       )
