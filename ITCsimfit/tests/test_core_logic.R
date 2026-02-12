@@ -25,7 +25,9 @@ source("R/utils.R", local = FALSE)
 source("R/core_logic.R", local = FALSE)
 
 # 加载依赖包
-if(!require(rootSolve)) install.packages("rootSolve")
+if (!requireNamespace("rootSolve", quietly = TRUE)) {
+  stop("Package `rootSolve` is required to run tests/test_core_logic.R")
+}
 library(rootSolve)
 
 # 测试计数器

@@ -60,9 +60,7 @@ server <- function(input, output, session) {
   reset_settings_nonce <- reactiveVal(0L)
 
   safe_num_scalar <- function(x, default = NA_real_) {
-    v <- suppressWarnings(as.numeric(x)[1])
-    if (!is.finite(v)) return(default)
-    v
+    bridge_plot_safe_num_scalar(x, default = default)
   }
 
   rv_get <- function(rv_fun, default = NULL) {
@@ -84,24 +82,15 @@ server <- function(input, output, session) {
   }
 
   normalize_factor <- function(v, default = 1) {
-    vv <- safe_num_scalar(v, default = default)
-    if (!is.finite(vv) || vv <= 0) return(default)
-    vv
+    bridge_plot_normalize_factor(v, default = default)
   }
 
   fit_param_map <- function(df) {
-    if (is.null(df) || !is.data.frame(df)) return(NULL)
-    if (!all(c("parameter", "value") %in% names(df))) return(NULL)
-    setNames(as.character(df$value), trimws(as.character(df$parameter)))
+    bridge_plot_fit_param_map(df)
   }
 
   get_fit_param_num <- function(fp_map, key, default = NA_real_) {
-    if (is.null(fp_map) || length(fp_map) == 0) return(default)
-    key_lc <- tolower(as.character(key)[1])
-    nms <- names(fp_map)
-    idx <- match(key_lc, tolower(nms))
-    if (is.na(idx)) return(default)
-    safe_num_scalar(fp_map[[idx]], default = default)
+    bridge_plot_get_fit_param_num(fp_map, key, default = default)
   }
 
   sync_ratio_factor_display <- function(fh, fg) {
@@ -162,10 +151,12 @@ server <- function(input, output, session) {
   }
 
   get_ratio_multiplier <- function(apply_ratio = get_ratio_correction_enabled()) {
-    if (!isTRUE(apply_ratio)) return(1)
-    fh <- normalize_factor(imported_data$ratio_fh, 1)
-    fg <- normalize_factor(imported_data$ratio_fg, 1)
-    fg / fh
+    bridge_plot_ratio_multiplier(
+      ratio_fh = imported_data$ratio_fh,
+      ratio_fg = imported_data$ratio_fg,
+      apply_ratio = apply_ratio,
+      default_factor = 1
+    )
   }
 
   get_bottom_plot_data <- function(apply_ratio = get_ratio_correction_enabled()) {
@@ -232,43 +223,18 @@ server <- function(input, output, session) {
   }
 
   resolve_step2_payload_source <- function(payload, token = NA_real_) {
-    source_mode <- as.character(payload$source %||% "bridge")
-    source_mode <- if (length(source_mode) == 0) "bridge" else trimws(source_mode[1])
-    if (!source_mode %in% c("bridge", "file", "sim_to_exp")) source_mode <- "bridge"
-
-    source_label <- as.character(payload$source_label %||% "")
-    source_label <- if (length(source_label) == 0) "" else trimws(source_label[1])
-
-    if (identical(source_mode, "file") && nzchar(source_label)) {
-      return(source_label)
-    }
-    if (identical(source_mode, "sim_to_exp")) {
-      return("Simulation to experiment")
-    }
-    if (nzchar(source_label)) {
-      return(source_label)
-    }
-    if (is.finite(token)) return(paste0("Step2 bridge @ ", format(token, scientific = FALSE, trim = TRUE)))
-    "Step2 bridge"
+    bridge_plot_resolve_step2_payload_source(payload, token = token)
   }
 
   apply_step2_payload_plot_settings <- function() {
-    offset_from_fit <- PLOT_DEFAULTS$heat_offset
+    sync_cfg <- bridge_plot_sync_from_fit_params(
+      fit_params_df = imported_data$fit_params,
+      default_heat_offset = PLOT_DEFAULTS$heat_offset
+    )
+    offset_from_fit <- sync_cfg$heat_offset
     updateNumericInput(session, "graph_heat_offset", value = offset_from_fit)
-
-    fp <- fit_param_map(imported_data$fit_params)
-    if (!is.null(fp)) {
-      off <- get_fit_param_num(fp, "Offset_cal", default = NA_real_)
-      if (is.finite(off)) {
-        offset_from_fit <- off
-        updateNumericInput(session, "graph_heat_offset", value = off)
-      }
-      imported_data$ratio_fh <- normalize_factor(get_fit_param_num(fp, "fH", default = 1), 1)
-      imported_data$ratio_fg <- normalize_factor(get_fit_param_num(fp, "fG", default = 1), 1)
-    } else {
-      imported_data$ratio_fh <- 1
-      imported_data$ratio_fg <- 1
-    }
+    imported_data$ratio_fh <- sync_cfg$ratio_fh
+    imported_data$ratio_fg <- sync_cfg$ratio_fg
 
     sync_ratio_factor_display(imported_data$ratio_fh, imported_data$ratio_fg)
     reset_no_dim_range_to_default(apply_ratio = get_ratio_correction_enabled())
@@ -299,60 +265,16 @@ server <- function(input, output, session) {
     }
 
     if (!isTRUE(replay_only)) {
-      sheets <- payload$sheets
-      power_original_df <- NULL
-      power_df <- NULL
-      integration_df <- NULL
-      simulation_df <- NULL
-      fit_params_df <- NULL
-      meta_df <- NULL
-
-      if (!is.null(sheets) && is.list(sheets)) {
-        if ("power_original" %in% names(sheets) && is.data.frame(sheets$power_original)) {
-          power_original_df <- as.data.frame(sheets$power_original)
-        }
-        if ("power_corrected" %in% names(sheets) && is.data.frame(sheets$power_corrected)) {
-          power_df <- as.data.frame(sheets$power_corrected)
-        }
-        if ("integration_rev" %in% names(sheets) && is.data.frame(sheets$integration_rev)) {
-          integration_df <- as.data.frame(sheets$integration_rev)
-        } else if ("integration" %in% names(sheets) && is.data.frame(sheets$integration)) {
-          integration_df <- as.data.frame(sheets$integration)
-        }
-        if ("simulation" %in% names(sheets) && is.data.frame(sheets$simulation)) {
-          simulation_df <- as.data.frame(sheets$simulation)
-        }
-        if ("fit_params" %in% names(sheets) && is.data.frame(sheets$fit_params)) {
-          fit_params_df <- as.data.frame(sheets$fit_params)
-        }
-        if ("meta_rev" %in% names(sheets) && is.data.frame(sheets$meta_rev)) {
-          meta_df <- as.data.frame(sheets$meta_rev)
-        } else if ("meta" %in% names(sheets) && is.data.frame(sheets$meta)) {
-          meta_df <- as.data.frame(sheets$meta)
-        }
-      }
-
-      if (is.null(integration_df) && !is.null(payload$integration_rev) && is.data.frame(payload$integration_rev)) {
-        integration_df <- as.data.frame(payload$integration_rev)
-      }
-      if (is.null(simulation_df) && !is.null(payload$simulation) && is.data.frame(payload$simulation)) {
-        simulation_df <- as.data.frame(payload$simulation)
-      }
-      if (is.null(fit_params_df) && !is.null(payload$fit_params) && is.data.frame(payload$fit_params)) {
-        fit_params_df <- as.data.frame(payload$fit_params)
-      }
-      if (is.null(meta_df) && !is.null(payload$meta_rev) && is.data.frame(payload$meta_rev)) {
-        meta_df <- as.data.frame(payload$meta_rev)
-      }
+      parsed <- bridge_plot_extract_step2_payload_frames(payload)
 
       # Replace the whole Step 3 data snapshot to avoid stale data bleed-through.
-      imported_data$power_original <- power_original_df
-      imported_data$power <- power_df
-      imported_data$integration <- integration_df
-      imported_data$simulation <- simulation_df
-      imported_data$fit_params <- fit_params_df
-      imported_data$meta <- meta_df
-      imported_data$sheets <- if (!is.null(sheets) && is.list(sheets)) sheets else NULL
+      imported_data$power_original <- parsed$power_original
+      imported_data$power <- parsed$power
+      imported_data$integration <- parsed$integration
+      imported_data$simulation <- parsed$simulation
+      imported_data$fit_params <- parsed$fit_params
+      imported_data$meta <- parsed$meta
+      imported_data$sheets <- parsed$sheets
 
       imported_data$source <- "step2_bridge"
       imported_data$filename <- payload_source

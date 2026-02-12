@@ -1,5 +1,7 @@
+strict_smoke <- identical(tolower(Sys.getenv("ITCSUITE_STRICT_SMOKE", unset = "false")), "true")
+
 if (!requireNamespace("testthat", quietly = TRUE)) {
-  message("Skipping smoke tests: testthat not installed.")
+  stop("Smoke tests require package `testthat`.")
 } else {
   if (requireNamespace("shinytest2", quietly = TRUE)) {
     testthat::test_that("app launches", {
@@ -12,6 +14,9 @@ if (!requireNamespace("testthat", quietly = TRUE)) {
       app$stop()
     })
   } else {
+    if (isTRUE(strict_smoke)) {
+      stop("Strict smoke mode requires package `shinytest2`.")
+    }
     message("Skipping shinytest2 app launch smoke: shinytest2 not installed.")
   }
 

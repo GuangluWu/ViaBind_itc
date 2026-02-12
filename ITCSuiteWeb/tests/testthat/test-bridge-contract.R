@@ -63,6 +63,31 @@ testthat::test_that("sanitize_step1_payload enforces strict schema and required 
   testthat::expect_null(sanitize_step1_payload(payload))
 })
 
+testthat::test_that("sanitize_step1_payload rejects missing created_at and bad bundle schema", {
+  missing_created_at <- list(
+    schema_version = "itcsuite.step1.v1",
+    token = 1,
+    source = "s",
+    bundle = list(
+      schema_version = "itcsuite.bundle.v1",
+      integration = data.frame(Injection = 1, Ratio_App = 0.1, Heat_ucal = 10)
+    )
+  )
+  testthat::expect_null(sanitize_step1_payload(missing_created_at))
+
+  bad_bundle_schema <- list(
+    schema_version = "itcsuite.step1.v1",
+    created_at = "2026-02-12T12:00:00.000Z",
+    token = 1,
+    source = "s",
+    bundle = list(
+      schema_version = "itcsuite.bundle.v0",
+      integration = data.frame(Injection = 1, Ratio_App = 0.1, Heat_ucal = 10)
+    )
+  )
+  testthat::expect_null(sanitize_step1_payload(bad_bundle_schema))
+})
+
 testthat::test_that("sanitize_step2_plot_payload rejects empty body", {
   empty_payload <- list(source = "none")
   testthat::expect_null(sanitize_step2_plot_payload(empty_payload))
@@ -92,6 +117,16 @@ testthat::test_that("sanitize_step2_plot_payload rejects invalid source", {
     created_at = "2026-02-12T12:00:00.000Z",
     token = 1,
     source = "Step2 bridge",
+    sheets = list(integration = data.frame(Injection = 1))
+  )
+  testthat::expect_null(sanitize_step2_plot_payload(payload))
+})
+
+testthat::test_that("sanitize_step2_plot_payload rejects missing created_at", {
+  payload <- list(
+    schema_version = "itcsuite.step2_plot.v1",
+    token = 1,
+    source = "bridge",
     sheets = list(integration = data.frame(Injection = 1))
   )
   testthat::expect_null(sanitize_step2_plot_payload(payload))

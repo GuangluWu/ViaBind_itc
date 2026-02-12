@@ -1,0 +1,75 @@
+name: ITCSuite Tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "4.3"
+
+      - name: Install unit dependencies
+        run: |
+          Rscript -e 'install.packages(c("testthat","rootSolve","shiny","tidyverse","DT","DEoptim","readxl","writexl","plotly","patchwork","jsonlite","later","digest","MASS","gridExtra","colourpicker"), repos="https://cloud.r-project.org")'
+
+      - name: Run unit suite
+        run: Rscript tests/run_unit.R --strict
+
+  smoke:
+    name: smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "4.3"
+
+      - name: Install smoke dependencies
+        run: |
+          Rscript -e 'install.packages(c("testthat","shinytest2","shiny","rootSolve","tidyverse","DT","DEoptim","readxl","writexl","plotly","patchwork","jsonlite","later","digest","MASS","gridExtra","colourpicker"), repos="https://cloud.r-project.org")'
+
+      - name: Run smoke suite
+        env:
+          NOT_CRAN: "true"
+        run: Rscript tests/run_smoke.R --strict
+
+  golden:
+    name: golden
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "4.3"
+
+      - name: Run golden suite
+        run: Rscript tests/run_golden.R --strict
+
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    needs:
+      - unit
+      - smoke
+      - golden
+    if: ${{ always() }}
+    steps:
+      - name: Enforce required suites
+        run: |
+          if [ "${{ needs.unit.result }}" != "success" ] || [ "${{ needs.smoke.result }}" != "success" ] || [ "${{ needs.golden.result }}" != "success" ]; then
+            echo "One or more required suites failed."
+            exit 1
+          fi
+          echo "All required suites passed."

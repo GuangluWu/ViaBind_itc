@@ -25,6 +25,7 @@ source("R/fitting.R")
 source("R/weighting.R")
 source("R/visualization.R")
 source("R/bridge_step1_import.R")
+source("R/export_bundle_helpers.R")
 
 # 加载 UI 和 Server
 source("ui.R")

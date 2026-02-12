@@ -14,6 +14,7 @@ source("global.R")
 
 # 加载核心函数模块
 source("R/plotting.R")
+source("R/bridge_plot_helpers.R")
 
 # 加载 UI 和 Server
 source("ui.R")
