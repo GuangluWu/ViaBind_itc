@@ -314,7 +314,7 @@ function loadingHtml() {
 <html>
 <head>
   <meta charset="utf-8">
-  <title>ITCSuite</title>
+  <title>CaloriPath</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; background: #f5f7fa; color: #1f2937; }
     .wrap { max-width: 680px; margin: 12vh auto; padding: 24px; background: #ffffff; border: 1px solid #d1d5db; border-radius: 12px; }
@@ -325,7 +325,7 @@ function loadingHtml() {
 </head>
 <body>
   <div class="wrap">
-    <h1>ITCSuite is starting</h1>
+    <h1>CaloriPath is starting</h1>
     <p>The desktop shell is ready and the local Shiny backend is booting.</p>
     <p>First launch can take longer than usual.</p>
   </div>
@@ -338,7 +338,7 @@ function errorHtml(message, logPath) {
 <html>
 <head>
   <meta charset="utf-8">
-  <title>ITCSuite startup failed</title>
+  <title>CaloriPath startup failed</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; background: #fff7ed; color: #7c2d12; }
     .wrap { max-width: 760px; margin: 10vh auto; padding: 24px; background: #ffffff; border: 1px solid #fdba74; border-radius: 12px; }
@@ -405,6 +405,7 @@ function createMainWindow() {
     height: 980,
     minWidth: 1200,
     minHeight: 760,
+    title: "CaloriPath",
     show: true,
     webPreferences: {
       contextIsolation: true,
@@ -426,6 +427,12 @@ function createMainWindow() {
       event.preventDefault();
       shell.openExternal(url);
     }
+  });
+
+  mainWindow.webContents.on("page-title-updated", (event) => {
+    // Keep desktop window title stable instead of inheriting inner Shiny page titles.
+    event.preventDefault();
+    mainWindow.setTitle("CaloriPath");
   });
 
   mainWindow.webContents.on("did-finish-load", async () => {
@@ -497,15 +504,15 @@ function showStartupError(message) {
 function buildAppMenu() {
   const template = [
     {
-      label: "ITCSuite",
+      label: "CaloriPath",
       submenu: [
         {
           label: "About",
           click: () => {
             dialog.showMessageBox({
               type: "info",
-              title: "About ITCSuite",
-              message: "ITCSuite Desktop",
+              title: "About CaloriPath",
+              message: "CaloriPath Desktop",
               detail: "Electron shell with local Shiny backend."
             });
           }

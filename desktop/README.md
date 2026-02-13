@@ -1,6 +1,6 @@
 # ITCSuite Desktop (Electron)
 
-Electron shell for ITCSuiteWeb using a local Shiny backend.
+Electron shell for CaloriPath using a local Shiny backend.
 
 ## Prerequisites (dev)
 

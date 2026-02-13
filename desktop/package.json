@@ -1,7 +1,7 @@
 {
   "name": "itcsuite-desktop",
-  "version": "0.1.0",
-  "description": "ITCSuite desktop app powered by Electron + local Shiny backend",
+  "version": "0.1.1",
+  "description": "CaloriPath powered by Electron + local Shiny backend",
   "main": "src/main/index.js",
   "engines": {
     "node": ">=20 <21 || >=22 <23 || >=24 <25"
@@ -19,7 +19,7 @@
   },
   "build": {
     "appId": "com.itcsuite.desktop",
-    "productName": "ITCSuite",
+    "productName": "CaloriPath",
     "asar": true,
     "files": [
       "src/main/**/*",
