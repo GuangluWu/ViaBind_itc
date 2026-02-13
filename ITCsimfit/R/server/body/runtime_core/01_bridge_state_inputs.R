@@ -371,6 +371,14 @@
     invisible(TRUE)
   }
 
+  is_step1_payload_sync_pending <- function(payload = get_latest_step1_payload()) {
+    if (is.null(payload) || !is.list(payload)) return(FALSE)
+    sig <- payload_signature(payload)
+    if (is.na(sig)) return(FALSE)
+    sig_state <- get_step1_signature_state()
+    !identical(sig_state$input, sig)
+  }
+
   replay_step1_sync_after_flush <- function(payload = get_latest_step1_payload(), passes = 2L) {
     pass_n <- suppressWarnings(as.integer(passes)[1])
     if (!is.finite(pass_n) || pass_n < 1L) return(invisible(FALSE))
@@ -637,6 +645,7 @@
   
   # [修改] 仅当用户手动调整第一针体积时提示同步 V_init；程序更新（导入、打开 app、加载快照等）不提示
   observeEvent(input$V_pre, {
+    if (isTRUE(is_step1_payload_sync_pending())) return()
     if (isTRUE(values$v_pre_programmatic_update)) {
       values$v_pre_programmatic_update <- FALSE
       return()
@@ -647,9 +656,8 @@
 
     # 仅在 V_pre 与 V_init 不一致时提示，避免初始化/导入自动同步时误报。
     v_init_num <- suppressWarnings(as.numeric(input$V_init_val))
-    if (length(v_init_num) >= 1 && is.finite(v_init_num[1])) {
-      if (isTRUE(all.equal(v_pre_num[1], v_init_num[1], tolerance = 1e-8))) return()
-    }
+    if (length(v_init_num) < 1 || !is.finite(v_init_num[1])) return()
+    if (isTRUE(all.equal(v_pre_num[1], v_init_num[1], tolerance = 1e-8))) return()
 
     showNotification(
       tr("v_pre_change_warning", lang()), 

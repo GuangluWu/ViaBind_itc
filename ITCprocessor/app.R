@@ -93,11 +93,6 @@ ui <- fluidPage(
       padding-left: 8px;
       padding-right: 8px;
     }
-    #action_btn_ui { overflow: hidden; }
-    #action_btn_ui .action-btn-row {
-      width: 100% !important;
-      margin-right: 0;
-    }
     @media (min-width: 992px) {
       .step1-sidebar.col-sm-3 { width: 23%; }
       .step1-main.col-sm-9 { width: 77%; }
@@ -125,7 +120,12 @@ ui <- fluidPage(
         numericInput("integration_window", tr("end_offset"), min = 1, value = 15, step = 1)
       ),
       hr(style = "margin: 8px 0;"),
-      uiOutput("action_btn_ui")
+      div(
+        class = "action-btn-row",
+        style = "width:100%;box-sizing:border-box;overflow:hidden;",
+        div(style = "min-width:0;", actionButton("btn_data_to_fit", tr("data_to_fit"), width = "100%")),
+        div(style = "min-width:0;", uiOutput("download_btn_ui"))
+      )
     ),
     column(
       9,
@@ -278,25 +278,18 @@ server <- function(input, output, session) {
       TRUE
     }, error = function(e) FALSE)
   })
-  output$action_btn_ui <- renderUI({
+  output$download_btn_ui <- renderUI({
     if (!isTRUE(canExport())) return(NULL)
-    div(
-      class = "action-btn-row",
-      style = "width:100%;box-sizing:border-box;overflow:hidden;",
-      div(style = "min-width:0;", actionButton("btn_data_to_fit", tr("data_to_fit", lang()), width = "100%")),
-      div(
-        style = "min-width:0;",
-        tagAppendAttributes(
-          downloadButton("downloadData_processor", tr("export_processor_data", lang())),
-          style = "width:100%;max-width:100%;box-sizing:border-box;"
-        )
-      )
+    tagAppendAttributes(
+      downloadButton("downloadData_processor", tr("export_processor_data", lang())),
+      style = "width:100%;max-width:100%;box-sizing:border-box;"
     )
   })
 
   # 语言变化时更新所有输入控件的 label
   observeEvent(lang(), {
     l <- lang()
+    updateActionButton(session, "btn_data_to_fit", label = tr("data_to_fit", l))
     updateSliderInput(session, "duration", label = tr("anchor_width", l))
     updateSliderInput(session, "offset", label = tr("anchor_offset", l))
     updateSliderInput(session, "spar", label = tr("spline_spar", l))
@@ -569,9 +562,12 @@ server <- function(input, output, session) {
     click_id <- suppressWarnings(as.integer(input$btn_data_to_fit)[1])
     if (!is.finite(click_id) || click_id <= 0L) return()
     if (click_id <= last_data_to_fit_click()) return()
-    last_data_to_fit_click(click_id)
     payload <- step1_payload()
-    if (is.null(payload)) return()
+    if (is.null(payload)) {
+      showNotification(tr("data_to_fit_unavailable", lang()), type = "warning", duration = 3)
+      return()
+    }
+    last_data_to_fit_click(click_id)
     payload$token <- next_bridge_token()
     payload$created_at <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
     bridge_set("step1_payload", payload)
