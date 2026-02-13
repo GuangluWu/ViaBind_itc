@@ -32,7 +32,7 @@ param_correction,浓度校正因子和稀释热基线,Conc.Factors & Baseline,Se
 param_fH,"fH (H, Cell)","fH (H, Cell)",Parameter Label,
 param_fG,"fG (G, Syr.)","fG (G, Syr.)",Parameter Label,
 param_V_init,"首滴V_init (uL)","#1 V_init (uL)",Parameter Label,
-param_heat_offset,"基线偏移 (稀释热)","Baseline (Dilution Heat, offset)",Parameter Label,
+param_heat_offset,"基线偏移 (稀释热, cal/mol)","Baseline offset (Dilution Heat, cal/mol)",Parameter Label,
 exp_H_cell,"H, Cell (mM)","H, Cell (mM)",Input Label,
 exp_G_syringe,"G, Syr. (mM)","G, Syr. (mM)",Input Label,
 exp_V_cell,Cell V (mL),Cell V (mL),Input Label,

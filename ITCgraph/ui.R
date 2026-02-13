@@ -280,7 +280,7 @@ ui <- fluidPage(
           fluidRow(
             column(3, textInput("graph_fh_display", label = "fH", value = "1")),
             column(3, textInput("graph_fg_display", label = "fG", value = "1")),
-            column(6, checkboxInput("graph_apply_ratio_correction", "Apply ratio correction (fG/fH)", value = TRUE))
+            column(6, checkboxInput("graph_apply_ratio_correction", "Apply concentration correction (X+Y, fH/fG)", value = TRUE))
           )
         ),
         wellPanel(

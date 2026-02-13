@@ -769,12 +769,23 @@
     
     # 转换模拟数据为实验数据格式
     tryCatch({
-      exp_data <- data.frame(
-        Ratio_Raw = sim$Ratio_App,
-        Heat_Raw = sim$dQ_App,
-        V_inj_uL = if ("V_inj_uL" %in% names(sim)) sim$V_inj_uL else NA_real_,
-        Inj = sim$Inj
+      safe_num <- function(x, default) {
+        v <- suppressWarnings(as.numeric(x)[1])
+        if (is.finite(v)) v else default
+      }
+      v_pre_now <- safe_num(input$V_pre, UI_DEFAULTS$v_pre_default)
+      v_inj_now <- safe_num(input$V_inj, UI_DEFAULTS$v_inj_default * 1000)
+      g_syringe_now <- safe_num(input$G_syringe, UI_DEFAULTS$conc_syringe_default)
+
+      exp_data <- build_sim_to_exp_exp_df(
+        sim_df = as.data.frame(sim),
+        v_pre = v_pre_now,
+        v_inj = v_inj_now,
+        g_syringe = g_syringe_now
       )
+      if (is.null(exp_data) || nrow(exp_data) == 0) {
+        stop("Sim->Exp conversion produced empty data.")
+      }
       
       # 存储到 manual_exp_data
       values$manual_exp_data <- exp_data

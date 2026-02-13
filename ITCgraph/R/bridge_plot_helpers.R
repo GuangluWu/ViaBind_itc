@@ -42,6 +42,15 @@ bridge_plot_ratio_multiplier <- function(ratio_fh, ratio_fg, apply_ratio = TRUE,
   fg / fh
 }
 
+bridge_plot_apply_heat_correction <- function(y_raw, ratio_fg, heat_offset = 0, apply_ratio = TRUE, default_factor = 1) {
+  y_num <- suppressWarnings(as.numeric(y_raw))
+  if (!isTRUE(apply_ratio)) return(y_num)
+
+  fg <- bridge_plot_normalize_factor(ratio_fg, default = default_factor)
+  off <- bridge_plot_safe_num_scalar(heat_offset, default = 0)
+  ((y_num - off) / fg) + off
+}
+
 bridge_plot_resolve_step2_payload_source <- function(payload, token = NA_real_) {
   source_raw <- if (is.null(payload$source)) "bridge" else payload$source
   source_mode <- as.character(source_raw)

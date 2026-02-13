@@ -163,6 +163,48 @@ calc_heat_cal_mol_from_ucal <- function(heat_ucal, vinj_ul, g_syringe, fallback_
   out
 }
 
+calc_heat_ucal_from_cal_mol <- function(heat_cal_mol, vinj_ul, g_syringe) {
+  heat_cal_mol_num <- suppressWarnings(as.numeric(heat_cal_mol))
+  vinj_ul_num <- suppressWarnings(as.numeric(vinj_ul))
+  g_syringe_num <- suppressWarnings(as.numeric(g_syringe)[1])
+  if (!is.finite(g_syringe_num) || g_syringe_num <= 0) {
+    return(rep(NA_real_, length(heat_cal_mol_num)))
+  }
+  ifelse(
+    is.finite(heat_cal_mol_num) & is.finite(vinj_ul_num) & vinj_ul_num > 0,
+    heat_cal_mol_num * vinj_ul_num * g_syringe_num / 1000,
+    NA_real_
+  )
+}
+
+build_sim_to_exp_exp_df <- function(sim_df, v_pre, v_inj, g_syringe) {
+  if (is.null(sim_df) || !is.data.frame(sim_df) || nrow(sim_df) == 0) return(NULL)
+  if (!("dQ_App" %in% names(sim_df))) return(NULL)
+
+  n <- nrow(sim_df)
+  V_inj_uL <- build_current_vinj_ul(n = n, v_pre = v_pre, v_inj = v_inj)
+  Heat_Raw <- suppressWarnings(as.numeric(sim_df$dQ_App))
+  Heat_ucal <- calc_heat_ucal_from_cal_mol(
+    heat_cal_mol = Heat_Raw,
+    vinj_ul = V_inj_uL,
+    g_syringe = g_syringe
+  )
+  Ratio_Raw <- if ("Ratio_App" %in% names(sim_df)) suppressWarnings(as.numeric(sim_df$Ratio_App)) else rep(NA_real_, n)
+
+  exp_df <- data.frame(
+    Ratio_Raw = Ratio_Raw,
+    Heat_Raw = Heat_Raw,
+    Heat_ucal = Heat_ucal,
+    V_inj_uL = V_inj_uL,
+    Inj = if ("Inj" %in% names(sim_df)) suppressWarnings(as.integer(sim_df$Inj)) else seq_len(n),
+    stringsAsFactors = FALSE
+  )
+  exp_df <- exp_df[is.finite(exp_df$Heat_Raw), , drop = FALSE]
+  if (nrow(exp_df) == 0) return(NULL)
+  exp_df$Inj <- seq_len(nrow(exp_df))
+  exp_df
+}
+
 build_step2_exp_df_from_integration <- function(int_df, v_pre, v_inj, g_syringe, prefer_heat_ucal = TRUE) {
   if (is.null(int_df) || !is.data.frame(int_df) || nrow(int_df) == 0) return(NULL)
 

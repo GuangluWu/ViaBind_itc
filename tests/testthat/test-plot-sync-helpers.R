@@ -31,6 +31,62 @@ testthat::test_that("ratio multiplier follows correction switch", {
   )
 })
 
+testthat::test_that("heat correction applies offset-aware inverse fG when enabled", {
+  y_raw <- c(1000, 2500, -300)
+  heat_offset <- 100
+  corrected <- bridge_plot_apply_heat_correction(
+    y_raw = y_raw,
+    ratio_fg = 2,
+    heat_offset = heat_offset,
+    apply_ratio = TRUE
+  )
+  expected <- ((y_raw - heat_offset) / 2) + heat_offset
+  testthat::expect_equal(corrected, expected)
+
+  to_kcal <- function(v) (v - heat_offset) / 1000
+  testthat::expect_equal(to_kcal(corrected), ((y_raw - heat_offset) / 2) / 1000)
+})
+
+testthat::test_that("heat correction keeps raw value when disabled", {
+  y_raw <- c(1000, 2500, -300)
+  corrected <- bridge_plot_apply_heat_correction(
+    y_raw = y_raw,
+    ratio_fg = 2,
+    heat_offset = 100,
+    apply_ratio = FALSE
+  )
+  testthat::expect_equal(corrected, y_raw)
+})
+
+testthat::test_that("heat correction falls back to fG=1 for invalid factor", {
+  y_raw <- c(1000, 2500, -300)
+  corrected <- bridge_plot_apply_heat_correction(
+    y_raw = y_raw,
+    ratio_fg = 0,
+    heat_offset = 100,
+    apply_ratio = TRUE
+  )
+  testthat::expect_equal(corrected, y_raw)
+})
+
+testthat::test_that("heat correction remains unchanged when fG equals 1", {
+  y_raw <- c(1000, 2500, -300)
+  corrected_on <- bridge_plot_apply_heat_correction(
+    y_raw = y_raw,
+    ratio_fg = 1,
+    heat_offset = 100,
+    apply_ratio = TRUE
+  )
+  corrected_off <- bridge_plot_apply_heat_correction(
+    y_raw = y_raw,
+    ratio_fg = 1,
+    heat_offset = 100,
+    apply_ratio = FALSE
+  )
+  testthat::expect_equal(corrected_on, y_raw)
+  testthat::expect_equal(corrected_off, y_raw)
+})
+
 testthat::test_that("resolve_step2_payload_source keeps source label rules", {
   source_file <- bridge_plot_resolve_step2_payload_source(
     list(source = "file", source_label = "fit.xlsx"),
@@ -65,4 +121,3 @@ testthat::test_that("extract_step2_payload_frames prefers integration_rev and me
   testthat::expect_equal(parsed$integration$Ratio_App[1], 0.2)
   testthat::expect_equal(parsed$meta$value[1], "2")
 })
-

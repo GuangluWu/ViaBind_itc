@@ -196,18 +196,41 @@ server <- function(input, output, session) {
     )
   }
 
-  get_bottom_plot_data <- function(apply_ratio = get_ratio_correction_enabled()) {
+  get_bottom_plot_data <- function(apply_ratio = get_ratio_correction_enabled(), offset_override = NA_real_) {
     int_data <- imported_data$integration
     sim_data <- imported_data$simulation
     mult <- get_ratio_multiplier(apply_ratio = apply_ratio)
+    offset <- get_effective_offset(offset_override = offset_override)
 
-    if (!is.null(int_data) && is.data.frame(int_data) && "Ratio_App" %in% names(int_data)) {
+    if (!is.null(int_data) && is.data.frame(int_data)) {
       int_data <- as.data.frame(int_data)
-      int_data$Ratio_App <- int_data$Ratio_App * mult
+      if ("Ratio_App" %in% names(int_data)) {
+        int_data$Ratio_App <- int_data$Ratio_App * mult
+      }
+      if ("heat_cal_mol" %in% names(int_data)) {
+        int_data$heat_cal_mol <- bridge_plot_apply_heat_correction(
+          y_raw = int_data$heat_cal_mol,
+          ratio_fg = imported_data$ratio_fg,
+          heat_offset = offset,
+          apply_ratio = apply_ratio,
+          default_factor = 1
+        )
+      }
     }
-    if (!is.null(sim_data) && is.data.frame(sim_data) && "Ratio_App" %in% names(sim_data)) {
+    if (!is.null(sim_data) && is.data.frame(sim_data)) {
       sim_data <- as.data.frame(sim_data)
-      sim_data$Ratio_App <- sim_data$Ratio_App * mult
+      if ("Ratio_App" %in% names(sim_data)) {
+        sim_data$Ratio_App <- sim_data$Ratio_App * mult
+      }
+      if ("dQ_App" %in% names(sim_data)) {
+        sim_data$dQ_App <- bridge_plot_apply_heat_correction(
+          y_raw = sim_data$dQ_App,
+          ratio_fg = imported_data$ratio_fg,
+          heat_offset = offset,
+          apply_ratio = apply_ratio,
+          default_factor = 1
+        )
+      }
     }
 
     list(integration = int_data, simulation = sim_data)
@@ -388,7 +411,8 @@ server <- function(input, output, session) {
       }
     }
 
-    bottom_data <- get_bottom_plot_data(apply_ratio = apply_ratio)
+    offset_for_range <- get_effective_offset(offset_override)
+    bottom_data <- get_bottom_plot_data(apply_ratio = apply_ratio, offset_override = offset_for_range)
     int_data <- bottom_data$integration
     sim_data <- bottom_data$simulation
     has_int <- !is.null(int_data) && nrow(int_data) > 0
@@ -406,7 +430,6 @@ server <- function(input, output, session) {
       updateNumericInput(session, "bot_xmax", value = r_bot_x[2])
     }
 
-    offset_for_range <- get_effective_offset(offset_override)
     energy_unit <- input$energy_unit %||% PLOT_DEFAULTS$energy_unit
     to_kcal <- function(v) (v - offset_for_range) / 1000
     to_display <- if (identical(energy_unit, "J")) function(v) to_kcal(v) * 4.184 else to_kcal
@@ -910,15 +933,19 @@ server <- function(input, output, session) {
   })
   
   observeEvent(input$bot_auto_yrange, {
-    int_data <- imported_data$integration
-    sim_data <- imported_data$simulation
-    has_int <- !is.null(int_data) && nrow(int_data) > 0
-    has_sim <- !is.null(sim_data) && nrow(sim_data) > 0
+    offset_for_range <- get_effective_offset()
+    bottom_data <- get_bottom_plot_data(
+      apply_ratio = isTRUE(input$graph_apply_ratio_correction),
+      offset_override = offset_for_range
+    )
+    int_data <- bottom_data$integration
+    sim_data <- bottom_data$simulation
+    has_int <- !is.null(int_data) && nrow(int_data) > 0 && "heat_cal_mol" %in% names(int_data)
+    has_sim <- !is.null(sim_data) && nrow(sim_data) > 0 && "dQ_App" %in% names(sim_data)
     if (!has_int && !has_sim) {
       showNotification(graph_tr("no_data_warning", lang()), type = "message", duration = 2)
       return(invisible())
     }
-    offset_for_range <- as.numeric(input$graph_heat_offset %||% PLOT_DEFAULTS$heat_offset)
     energy_unit <- input$energy_unit %||% PLOT_DEFAULTS$energy_unit
     to_kcal <- function(v) (v - offset_for_range) / 1000
     to_display <- if (identical(energy_unit, "J")) function(v) to_kcal(v) * 4.184 else to_kcal
@@ -948,12 +975,16 @@ server <- function(input, output, session) {
       updateNumericInput(session, "top_ymin", value = r[1])
       updateNumericInput(session, "top_ymax", value = r[2])
     }
-    int_data <- imported_data$integration
-    sim_data <- imported_data$simulation
-    has_int <- !is.null(int_data) && nrow(int_data) > 0
-    has_sim <- !is.null(sim_data) && nrow(sim_data) > 0
+    offset_for_range <- get_effective_offset()
+    bottom_data <- get_bottom_plot_data(
+      apply_ratio = isTRUE(input$graph_apply_ratio_correction),
+      offset_override = offset_for_range
+    )
+    int_data <- bottom_data$integration
+    sim_data <- bottom_data$simulation
+    has_int <- !is.null(int_data) && nrow(int_data) > 0 && "heat_cal_mol" %in% names(int_data)
+    has_sim <- !is.null(sim_data) && nrow(sim_data) > 0 && "dQ_App" %in% names(sim_data)
     if (has_int || has_sim) {
-      offset_for_range <- as.numeric(input$graph_heat_offset %||% PLOT_DEFAULTS$heat_offset)
       to_kcal <- function(v) (v - offset_for_range) / 1000
       to_display <- if (identical(u, "J")) function(v) to_kcal(v) * 4.184 else to_kcal
       y_vals <- c(
