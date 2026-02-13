@@ -2,7 +2,7 @@
 
 TRANS <- list(
   en = list(
-    app_title = "ITC Data Processor",
+    app_title = "ViaBind: ITCprocessor",
     baseline_settings = "Baseline Setting-Spline",
     integration_settings = "Integration Setting",
     view_controls = "View Controls",
@@ -57,7 +57,7 @@ TRANS <- list(
     heat_per_inj = "Heat per inj (kcal/mol)"
   ),
   zh = list(
-    app_title = "ITC 元数据处理",
+    app_title = "ViaBind: ITCprocessor",
     baseline_settings = "基线设置 (Spline)",
     integration_settings = "积分设置",
     view_controls = "视图控制",

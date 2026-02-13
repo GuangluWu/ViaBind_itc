@@ -1,6 +1,6 @@
 Key,Chinese,English,Category,Notes
-app_title,ITC模拟和拟合,ITC Simulation & Fitting,Title,
-app_subtitle,ITC模拟和拟合（特别适用大环主客体）,ITC Sim. & Fit. (for Macrocyclic Host-Guest Systems),Title,
+app_title,ViaBind: ITCsimfit,ViaBind: ITCsimfit,Title,
+app_subtitle,ViaBind: ITCsimfit（特别适用大环主客体）,ViaBind: ITCsimfit (for Macrocyclic Host-Guest Systems),Title,
 lang_switch,语言切换,Language,Button,
 lang_zh,中文,Chinese,Button,
 lang_en,English,English,Button,

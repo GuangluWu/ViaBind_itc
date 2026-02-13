@@ -1,6 +1,6 @@
 {
   "name": "viabind-desktop",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "description": "ViaBind powered by Electron + local Shiny backend",
   "main": "src/main/index.js",
   "engines": {

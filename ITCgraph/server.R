@@ -1259,7 +1259,7 @@ server <- function(input, output, session) {
       base <- if (!is.null(imported_data$filename)) {
         tools::file_path_sans_ext(imported_data$filename)
       } else {
-        paste0("ITCgraph_settings_", format(Sys.time(), "%Y%m%d_%H%M"))
+        paste0("ViaBind_ITCgraph_settings_", format(Sys.time(), "%Y%m%d_%H%M"))
       }
       paste0(base, "_plot_settings.json")
     },
