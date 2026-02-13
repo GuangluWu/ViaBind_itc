@@ -272,10 +272,15 @@
     if (length(g_syringe) >= 1) g_syringe <- g_syringe[1]
     if (!(length(g_syringe) == 1 && is.finite(g_syringe) && g_syringe > 0)) g_syringe <- UI_DEFAULTS$conc_syringe_default
     
+    v_pre_default <- suppressWarnings(as.numeric(input$V_pre))
+    if (length(v_pre_default) >= 1) v_pre_default <- v_pre_default[1]
+    if (!(length(v_pre_default) == 1 && is.finite(v_pre_default))) v_pre_default <- vinj_default
+
     exp_df <- build_step1_bridge_exp_df(
       int_df = int_df,
       vinj_default = vinj_default,
-      g_syringe = g_syringe
+      g_syringe = g_syringe,
+      v_pre = v_pre_default
     )
     if (is.null(exp_df) || nrow(exp_df) == 0) return(FALSE)
     
@@ -826,6 +831,14 @@
       if (is.null(x) || length(x) == 0 || is.na(x)) default else x
     }
 
+    current_exp_heat_context <- function() {
+      list(
+        v_pre = safe_val(input$V_pre, UI_DEFAULTS$v_pre_default),
+        v_inj = safe_val(input$V_inj, UI_DEFAULTS$v_inj_default * 1000),
+        g_syringe = safe_val(input$G_syringe, UI_DEFAULTS$conc_syringe_default)
+      )
+    }
+
     apply_updated_ratio <- function(d) {
       if (is.null(d) || nrow(d) == 0) return(d)
       V_inj_vec <- if ("V_inj_uL" %in% names(d)) {
@@ -852,6 +865,29 @@
       d
     }
 
+    apply_dynamic_heat_update <- function(d) {
+      if (is.null(d) || nrow(d) == 0) return(d)
+      if (!("Heat_ucal" %in% names(d))) return(d)
+
+      ctx <- current_exp_heat_context()
+      d$V_inj_uL <- build_current_vinj_ul(
+        n = nrow(d),
+        v_pre = ctx$v_pre,
+        v_inj = ctx$v_inj
+      )
+      fallback_heat <- if ("Heat_Raw" %in% names(d)) as.numeric(d$Heat_Raw) else rep(NA_real_, nrow(d))
+      d$Heat_Raw <- calc_heat_cal_mol_from_ucal(
+        heat_ucal = as.numeric(d$Heat_ucal),
+        vinj_ul = d$V_inj_uL,
+        g_syringe = ctx$g_syringe,
+        fallback_heat_cal_mol = fallback_heat
+      )
+      d <- d[is.finite(d$Heat_Raw), , drop = FALSE]
+      if (nrow(d) == 0) return(NULL)
+      d$Inj <- seq_len(nrow(d))
+      d
+    }
+
     build_exp_from_integration <- function(int_df) {
       if (is.null(int_df) || nrow(int_df) == 0) return(NULL)
       has_heat_cal_mol <- "heat_cal_mol" %in% colnames(int_df)
@@ -860,37 +896,24 @@
         showNotification(tr("missing_heat_ucal_integration", lang()), type = "warning", duration = 5)
         return(NULL)
       }
-      V_inj_uL <- if ("V_titrate_uL" %in% colnames(int_df)) {
-        as.numeric(int_df$V_titrate_uL)
-      } else {
-        rep(NA_real_, nrow(int_df))
-      }
-      if (any(is.na(V_inj_uL))) {
-        V_inj_uL[is.na(V_inj_uL)] <- safe_val(input$V_inj, UI_DEFAULTS$v_inj_default * 1000)
-      }
-
-      heat_raw <- if (has_heat_cal_mol) {
-        as.numeric(int_df$heat_cal_mol)
-      } else {
-        heat_ucal <- as.numeric(int_df$Heat_ucal)
-        G_syringe <- safe_val(input$G_syringe, UI_DEFAULTS$conc_syringe_default)
-        denom <- V_inj_uL * G_syringe
-        ifelse(!is.na(denom) & denom > 0, 1000 * heat_ucal / denom, NA_real_)
-      }
-
-      d <- data.frame(
-        Heat_Raw = heat_raw,
-        V_inj_uL = V_inj_uL,
-        Inj = seq_len(nrow(int_df))
+      ctx <- current_exp_heat_context()
+      d <- build_step2_exp_df_from_integration(
+        int_df = int_df,
+        v_pre = ctx$v_pre,
+        v_inj = ctx$v_inj,
+        g_syringe = ctx$g_syringe,
+        prefer_heat_ucal = TRUE
       )
-      d <- d[!is.na(d$Heat_Raw), ]
-      d$Inj <- seq_len(nrow(d))
+      if (is.null(d) || nrow(d) == 0) return(NULL)
       apply_updated_ratio(d)
     }
 
     # 优先使用手动导入的数据（模拟→实验功能）
     if (!is.null(values$manual_exp_data)) {
-      return(apply_updated_ratio(values$manual_exp_data))
+      d <- values$manual_exp_data
+      d <- apply_dynamic_heat_update(d)
+      if (is.null(d) || nrow(d) == 0) return(NULL)
+      return(apply_updated_ratio(d))
     }
     
     req(input$exp_file)
@@ -1016,7 +1039,8 @@
       has_exp_data <- FALSE
       if (!is.null(preferred_int)) {
         int_df <- preferred_int
-        if (!is.null(int_df) && "Ratio_App" %in% colnames(int_df) && "heat_cal_mol" %in% colnames(int_df)) {
+        has_heat_src <- !is.null(int_df) && (("heat_cal_mol" %in% colnames(int_df)) || ("Heat_ucal" %in% colnames(int_df)))
+        if (!is.null(int_df) && "Ratio_App" %in% colnames(int_df) && isTRUE(has_heat_src)) {
           has_exp_data <- TRUE
         }
       }

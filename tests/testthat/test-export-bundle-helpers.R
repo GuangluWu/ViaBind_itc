@@ -50,6 +50,24 @@ testthat::test_that("build_integration_rev exports required columns", {
   testthat::expect_equal(out$Injection, c(1, 2))
 })
 
+testthat::test_that("build_integration_rev keeps optional Heat_ucal when present", {
+  exp_df <- data.frame(
+    Inj = c(1, 2),
+    Ratio_Raw = c(0.1, 0.2),
+    Heat_Raw = c(-100, -80),
+    V_inj_uL = c(1, 2),
+    Heat_ucal = c(-0.1, -0.16),
+    stringsAsFactors = FALSE
+  )
+  out <- export_bridge_build_integration_rev(exp_df)
+  testthat::expect_equal(
+    names(out),
+    c("Injection", "Ratio_App", "heat_cal_mol", "V_titrate_uL", "Heat_ucal")
+  )
+  testthat::expect_equal(out$V_titrate_uL, c(1, 2))
+  testthat::expect_equal(out$Heat_ucal, c(-0.1, -0.16))
+})
+
 testthat::test_that("build_meta_rev updates existing keys and appends new keys", {
   meta_cached <- data.frame(
     parameter = c("Temp_K", "H_cell_0_mM"),
@@ -96,4 +114,3 @@ testthat::test_that("resolve_step2_plot_source returns stable source label", {
   testthat::expect_equal(file_case$source, "file")
   testthat::expect_equal(file_case$source_label, "fit.xlsx")
 })
-

@@ -66,3 +66,22 @@ testthat::test_that("Step2 plot payload strict validation keeps required body", 
   testthat::expect_null(sanitize_step2_plot_payload(invalid_payload))
 })
 
+testthat::test_that("step1 bridge exp_df uses Heat_ucal and current V_pre/V_inj", {
+  int_df <- data.frame(
+    Injection = c(1, 2),
+    Ratio_App = c(0.1, 0.2),
+    Heat_ucal = c(10, 20),
+    heat_cal_mol = c(999, 999),
+    V_titrate_uL = c(5, 5),
+    stringsAsFactors = FALSE
+  )
+  exp_df <- build_step1_bridge_exp_df(
+    int_df = int_df,
+    vinj_default = 2,
+    g_syringe = 5,
+    v_pre = 1
+  )
+  testthat::expect_equal(exp_df$V_inj_uL, c(1, 2))
+  testthat::expect_equal(exp_df$Heat_Raw, c(2000, 2000))
+  testthat::expect_equal(exp_df$Heat_ucal, c(10, 20))
+})

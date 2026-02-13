@@ -127,7 +127,86 @@ get_preferred_integration_sheet <- function(sheets) {
   NULL
 }
 
-build_step1_bridge_exp_df <- function(int_df, vinj_default, g_syringe) {
+build_current_vinj_ul <- function(n, v_pre, v_inj) {
+  n_num <- suppressWarnings(as.integer(n)[1])
+  if (!is.finite(n_num) || n_num <= 0) return(numeric(0))
+
+  v_pre_num <- suppressWarnings(as.numeric(v_pre)[1])
+  v_inj_num <- suppressWarnings(as.numeric(v_inj)[1])
+  if (!is.finite(v_inj_num)) v_inj_num <- NA_real_
+  if (!is.finite(v_pre_num)) v_pre_num <- v_inj_num
+
+  vinj_vec <- rep(v_inj_num, n_num)
+  vinj_vec[1] <- v_pre_num
+  vinj_vec
+}
+
+calc_heat_cal_mol_from_ucal <- function(heat_ucal, vinj_ul, g_syringe, fallback_heat_cal_mol = NULL) {
+  heat_ucal_num <- suppressWarnings(as.numeric(heat_ucal))
+  vinj_ul_num <- suppressWarnings(as.numeric(vinj_ul))
+  g_syringe_num <- suppressWarnings(as.numeric(g_syringe)[1])
+  denom <- vinj_ul_num * g_syringe_num
+  heat_from_ucal <- ifelse(
+    is.finite(heat_ucal_num) & is.finite(denom) & denom > 0,
+    1000 * heat_ucal_num / denom,
+    NA_real_
+  )
+  if (is.null(fallback_heat_cal_mol)) return(heat_from_ucal)
+
+  fallback_num <- suppressWarnings(as.numeric(fallback_heat_cal_mol))
+  if (length(fallback_num) == 1 && length(heat_from_ucal) > 1) {
+    fallback_num <- rep(fallback_num, length(heat_from_ucal))
+  }
+  out <- heat_from_ucal
+  use_fallback <- !is.finite(out) & is.finite(fallback_num)
+  out[use_fallback] <- fallback_num[use_fallback]
+  out
+}
+
+build_step2_exp_df_from_integration <- function(int_df, v_pre, v_inj, g_syringe, prefer_heat_ucal = TRUE) {
+  if (is.null(int_df) || !is.data.frame(int_df) || nrow(int_df) == 0) return(NULL)
+
+  has_heat_cal_mol <- "heat_cal_mol" %in% colnames(int_df)
+  has_heat_ucal <- "Heat_ucal" %in% colnames(int_df)
+  if (!has_heat_cal_mol && !has_heat_ucal) return(NULL)
+
+  n <- nrow(int_df)
+  V_inj_uL <- build_current_vinj_ul(n = n, v_pre = v_pre, v_inj = v_inj)
+  fallback_heat <- if (has_heat_cal_mol) as.numeric(int_df$heat_cal_mol) else rep(NA_real_, n)
+  heat_ucal <- if (has_heat_ucal) as.numeric(int_df$Heat_ucal) else rep(NA_real_, n)
+  heat_raw <- if (isTRUE(prefer_heat_ucal) && has_heat_ucal) {
+    calc_heat_cal_mol_from_ucal(
+      heat_ucal = heat_ucal,
+      vinj_ul = V_inj_uL,
+      g_syringe = g_syringe,
+      fallback_heat_cal_mol = fallback_heat
+    )
+  } else if (has_heat_cal_mol) {
+    fallback_heat
+  } else {
+    calc_heat_cal_mol_from_ucal(
+      heat_ucal = heat_ucal,
+      vinj_ul = V_inj_uL,
+      g_syringe = g_syringe
+    )
+  }
+
+  Ratio_Raw <- if ("Ratio_App" %in% colnames(int_df)) as.numeric(int_df$Ratio_App) else rep(NA_real_, n)
+  exp_df <- data.frame(
+    Ratio_Raw = Ratio_Raw,
+    Heat_Raw = heat_raw,
+    V_inj_uL = V_inj_uL,
+    Heat_ucal = heat_ucal,
+    Inj = seq_len(n),
+    stringsAsFactors = FALSE
+  )
+  exp_df <- exp_df[is.finite(exp_df$Heat_Raw), , drop = FALSE]
+  if (nrow(exp_df) == 0) return(NULL)
+  exp_df$Inj <- seq_len(nrow(exp_df))
+  exp_df
+}
+
+build_step1_bridge_exp_df <- function(int_df, vinj_default, g_syringe, v_pre = vinj_default) {
   if (is.null(int_df) || !is.data.frame(int_df) || nrow(int_df) == 0) return(NULL)
 
   vinj_default_num <- suppressWarnings(as.numeric(vinj_default)[1])
@@ -135,33 +214,15 @@ build_step1_bridge_exp_df <- function(int_df, vinj_default, g_syringe) {
 
   g_syringe_num <- suppressWarnings(as.numeric(g_syringe)[1])
   if (!is.finite(g_syringe_num)) g_syringe_num <- NA_real_
-
-  V_inj_uL <- if ("V_titrate_uL" %in% colnames(int_df)) as.numeric(int_df$V_titrate_uL) else rep(vinj_default_num, nrow(int_df))
-  V_inj_uL[!is.finite(V_inj_uL)] <- vinj_default_num
-
-  Heat_Raw <- if ("heat_cal_mol" %in% colnames(int_df)) {
-    as.numeric(int_df$heat_cal_mol)
-  } else if ("Heat_ucal" %in% colnames(int_df)) {
-    denom <- V_inj_uL * g_syringe_num
-    ifelse(is.finite(denom) & denom > 0, 1000 * as.numeric(int_df$Heat_ucal) / denom, NA_real_)
-  } else {
-    rep(NA_real_, nrow(int_df))
-  }
-
-  Ratio_Raw <- if ("Ratio_App" %in% colnames(int_df)) as.numeric(int_df$Ratio_App) else rep(NA_real_, nrow(int_df))
-
-  exp_df <- data.frame(
-    Ratio_Raw = Ratio_Raw,
-    Heat_Raw = Heat_Raw,
-    V_inj_uL = V_inj_uL,
-    Inj = seq_len(nrow(int_df)),
-    stringsAsFactors = FALSE
+  v_pre_num <- suppressWarnings(as.numeric(v_pre)[1])
+  if (!is.finite(v_pre_num)) v_pre_num <- vinj_default_num
+  build_step2_exp_df_from_integration(
+    int_df = int_df,
+    v_pre = v_pre_num,
+    v_inj = vinj_default_num,
+    g_syringe = g_syringe_num,
+    prefer_heat_ucal = TRUE
   )
-  exp_df <- exp_df[is.finite(exp_df$Heat_Raw), , drop = FALSE]
-  if (nrow(exp_df) == 0) return(NULL)
-
-  exp_df$Inj <- seq_len(nrow(exp_df))
-  exp_df
 }
 
 resolve_step1_bridge_source_name <- function(payload, default = "Step1") {

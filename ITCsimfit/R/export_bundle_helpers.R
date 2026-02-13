@@ -64,13 +64,17 @@ export_bridge_seed_sheet_list <- function(cached_sheets, manual_exp_data, manual
 
 export_bridge_build_integration_rev <- function(exp_df) {
   if (is.null(exp_df) || !is.data.frame(exp_df) || nrow(exp_df) == 0) return(NULL)
-  data.frame(
+  out <- data.frame(
     Injection = exp_df$Inj,
     Ratio_App = exp_df$Ratio_Raw,
     heat_cal_mol = exp_df$Heat_Raw,
     V_titrate_uL = if ("V_inj_uL" %in% names(exp_df)) exp_df$V_inj_uL else NA_real_,
     stringsAsFactors = FALSE
   )
+  if ("Heat_ucal" %in% names(exp_df)) {
+    out$Heat_ucal <- exp_df$Heat_ucal
+  }
+  out
 }
 
 export_bridge_build_meta_rev <- function(meta_cached, meta_updates) {
