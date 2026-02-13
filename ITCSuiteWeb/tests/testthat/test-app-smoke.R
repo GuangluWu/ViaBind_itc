@@ -23,6 +23,38 @@ if (!requireNamespace("testthat", quietly = TRUE)) {
       testthat::expect_true(app$get_value(input = "main_tabs") %in% c("step1", "step2", "step3"))
       app$stop()
     })
+
+    testthat::test_that("bridge buttons keep click progression across language switch", {
+      app <- shinytest2::AppDriver$new(
+        app_dir = web_app_dir,
+        name = "app-lang-bridge-clicks-smoke",
+        load_timeout = 60000
+      )
+      on.exit(app$stop(), add = TRUE)
+
+      read_click <- function(id) {
+        val <- suppressWarnings(as.integer(app$get_value(input = id)))
+        if (length(val) < 1 || !is.finite(val[1])) return(0L)
+        as.integer(val[1])
+      }
+
+      click_and_expect_increment <- function(id) {
+        before <- read_click(id)
+        app$set_inputs(.list = stats::setNames(list("click"), id))
+        after <- read_click(id)
+        testthat::expect_equal(after, before + 1L)
+      }
+
+      app$set_inputs(main_tabs = "step1")
+      click_and_expect_increment("btn_data_to_fit")
+      app$set_inputs(host_lang_toggle = "click")
+      click_and_expect_increment("btn_data_to_fit")
+
+      app$set_inputs(main_tabs = "step2")
+      click_and_expect_increment("data_to_plot")
+      app$set_inputs(host_lang_toggle = "click")
+      click_and_expect_increment("data_to_plot")
+    })
   } else {
     if (isTRUE(strict_smoke)) {
       stop("Strict smoke mode requires package `shinytest2`.")

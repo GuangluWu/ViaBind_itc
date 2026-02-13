@@ -688,7 +688,7 @@ ui <- fluidPage(
 
              div(class = "flex-btn-row fit-action-row",
                  div(class = "flex-btn-item",
-                     uiOutput("data_to_plot_button")
+                     actionButton("data_to_plot", "Data -> Plot", class = "btn-info btn-sm btn-block")
                  ),
                  div(class = "flex-btn-item",
                      uiOutput("download_data_button")

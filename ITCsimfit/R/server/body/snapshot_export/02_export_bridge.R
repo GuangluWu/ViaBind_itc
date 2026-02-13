@@ -174,12 +174,9 @@
     invisible(TRUE)
   }
   
-  last_data_to_plot_click <- reactiveVal(0L)
   observeEvent(input$data_to_plot, {
     click_id <- suppressWarnings(as.integer(input$data_to_plot)[1])
     if (!is.finite(click_id) || click_id <= 0L) return()
-    if (click_id <= last_data_to_plot_click()) return()
-    last_data_to_plot_click(click_id)
     sim <- tryCatch(sim_results(), error = function(e) NULL)
     ok <- isTRUE(publish_step2_plot_payload(sim = sim))
     if (!ok) {

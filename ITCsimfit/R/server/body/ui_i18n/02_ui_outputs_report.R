@@ -7,10 +7,6 @@
     downloadButton("simfit_downloadData", tr("btn_export_fit_data", lang()), class = "btn-success btn-sm btn-block")
   })
 
-  output$data_to_plot_button <- renderUI({
-    actionButton("data_to_plot", tr("btn_data_to_plot", lang()), class = "btn-info btn-sm btn-block")
-  })
-  
   # [新增] 模拟→实验按钮
   output$sim_to_exp_button <- renderUI({
     actionButton("sim_to_exp", 
@@ -172,6 +168,7 @@
   # Expt Data input labels are now static English in ui.R.
   observeEvent(lang(), {
     current_lang <- lang()
+    updateActionButton(session, "data_to_plot", label = tr("btn_data_to_plot", current_lang))
     updateNumericInput(session, "H_cell_0", label = tr("exp_H_cell", current_lang))
     updateNumericInput(session, "G_syringe", label = tr("exp_G_syringe", current_lang))
     updateNumericInput(session, "V_cell", label = tr("exp_V_cell", current_lang))
