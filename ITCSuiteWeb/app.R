@@ -174,11 +174,14 @@ graph_legacy <- load_legacy_app(file.path(repo_root, "ITCgraph"), "ITCgraph")
 
 ui <- fluidPage(
   tags$head(
+    tags$title("ViaBind: Your Path, Your Model!"),
     tags$style(HTML("\
       .main-host-wrap { margin-top: 6px; }\
       .main-host-topbar { position: relative; }\
       .main-host-wrap .tab-content { padding-top: 8px; }\
       .main-host-wrap .nav-tabs { padding-right: 140px; }\
+      .main-host-brand { color: #4b5563; font-size: 13px; margin: 6px 0 2px; }\
+      .main-host-brand a { color: inherit; text-decoration: underline; }\
       .main-host-lang-switch { position: absolute; top: 5px; right: 0; z-index: 10; }\
       .main-host-lang-switch .btn { min-width: 92px; }\
     ")),

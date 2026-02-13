@@ -1,7 +1,7 @@
 {
-  "name": "itcsuite-desktop",
-  "version": "0.1.1",
-  "description": "CaloriPath powered by Electron + local Shiny backend",
+  "name": "viabind-desktop",
+  "version": "0.1.2",
+  "description": "ViaBind powered by Electron + local Shiny backend",
   "main": "src/main/index.js",
   "engines": {
     "node": ">=20 <21 || >=22 <23 || >=24 <25"
@@ -18,14 +18,18 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
-    "appId": "com.itcsuite.desktop",
-    "productName": "CaloriPath",
+    "appId": "com.viabind.desktop",
+    "productName": "ViaBind",
     "asar": true,
     "files": [
       "src/main/**/*",
       "package.json"
     ],
     "extraResources": [
+      {
+        "from": "../icons/ViaBind_1024.png",
+        "to": "icon.png"
+      },
       {
         "from": "../ITCSuiteWeb",
         "to": "itcsuite/ITCSuiteWeb",
@@ -67,6 +71,7 @@
         "dmg",
         "zip"
       ],
+      "icon": "build/icon.icns",
       "category": "public.app-category.science"
     }
   }

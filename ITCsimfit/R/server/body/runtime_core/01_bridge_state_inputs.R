@@ -642,13 +642,20 @@
       return()
     }
     req(input$V_pre)
-    if(input$V_pre > 0) {
-      showNotification(
-        tr("v_pre_change_warning", lang()), 
-        type = "message", 
-        duration = 8
-      )
+    v_pre_num <- suppressWarnings(as.numeric(input$V_pre))
+    if (length(v_pre_num) < 1 || !is.finite(v_pre_num[1]) || v_pre_num[1] <= 0) return()
+
+    # 仅在 V_pre 与 V_init 不一致时提示，避免初始化/导入自动同步时误报。
+    v_init_num <- suppressWarnings(as.numeric(input$V_init_val))
+    if (length(v_init_num) >= 1 && is.finite(v_init_num[1])) {
+      if (isTRUE(all.equal(v_pre_num[1], v_init_num[1], tolerance = 1e-8))) return()
     }
+
+    showNotification(
+      tr("v_pre_change_warning", lang()), 
+      type = "message", 
+      duration = 8
+    )
   }, ignoreInit = TRUE)
   
   

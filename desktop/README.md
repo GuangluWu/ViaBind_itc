@@ -1,6 +1,6 @@
-# ITCSuite Desktop (Electron)
+# ViaBind Desktop (Electron)
 
-Electron shell for CaloriPath using a local Shiny backend.
+Electron shell for ViaBind using a local Shiny backend.
 
 ## Prerequisites (dev)
 

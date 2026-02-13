@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, shell, session } = require("electron");
+const { app, BrowserWindow, Menu, dialog, shell, session, nativeImage } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");
 const path = require("path");
@@ -9,6 +9,13 @@ const HOST = "127.0.0.1";
 const READY_PREFIX = "ITCSUITE_READY ";
 const ERROR_PREFIX = "ITCSUITE_ERROR ";
 const SMOKE_PREFIX = "ITCSUITE_ELECTRON_SMOKE ";
+const APP_NAME = "ViaBind";
+const APP_SLOGAN = "Your Path, Your Model!";
+const APP_TITLE = `${APP_NAME}: ${APP_SLOGAN}`;
+const APP_DEVELOPER_NAME = "Guanglu Wu (吴光鹭)";
+const APP_DEVELOPER_EMAIL = "guanglu.wu@gmail.com";
+const APP_DEVELOPER_SITE = "guanglu.xyz";
+app.setName(APP_NAME);
 
 const smokeMode = process.argv.includes("--smoke-test") || process.env.ITCSUITE_SMOKE_TEST === "1";
 
@@ -21,6 +28,20 @@ let smokeReported = false;
 
 function useBundledRuntimeInDev() {
   return process.env.ITCSUITE_USE_BUNDLED_R === "1";
+}
+
+function resolveAppIconPath() {
+  const candidates = app.isPackaged
+    ? [path.join(process.resourcesPath, "icon.png")]
+    : [
+        path.resolve(__dirname, "../../../icons/ViaBind_1024.png")
+      ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 class BackendController extends EventEmitter {
@@ -314,7 +335,7 @@ function loadingHtml() {
 <html>
 <head>
   <meta charset="utf-8">
-  <title>CaloriPath</title>
+  <title>${APP_NAME}</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; background: #f5f7fa; color: #1f2937; }
     .wrap { max-width: 680px; margin: 12vh auto; padding: 24px; background: #ffffff; border: 1px solid #d1d5db; border-radius: 12px; }
@@ -325,7 +346,8 @@ function loadingHtml() {
 </head>
 <body>
   <div class="wrap">
-    <h1>CaloriPath is starting</h1>
+    <h1>${APP_NAME} is starting</h1>
+    <p><strong>${APP_SLOGAN}</strong></p>
     <p>The desktop shell is ready and the local Shiny backend is booting.</p>
     <p>First launch can take longer than usual.</p>
   </div>
@@ -338,7 +360,7 @@ function errorHtml(message, logPath) {
 <html>
 <head>
   <meta charset="utf-8">
-  <title>CaloriPath startup failed</title>
+  <title>${APP_NAME} startup failed</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; background: #fff7ed; color: #7c2d12; }
     .wrap { max-width: 760px; margin: 10vh auto; padding: 24px; background: #ffffff; border: 1px solid #fdba74; border-radius: 12px; }
@@ -405,7 +427,7 @@ function createMainWindow() {
     height: 980,
     minWidth: 1200,
     minHeight: 760,
-    title: "CaloriPath",
+    title: APP_TITLE,
     show: true,
     webPreferences: {
       contextIsolation: true,
@@ -432,7 +454,7 @@ function createMainWindow() {
   mainWindow.webContents.on("page-title-updated", (event) => {
     // Keep desktop window title stable instead of inheriting inner Shiny page titles.
     event.preventDefault();
-    mainWindow.setTitle("CaloriPath");
+    mainWindow.setTitle(APP_TITLE);
   });
 
   mainWindow.webContents.on("did-finish-load", async () => {
@@ -504,16 +526,16 @@ function showStartupError(message) {
 function buildAppMenu() {
   const template = [
     {
-      label: "CaloriPath",
+      label: APP_NAME,
       submenu: [
         {
           label: "About",
           click: () => {
             dialog.showMessageBox({
               type: "info",
-              title: "About CaloriPath",
-              message: "CaloriPath Desktop",
-              detail: "Electron shell with local Shiny backend."
+              title: `About ${APP_NAME}`,
+              message: `${APP_NAME} Desktop`,
+              detail: `${APP_SLOGAN}\n\nDeveloper: ${APP_DEVELOPER_NAME}\nEmail: ${APP_DEVELOPER_EMAIL}\nWebsite: ${APP_DEVELOPER_SITE}\n\nElectron shell with local Shiny backend.`
             });
           }
         },
@@ -607,6 +629,16 @@ app.on("window-all-closed", () => {
 });
 
 app.whenReady().then(async () => {
+  if (process.platform === "darwin" && app.dock && typeof app.dock.setIcon === "function") {
+    const iconPath = resolveAppIconPath();
+    if (iconPath) {
+      const iconImage = nativeImage.createFromPath(iconPath);
+      if (!iconImage.isEmpty()) {
+        app.dock.setIcon(iconImage);
+      }
+    }
+  }
+
   logsDir = path.join(app.getPath("userData"), "logs");
   fs.mkdirSync(logsDir, { recursive: true });
 

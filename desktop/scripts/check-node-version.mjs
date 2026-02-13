@@ -6,7 +6,7 @@ const supportedMajors = new Set([20, 22, 24]);
 
 if (!Number.isFinite(major) || !supportedMajors.has(major)) {
   console.error(
-    `Unsupported Node.js version ${version}. Use Node 20.x/22.x/24.x LTS for CaloriPath desktop.`
+    `Unsupported Node.js version ${version}. Use Node 20.x/22.x/24.x LTS for ViaBind desktop.`
   );
   process.exit(1);
 }
