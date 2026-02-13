@@ -65,3 +65,93 @@ testthat::test_that("integration_rev is preferred over integration", {
   preferred <- get_preferred_integration_sheet(sheets)
   testthat::expect_equal(preferred$Ratio_App[[1]], 0.2)
 })
+
+testthat::test_that("resolve_first_injection_targets step1 uses meta V_pre first", {
+  meta_vals <- c(V_pre_uL = 0.42)
+  int_df <- data.frame(V_titrate_uL = c(0.31, 2.0), stringsAsFactors = FALSE)
+
+  out <- resolve_first_injection_targets(
+    mode = "step1",
+    meta_vals = meta_vals,
+    int_df = int_df,
+    default_v_pre = 0.3
+  )
+
+  testthat::expect_true(isTRUE(out$has_source))
+  testthat::expect_equal(out$source_tag, "meta_v_pre")
+  testthat::expect_equal(out$v_pre_target, 0.42)
+  testthat::expect_equal(out$v_init_target, 0.42)
+})
+
+testthat::test_that("resolve_first_injection_targets import prefers fit_params for both targets", {
+  meta_vals <- c(V_pre_uL = 0.41)
+  fp_restore <- list(V_pre_uL = 0.36, V_init_uL = 0.35)
+  int_df <- data.frame(V_titrate_uL = c(0.33, 2.0), stringsAsFactors = FALSE)
+
+  out <- resolve_first_injection_targets(
+    mode = "import",
+    meta_vals = meta_vals,
+    fp_restore = fp_restore,
+    int_df = int_df,
+    default_v_pre = 0.3
+  )
+
+  testthat::expect_true(isTRUE(out$has_source))
+  testthat::expect_equal(out$source_tag, "fit_v_pre")
+  testthat::expect_equal(out$source_tag_v_pre, "fit_v_pre")
+  testthat::expect_equal(out$source_tag_v_init, "fit_v_init")
+  testthat::expect_equal(out$v_pre_target, 0.36)
+  testthat::expect_equal(out$v_init_target, 0.35)
+})
+
+testthat::test_that("resolve_first_injection_targets import V_init falls back to fit V_pre", {
+  meta_vals <- numeric(0)
+  fp_restore <- list(V_pre_uL = 0.37, V_init_uL = NA_real_)
+  int_df <- data.frame(stringsAsFactors = FALSE)
+
+  out <- resolve_first_injection_targets(
+    mode = "import",
+    meta_vals = meta_vals,
+    fp_restore = fp_restore,
+    int_df = int_df,
+    default_v_pre = 0.3
+  )
+
+  testthat::expect_true(isTRUE(out$has_source))
+  testthat::expect_equal(out$source_tag_v_pre, "fit_v_pre")
+  testthat::expect_equal(out$source_tag_v_init, "fit_v_pre")
+  testthat::expect_equal(out$v_pre_target, 0.37)
+  testthat::expect_equal(out$v_init_target, 0.37)
+})
+
+testthat::test_that("resolve_first_injection_targets import falls back to meta then integration then default", {
+  out_meta <- resolve_first_injection_targets(
+    mode = "import",
+    meta_vals = c(V_pre_uL = 0.44),
+    fp_restore = NULL,
+    int_df = data.frame(V_titrate_uL = c(0.31, 2.0), stringsAsFactors = FALSE),
+    default_v_pre = 0.3
+  )
+  testthat::expect_equal(out_meta$v_pre_target, 0.44)
+  testthat::expect_equal(out_meta$v_init_target, 0.44)
+
+  out_int <- resolve_first_injection_targets(
+    mode = "import",
+    meta_vals = numeric(0),
+    fp_restore = NULL,
+    int_df = data.frame(V_titrate_uL = c(0.31, 2.0), stringsAsFactors = FALSE),
+    default_v_pre = 0.3
+  )
+  testthat::expect_equal(out_int$v_pre_target, 0.31)
+  testthat::expect_equal(out_int$v_init_target, 0.31)
+
+  out_default <- resolve_first_injection_targets(
+    mode = "import",
+    meta_vals = numeric(0),
+    fp_restore = NULL,
+    int_df = data.frame(stringsAsFactors = FALSE),
+    default_v_pre = 0.3
+  )
+  testthat::expect_equal(out_default$v_pre_target, 0.3)
+  testthat::expect_equal(out_default$v_init_target, 0.3)
+})

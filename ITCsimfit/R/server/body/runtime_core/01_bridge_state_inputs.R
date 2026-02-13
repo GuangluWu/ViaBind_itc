@@ -73,6 +73,92 @@
     tryCatch(shiny::isolate(rv_fun()), error = function(e) default)
   }
 
+  # Programmatic V_pre update helper:
+  # - only sets suppression flag when V_pre value actually changes
+  # - returns TRUE when target value is already synced or updated successfully
+  update_v_pre_programmatically <- function(value) {
+    current_vpre <- safe_input_get("V_pre")
+    if (is.null(current_vpre)) return(invisible(FALSE))
+
+    target_num <- suppressWarnings(as.numeric(value))
+    if (length(target_num) < 1 || !is.finite(target_num[1])) return(invisible(FALSE))
+    target_num <- target_num[1]
+
+    current_num <- suppressWarnings(as.numeric(current_vpre))
+    if (length(current_num) >= 1 && is.finite(current_num[1])) {
+      if (isTRUE(all.equal(current_num[1], target_num, tolerance = 1e-8))) {
+        return(invisible(TRUE))
+      }
+    }
+
+    values$v_pre_programmatic_update <- TRUE
+    updateNumericInput(session, "V_pre", value = target_num)
+    invisible(TRUE)
+  }
+
+  # Always apply first injection in deterministic order: V_pre first, then V_init <- V_pre.
+  apply_first_injection_pair <- function(v_pre_target, retries = 3L, delay_sec = 0.05) {
+    target_num <- suppressWarnings(as.numeric(v_pre_target))
+    if (length(target_num) < 1 || !is.finite(target_num[1])) return(invisible(FALSE))
+    target_num <- target_num[1]
+
+    vpre_synced <- isTRUE(update_v_pre_programmatically(target_num))
+    if (isTRUE(vpre_synced) && !is.null(safe_input_get("V_init_val"))) {
+      updateNumericInput(session, "V_init_val", value = target_num)
+      return(invisible(TRUE))
+    }
+
+    retries_n <- suppressWarnings(as.integer(retries)[1])
+    if (!is.finite(retries_n) || retries_n <= 0L) return(invisible(FALSE))
+    if (!requireNamespace("later", quietly = TRUE)) return(invisible(FALSE))
+
+    later::later(function() {
+      tryCatch(
+        apply_first_injection_pair(target_num, retries = retries_n - 1L, delay_sec = delay_sec),
+        error = function(e) NULL
+      )
+    }, delay = delay_sec)
+    invisible(FALSE)
+  }
+
+  # Import flow helper:
+  # - V_pre and V_init can be restored from different sources/values
+  # - V_pre uses programmatic helper so manual warning is suppressed
+  apply_import_first_injection_targets <- function(v_pre_target,
+                                                   v_init_target,
+                                                   retries = 3L,
+                                                   delay_sec = 0.05) {
+    pre_num <- suppressWarnings(as.numeric(v_pre_target))
+    init_num <- suppressWarnings(as.numeric(v_init_target))
+    if (length(pre_num) < 1 || !is.finite(pre_num[1])) return(invisible(FALSE))
+    if (length(init_num) < 1 || !is.finite(init_num[1])) return(invisible(FALSE))
+    pre_num <- pre_num[1]
+    init_num <- init_num[1]
+
+    vpre_synced <- isTRUE(update_v_pre_programmatically(pre_num))
+    if (isTRUE(vpre_synced) && !is.null(safe_input_get("V_init_val"))) {
+      updateNumericInput(session, "V_init_val", value = init_num)
+      return(invisible(TRUE))
+    }
+
+    retries_n <- suppressWarnings(as.integer(retries)[1])
+    if (!is.finite(retries_n) || retries_n <= 0L) return(invisible(FALSE))
+    if (!requireNamespace("later", quietly = TRUE)) return(invisible(FALSE))
+
+    later::later(function() {
+      tryCatch(
+        apply_import_first_injection_targets(
+          pre_num,
+          init_num,
+          retries = retries_n - 1L,
+          delay_sec = delay_sec
+        ),
+        error = function(e) NULL
+      )
+    }, delay = delay_sec)
+    invisible(FALSE)
+  }
+
   is_step2_tab_selected <- function(tab_value = safe_input_get("main_tabs")) {
     tab_chr <- as.character(tab_value %||% "")[1]
     tab_chr %in% c(
@@ -97,7 +183,7 @@
     invisible(TRUE)
   }
 
-  reset_step2_ui_for_new_dataset <- function(default_n_inj = NULL) {
+  reset_step2_ui_for_new_dataset <- function(default_n_inj = NULL, apply_first_injection_default = TRUE) {
     updateCheckboxGroupInput(session, "active_paths", selected = character(0))
     updateCheckboxGroupInput(session, "fit_params", selected = c("logK1", "H1"))
 
@@ -122,9 +208,9 @@
     update_checkbox_if_present("use_robust_fitting", FALSE)
 
     default_first <- if (!is.null(UI_DEFAULTS$v_pre_default)) UI_DEFAULTS$v_pre_default else DEFAULT_PARAMS$V_init
-    values$v_pre_programmatic_update <- TRUE
-    updateNumericInput(session, "V_pre", value = default_first)
-    updateNumericInput(session, "V_init_val", value = default_first)
+    if (isTRUE(apply_first_injection_default)) {
+      apply_first_injection_pair(default_first)
+    }
 
     n_inj_num <- suppressWarnings(as.integer(default_n_inj)[1])
     if (!is.finite(n_inj_num) || n_inj_num < 1L) {
@@ -170,9 +256,7 @@
       updated_any <- isTRUE(update_numeric_if_present("V_inj", param_vals[["V_inj_uL"]])) || updated_any
     }
     if ("V_pre_uL" %in% names(param_vals) && !is.na(param_vals[["V_pre_uL"]])) {
-      values$v_pre_programmatic_update <- TRUE
-      updated_any <- isTRUE(update_numeric_if_present("V_pre", param_vals[["V_pre_uL"]])) || updated_any
-      updated_any <- isTRUE(update_numeric_if_present("V_init_val", param_vals[["V_pre_uL"]])) || updated_any
+      updated_any <- isTRUE(apply_first_injection_pair(param_vals[["V_pre_uL"]])) || updated_any
     }
     if ("n_inj" %in% names(param_vals) && !is.na(param_vals[["n_inj"]])) {
       updated_any <- isTRUE(update_numeric_if_present("n_inj", as.integer(param_vals[["n_inj"]]))) || updated_any
@@ -196,23 +280,9 @@
 
     # Ensure V_init sync is explicitly verified. If Step 2 has not mounted the
     # V_init control yet, do not mark payload as fully consumed.
-    vpre_from_meta <- NA_real_
     param_vals <- extract_step1_meta_numeric_map(meta_df)
-    if ("V_pre_uL" %in% names(param_vals) && is.finite(param_vals[["V_pre_uL"]])) {
-      vpre_from_meta <- param_vals[["V_pre_uL"]]
-    }
 
     if (!is.null(int_df) && nrow(int_df) > 0) {
-      if (!is.finite(vpre_from_meta) && "V_titrate_uL" %in% colnames(int_df)) {
-        first_v <- suppressWarnings(as.numeric(int_df$V_titrate_uL))
-        first_v <- first_v[is.finite(first_v)]
-        if (length(first_v) > 0) {
-          values$v_pre_programmatic_update <- TRUE
-          updated_any <- isTRUE(update_numeric_if_present("V_pre", first_v[1])) || updated_any
-          updated_any <- isTRUE(update_numeric_if_present("V_init_val", first_v[1])) || updated_any
-        }
-      }
-
       vinj_vec <- if ("V_titrate_uL" %in% colnames(int_df)) suppressWarnings(as.numeric(int_df$V_titrate_uL)) else NULL
       if (!is.null(vinj_vec)) {
         vinj_vec <- vinj_vec[is.finite(vinj_vec)]
@@ -224,21 +294,19 @@
       updated_any <- isTRUE(update_numeric_if_present("n_inj", nrow(int_df))) || updated_any
     }
 
-    vpre_candidate <- vpre_from_meta
-    if (!is.finite(vpre_candidate) && !is.null(int_df) && nrow(int_df) > 0 && "V_titrate_uL" %in% colnames(int_df)) {
-      first_v <- suppressWarnings(as.numeric(int_df$V_titrate_uL))
-      first_v <- first_v[is.finite(first_v)]
-      if (length(first_v) > 0) vpre_candidate <- first_v[1]
-    }
+    default_first <- if (!is.null(UI_DEFAULTS$v_pre_default)) UI_DEFAULTS$v_pre_default else DEFAULT_PARAMS$V_init
+    first_target <- resolve_first_injection_targets(
+      mode = "step1",
+      meta_vals = param_vals,
+      int_df = int_df,
+      default_v_pre = default_first
+    )
 
     vinit_synced <- FALSE
-    if (is.finite(vpre_candidate)) {
-      values$v_pre_programmatic_update <- TRUE
-      vpre_synced <- isTRUE(update_numeric_if_present("V_pre", vpre_candidate))
-      vinit_only_synced <- isTRUE(update_numeric_if_present("V_init_val", vpre_candidate))
-      # Treat payload as fully consumed only when both V_pre and V_init are synced.
-      vinit_synced <- isTRUE(vpre_synced && vinit_only_synced)
-      updated_any <- vpre_synced || vinit_only_synced || updated_any
+    if (isTRUE(first_target$has_source) && is.finite(first_target$v_pre_target)) {
+      pair_synced <- isTRUE(apply_first_injection_pair(first_target$v_pre_target))
+      vinit_synced <- isTRUE(pair_synced)
+      updated_any <- pair_synced || updated_any
     } else if (!is.null(safe_input_get("V_init_val"))) {
       # No V_pre source available, but input exists, so don't block consumption.
       vinit_synced <- TRUE
@@ -261,7 +329,10 @@
     int_df <- get_step1_payload_integration_df(payload)
     if (is.null(int_df) || nrow(int_df) == 0) return(FALSE)
 
-    reset_step2_ui_for_new_dataset(default_n_inj = nrow(int_df))
+    reset_step2_ui_for_new_dataset(
+      default_n_inj = nrow(int_df),
+      apply_first_injection_default = FALSE
+    )
     apply_meta_to_exp_inputs(meta_df)
     
     vinj_default <- suppressWarnings(as.numeric(input$V_inj))
@@ -358,7 +429,10 @@
       int_df <- get_step1_payload_integration_df(payload)
       n_inj_default <- if (!is.null(int_df) && nrow(int_df) > 0) nrow(int_df) else NULL
       tryCatch(
-        reset_step2_ui_for_new_dataset(default_n_inj = n_inj_default),
+        reset_step2_ui_for_new_dataset(
+          default_n_inj = n_inj_default,
+          apply_first_injection_default = FALSE
+        ),
         error = function(e) NULL
       )
       if (!is.na(sig)) {
@@ -371,6 +445,8 @@
     )
     if (isTRUE(input_apply$vinit_synced) && !is.na(sig)) {
       sig_state$input <- sig
+      # Defensive cleanup: avoid stale suppression flag leaking into first manual edit.
+      values$v_pre_programmatic_update <- FALSE
     }
     set_step1_signature_state(sig_state)
     invisible(TRUE)
@@ -650,19 +726,21 @@
   
   # [修改] 仅当用户手动调整第一针体积时提示同步 V_init；程序更新（导入、打开 app、加载快照等）不提示
   observeEvent(input$V_pre, {
-    if (isTRUE(is_step1_payload_sync_pending())) return()
-    if (isTRUE(values$v_pre_programmatic_update)) {
+    is_programmatic <- isTRUE(values$v_pre_programmatic_update)
+    if (is_programmatic) {
       values$v_pre_programmatic_update <- FALSE
-      return()
     }
-    req(input$V_pre)
-    v_pre_num <- suppressWarnings(as.numeric(input$V_pre))
-    if (length(v_pre_num) < 1 || !is.finite(v_pre_num[1]) || v_pre_num[1] <= 0) return()
 
-    # 仅在 V_pre 与 V_init 不一致时提示，避免初始化/导入自动同步时误报。
-    v_init_num <- suppressWarnings(as.numeric(input$V_init_val))
-    if (length(v_init_num) < 1 || !is.finite(v_init_num[1])) return()
-    if (isTRUE(all.equal(v_pre_num[1], v_init_num[1], tolerance = 1e-8))) return()
+    need_warn <- tryCatch(
+      should_warn_v_pre_change(
+        v_pre = input$V_pre,
+        v_init = input$V_init_val,
+        is_programmatic = is_programmatic,
+        is_step1_sync_pending = isTRUE(is_step1_payload_sync_pending())
+      ),
+      error = function(e) FALSE
+    )
+    if (!isTRUE(need_warn)) return()
 
     showNotification(
       tr("v_pre_change_warning", lang()), 
@@ -773,7 +851,12 @@
         v <- suppressWarnings(as.numeric(x)[1])
         if (is.finite(v)) v else default
       }
-      v_pre_now <- safe_num(input$V_pre, UI_DEFAULTS$v_pre_default)
+      vpre_target <- resolve_sim_to_exp_vpre_target(input$V_init_val)
+      if (!isTRUE(vpre_target$ok)) {
+        showNotification(tr(vpre_target$error_key, lang()), type = "error", duration = 5)
+        return()
+      }
+      v_pre_now <- vpre_target$target_v_pre
       v_inj_now <- safe_num(input$V_inj, UI_DEFAULTS$v_inj_default * 1000)
       g_syringe_now <- safe_num(input$G_syringe, UI_DEFAULTS$conc_syringe_default)
 
@@ -792,11 +875,8 @@
       values$manual_exp_source <- "sim_to_exp"
       values$exp_data_disabled <- FALSE
 
-      # Sim->Exp: keep V_init synced from current Expt V_pre.
-      current_vpre <- suppressWarnings(as.numeric(input$V_pre))
-      if (length(current_vpre) >= 1 && is.finite(current_vpre[1])) {
-        updateNumericInput(session, "V_init_val", value = current_vpre[1])
-      }
+      # Sim->Exp: use current V_init as source and sync V_pre <- V_init.
+      update_v_pre_programmatically(vpre_target$target_v_pre)
       
       # 清空导入文件信息，避免 UI 显示之前的导入文件名
       values$imported_xlsx_filename <- NULL
@@ -1042,7 +1122,7 @@
           inferred_n_inj <- suppressWarnings(as.integer(meta_num[["n_inj"]]))
         }
       }
-      reset_step2_ui_for_new_dataset(default_n_inj = inferred_n_inj)
+      reset_step2_ui_for_new_dataset(default_n_inj = inferred_n_inj, apply_first_injection_default = FALSE)
 
       # 填充实验参数：仅当有 integration 或 simulation（实验数据）时执行
       # 优先级：meta_rev > meta > fit_params > 默认值
@@ -1063,7 +1143,6 @@
       }
       if (has_exp_data) {
         meta_has_params <- FALSE
-        source_vpre_applied <- FALSE
         meta_vals <- extract_meta_numeric_map_with_rev_priority(
           meta_rev_df = sheets[["meta_rev"]],
           meta_df = sheets[["meta"]]
@@ -1083,12 +1162,6 @@
           }
           if ("V_inj_uL" %in% names(meta_vals) && !is.na(meta_vals[["V_inj_uL"]])) {
             updateNumericInput(session, "V_inj", value = meta_vals[["V_inj_uL"]])
-          }
-          if ("V_pre_uL" %in% names(meta_vals) && !is.na(meta_vals[["V_pre_uL"]])) {
-            values$v_pre_programmatic_update <- TRUE
-            updateNumericInput(session, "V_pre", value = meta_vals[["V_pre_uL"]])
-            updateNumericInput(session, "V_init_val", value = meta_vals[["V_pre_uL"]])
-            source_vpre_applied <- TRUE
           }
           if ("n_inj" %in% names(meta_vals) && !is.na(meta_vals[["n_inj"]])) {
             updateNumericInput(session, "n_inj", value = meta_vals[["n_inj"]])
@@ -1122,14 +1195,6 @@
           if (is.finite(fp_restore$fH)) updateNumericInput(session, "factor_H", value = fp_restore$fH)
           if (is.finite(fp_restore$fG)) updateNumericInput(session, "factor_G", value = fp_restore$fG)
           if (is.finite(fp_restore$Offset_cal)) updateSliderInput(session, "heat_offset", value = fp_restore$Offset_cal)
-          if (is.finite(fp_restore$V_init_uL)) {
-            values$v_pre_programmatic_update <- TRUE
-            updateNumericInput(session, "V_init_val", value = fp_restore$V_init_uL)
-            if (!isTRUE(source_vpre_applied)) {
-              updateNumericInput(session, "V_pre", value = fp_restore$V_init_uL)
-              source_vpre_applied <- TRUE
-            }
-          }
 
           if (!meta_has_params) {
             if (is.finite(fp_restore$H_cell_0_mM)) updateNumericInput(session, "H_cell_0", value = fp_restore$H_cell_0_mM)
@@ -1138,29 +1203,29 @@
             if (is.finite(fp_restore$V_inj_uL)) updateNumericInput(session, "V_inj", value = fp_restore$V_inj_uL)
             if (is.finite(fp_restore$n_inj)) updateNumericInput(session, "n_inj", value = as.integer(fp_restore$n_inj))
             if (is.finite(fp_restore$Temp_K)) updateNumericInput(session, "Temp", value = fp_restore$Temp_K)
-            if (!isTRUE(source_vpre_applied) && is.finite(fp_restore$V_pre_uL)) {
-              values$v_pre_programmatic_update <- TRUE
-              updateNumericInput(session, "V_pre", value = fp_restore$V_pre_uL)
-              updateNumericInput(session, "V_init_val", value = fp_restore$V_pre_uL)
-              source_vpre_applied <- TRUE
-            }
           }
           showNotification(tr("import_params_from_fit_params", lang()), type = "message", duration = 4)
         } else if (!meta_has_params) {
           showNotification(tr("import_params_no_source", lang()), type = "warning", duration = 5)
         }
 
-        if (!isTRUE(source_vpre_applied) && !is.null(preferred_int)) {
-          int_df <- preferred_int
-          if (!is.null(int_df) && "V_titrate_uL" %in% colnames(int_df)) {
-            first_v <- suppressWarnings(as.numeric(int_df$V_titrate_uL))
-            first_v <- first_v[!is.na(first_v)]
-            if (length(first_v) > 0) {
-              values$v_pre_programmatic_update <- TRUE
-              updateNumericInput(session, "V_pre", value = first_v[1])
-              updateNumericInput(session, "V_init_val", value = first_v[1])
-            }
-          }
+        default_first <- if (!is.null(UI_DEFAULTS$v_pre_default)) UI_DEFAULTS$v_pre_default else DEFAULT_PARAMS$V_init
+        first_target <- resolve_first_injection_targets(
+          mode = "import",
+          meta_vals = meta_vals,
+          fp_restore = if (isTRUE(fp_has_any)) fp_restore else NULL,
+          int_df = preferred_int,
+          default_v_pre = default_first
+        )
+        if (
+          isTRUE(first_target$has_source) &&
+          is.finite(first_target$v_pre_target) &&
+          is.finite(first_target$v_init_target)
+        ) {
+          apply_import_first_injection_targets(
+            v_pre_target = first_target$v_pre_target,
+            v_init_target = first_target$v_init_target
+          )
         }
       }
       # 若为 SimFit 导出的拟合数据（无 integration，有 simulation），提示已作为实验数据导入

@@ -3,6 +3,21 @@
   # ============================================================================
   
   # --- [修复] 保存快照 (增加命名逻辑 + 高精度 RSS) ---
+  update_v_pre_from_snapshot <- function(value) {
+    if (exists("update_v_pre_programmatically", mode = "function", inherits = TRUE)) {
+      return(isTRUE(update_v_pre_programmatically(value)))
+    }
+    target_num <- suppressWarnings(as.numeric(value)[1])
+    if (!is.finite(target_num)) return(FALSE)
+    current_num <- suppressWarnings(as.numeric(input$V_pre)[1])
+    if (is.finite(current_num) && isTRUE(all.equal(current_num, target_num, tolerance = 1e-8))) {
+      return(TRUE)
+    }
+    values$v_pre_programmatic_update <- TRUE
+    updateNumericInput(session, "V_pre", value = target_num)
+    TRUE
+  }
+
   observeEvent(input$save_params, {
     # [修复] 防止在语言切换时触发
     if(lang_switching()) return()
@@ -207,8 +222,7 @@
     } else {
       default_first
     }
-    values$v_pre_programmatic_update <- TRUE
-    updateNumericInput(session, "V_pre", value = first_v)
+    update_v_pre_from_snapshot(first_v)
     updateNumericInput(session, "V_init_val", value = first_v)
     
     removeModal()
@@ -330,8 +344,7 @@
       updateNumericInput(session, "n_inj", value=target_p$n_inj)
     }
     if("V_pre" %in% names(target_p) && !is.na(target_p$V_pre)) {
-      values$v_pre_programmatic_update <- TRUE
-      updateNumericInput(session, "V_pre", value=target_p$V_pre)
+      update_v_pre_from_snapshot(target_p$V_pre)
     }
     if("Temp" %in% names(target_p) && !is.na(target_p$Temp)) {
       updateNumericInput(session, "Temp", value=target_p$Temp)

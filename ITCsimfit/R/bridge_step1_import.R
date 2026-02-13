@@ -127,6 +127,133 @@ get_preferred_integration_sheet <- function(sheets) {
   NULL
 }
 
+resolve_first_injection_targets <- function(mode = c("step1", "import"),
+                                            meta_vals = NULL,
+                                            fp_restore = NULL,
+                                            int_df = NULL,
+                                            default_v_pre = NA_real_) {
+  mode <- match.arg(mode)
+
+  to_num1 <- function(x) {
+    v <- suppressWarnings(as.numeric(x))
+    if (length(v) < 1 || !is.finite(v[1])) return(NA_real_)
+    v[1]
+  }
+
+  first_from_integration <- function(df) {
+    if (is.null(df) || !is.data.frame(df) || !"V_titrate_uL" %in% colnames(df)) return(NA_real_)
+    vv <- suppressWarnings(as.numeric(df$V_titrate_uL))
+    vv <- vv[is.finite(vv)]
+    if (length(vv) < 1) return(NA_real_)
+    vv[1]
+  }
+
+  get_meta_vpre <- function(vals) {
+    if (is.null(vals) || length(vals) == 0 || !"V_pre_uL" %in% names(vals)) return(NA_real_)
+    to_num1(vals[["V_pre_uL"]])
+  }
+
+  get_fp_vpre <- function(fp) {
+    if (is.null(fp)) return(NA_real_)
+    to_num1(fp$V_pre_uL)
+  }
+
+  get_fp_vinit <- function(fp) {
+    if (is.null(fp)) return(NA_real_)
+    to_num1(fp$V_init_uL)
+  }
+
+  pick_target <- function(candidates) {
+    for (cand in candidates) {
+      v <- to_num1(cand$value)
+      if (is.finite(v)) {
+        return(list(value = v, tag = cand$tag, has_source = TRUE))
+      }
+    }
+    list(value = NA_real_, tag = "none", has_source = FALSE)
+  }
+
+  int_first <- first_from_integration(int_df)
+  default_first <- to_num1(default_v_pre)
+
+  if (identical(mode, "step1")) {
+    vpre_pick <- pick_target(list(
+      list(tag = "meta_v_pre", value = get_meta_vpre(meta_vals)),
+      list(tag = "integration_first_v", value = int_first),
+      list(tag = "default", value = default_first)
+    ))
+    return(list(
+      v_pre_target = vpre_pick$value,
+      v_init_target = vpre_pick$value,
+      source_tag = vpre_pick$tag,
+      source_tag_v_pre = vpre_pick$tag,
+      source_tag_v_init = vpre_pick$tag,
+      has_source = isTRUE(vpre_pick$has_source),
+      has_v_pre_source = isTRUE(vpre_pick$has_source),
+      has_v_init_source = isTRUE(vpre_pick$has_source)
+    ))
+  }
+
+  vpre_pick <- pick_target(list(
+    list(tag = "fit_v_pre", value = get_fp_vpre(fp_restore)),
+    list(tag = "meta_v_pre", value = get_meta_vpre(meta_vals)),
+    list(tag = "integration_first_v", value = int_first),
+    list(tag = "default", value = default_first)
+  ))
+
+  vinit_pick <- pick_target(list(
+    list(tag = "fit_v_init", value = get_fp_vinit(fp_restore)),
+    list(tag = "fit_v_pre", value = get_fp_vpre(fp_restore)),
+    list(tag = "meta_v_pre", value = get_meta_vpre(meta_vals)),
+    list(tag = "integration_first_v", value = int_first),
+    list(tag = "default", value = default_first)
+  ))
+
+  list(
+    v_pre_target = vpre_pick$value,
+    v_init_target = vinit_pick$value,
+    source_tag = vpre_pick$tag,
+    source_tag_v_pre = vpre_pick$tag,
+    source_tag_v_init = vinit_pick$tag,
+    has_source = isTRUE(vpre_pick$has_source) || isTRUE(vinit_pick$has_source),
+    has_v_pre_source = isTRUE(vpre_pick$has_source),
+    has_v_init_source = isTRUE(vinit_pick$has_source)
+  )
+}
+
+should_warn_v_pre_change <- function(v_pre,
+                                     v_init,
+                                     is_programmatic = FALSE,
+                                     is_step1_sync_pending = FALSE,
+                                     tolerance = 1e-8) {
+  if (isTRUE(is_programmatic)) return(FALSE)
+  if (isTRUE(is_step1_sync_pending)) return(FALSE)
+
+  v_pre_num <- suppressWarnings(as.numeric(v_pre)[1])
+  if (!is.finite(v_pre_num) || v_pre_num <= 0) return(FALSE)
+
+  v_init_num <- suppressWarnings(as.numeric(v_init)[1])
+  if (!is.finite(v_init_num)) return(FALSE)
+
+  !isTRUE(all.equal(v_pre_num, v_init_num, tolerance = tolerance))
+}
+
+resolve_sim_to_exp_vpre_target <- function(v_init) {
+  v_init_num <- suppressWarnings(as.numeric(v_init)[1])
+  if (!is.finite(v_init_num)) {
+    return(list(
+      ok = FALSE,
+      target_v_pre = NA_real_,
+      error_key = "sim_to_exp_invalid_v_init"
+    ))
+  }
+  list(
+    ok = TRUE,
+    target_v_pre = v_init_num,
+    error_key = NA_character_
+  )
+}
+
 build_current_vinj_ul <- function(n, v_pre, v_inj) {
   n_num <- suppressWarnings(as.integer(n)[1])
   if (!is.finite(n_num) || n_num <= 0) return(numeric(0))

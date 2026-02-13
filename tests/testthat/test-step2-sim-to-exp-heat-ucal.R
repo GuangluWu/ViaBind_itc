@@ -85,3 +85,20 @@ testthat::test_that("sim->exp Heat_ucal keeps Heat_Raw stable for same params an
   testthat::expect_equal(vinj_changed[1], exp_df$Heat_Raw[1])
   testthat::expect_false(isTRUE(all.equal(vinj_changed[2:3], exp_df$Heat_Raw[2:3])))
 })
+
+testthat::test_that("sim->exp resolves V_pre target from V_init", {
+  out <- resolve_sim_to_exp_vpre_target(0.55)
+  testthat::expect_true(isTRUE(out$ok))
+  testthat::expect_equal(out$target_v_pre, 0.55)
+  testthat::expect_true(is.na(out$error_key))
+})
+
+testthat::test_that("sim->exp blocks when V_init is invalid", {
+  out_null <- resolve_sim_to_exp_vpre_target(NULL)
+  testthat::expect_false(isTRUE(out_null$ok))
+  testthat::expect_equal(out_null$error_key, "sim_to_exp_invalid_v_init")
+
+  out_bad <- resolve_sim_to_exp_vpre_target("abc")
+  testthat::expect_false(isTRUE(out_bad$ok))
+  testthat::expect_equal(out_bad$error_key, "sim_to_exp_invalid_v_init")
+})

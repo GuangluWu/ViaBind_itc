@@ -85,3 +85,22 @@ testthat::test_that("step1 bridge exp_df uses Heat_ucal and current V_pre/V_inj"
   testthat::expect_equal(exp_df$Heat_Raw, c(2000, 2000))
   testthat::expect_equal(exp_df$Heat_ucal, c(10, 20))
 })
+
+testthat::test_that("step1 reset path disables default first-injection overwrite", {
+  server_file <- file.path(
+    repo_root,
+    "ITCsimfit",
+    "R",
+    "server",
+    "body",
+    "runtime_core",
+    "01_bridge_state_inputs.R"
+  )
+  src <- paste(readLines(server_file, warn = FALSE), collapse = "\n")
+
+  patt_consume <- "reset_step2_ui_for_new_dataset\\s*\\(\\s*default_n_inj\\s*=\\s*nrow\\(int_df\\)\\s*,\\s*apply_first_injection_default\\s*=\\s*FALSE\\s*\\)"
+  patt_sync <- "reset_step2_ui_for_new_dataset\\s*\\(\\s*default_n_inj\\s*=\\s*n_inj_default\\s*,\\s*apply_first_injection_default\\s*=\\s*FALSE\\s*\\)"
+
+  testthat::expect_true(grepl(patt_consume, src, perl = TRUE))
+  testthat::expect_true(grepl(patt_sync, src, perl = TRUE))
+})
