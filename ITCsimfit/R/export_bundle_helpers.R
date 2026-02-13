@@ -14,7 +14,7 @@ export_bridge_build_fit_params_df <- function(safe_inp, active_paths_save, rss_i
       "fH", "fG", "V_init_uL", "Offset_cal",
       "RSS", "RSS_method",
       "H_cell_0_mM", "G_syringe_mM", "V_cell_mL", "V_inj_uL",
-      "n_inj", "V_pre_uL", "Temp_K", "ActivePaths"
+      "n_inj", "V_pre_uL", "Temp_K", "ActivePaths" # Step2 import uses this to restore active_paths.
     ),
     value = as.character(c(
       safe_inp("logK1"), safe_inp("H1"),

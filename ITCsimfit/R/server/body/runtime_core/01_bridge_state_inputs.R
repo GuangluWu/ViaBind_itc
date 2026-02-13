@@ -839,12 +839,12 @@
 
     build_exp_from_integration <- function(int_df) {
       if (is.null(int_df) || nrow(int_df) == 0) return(NULL)
-      if (!("Heat_ucal" %in% colnames(int_df))) {
+      has_heat_cal_mol <- "heat_cal_mol" %in% colnames(int_df)
+      has_heat_ucal <- "Heat_ucal" %in% colnames(int_df)
+      if (!has_heat_cal_mol && !has_heat_ucal) {
         showNotification(tr("missing_heat_ucal_integration", lang()), type = "warning", duration = 5)
         return(NULL)
       }
-
-      heat_ucal <- as.numeric(int_df$Heat_ucal)
       V_inj_uL <- if ("V_titrate_uL" %in% colnames(int_df)) {
         as.numeric(int_df$V_titrate_uL)
       } else {
@@ -854,9 +854,14 @@
         V_inj_uL[is.na(V_inj_uL)] <- safe_val(input$V_inj, UI_DEFAULTS$v_inj_default * 1000)
       }
 
-      G_syringe <- safe_val(input$G_syringe, UI_DEFAULTS$conc_syringe_default)
-      denom <- V_inj_uL * G_syringe
-      heat_raw <- ifelse(!is.na(denom) & denom > 0, 1000 * heat_ucal / denom, NA_real_)
+      heat_raw <- if (has_heat_cal_mol) {
+        as.numeric(int_df$heat_cal_mol)
+      } else {
+        heat_ucal <- as.numeric(int_df$Heat_ucal)
+        G_syringe <- safe_val(input$G_syringe, UI_DEFAULTS$conc_syringe_default)
+        denom <- V_inj_uL * G_syringe
+        ifelse(!is.na(denom) & denom > 0, 1000 * heat_ucal / denom, NA_real_)
+      }
 
       d <- data.frame(
         Heat_Raw = heat_raw,
@@ -878,8 +883,8 @@
 
     # 若已在 observeEvent(input$exp_file) 中读取过同一文件，直接使用缓存数据
     if (!is.null(values$imported_xlsx_sheets) && identical(filepath, values$imported_xlsx_file_path)) {
-      # 优先：ITCprocessor 格式 (integration sheet)
-      int_df <- values$imported_xlsx_sheets[["integration"]]
+      # 优先：integration_rev > integration
+      int_df <- get_preferred_integration_sheet(values$imported_xlsx_sheets)
       d <- build_exp_from_integration(int_df)
       if (!is.null(d)) return(d)
       # 备选：SimFit 导出的拟合数据 (simulation sheet)，作为实验数据导入
@@ -907,12 +912,10 @@
       values$imported_xlsx_sheets <- cached_sheets
       values$imported_xlsx_file_path <- filepath
 
-      # --- 路径 1：ITCprocessor 导出格式 (integration sheet) ---
-      if ("integration" %in% names(cached_sheets)) {
-        int_df <- cached_sheets[["integration"]]
-        d <- build_exp_from_integration(int_df)
-        if (!is.null(d)) return(d)
-      }
+      # --- 路径 1：integration_rev > integration ---
+      int_df <- get_preferred_integration_sheet(cached_sheets)
+      d <- build_exp_from_integration(int_df)
+      if (!is.null(d)) return(d)
 
       # --- 路径 2：SimFit 导出的拟合数据 (simulation sheet)，作为实验数据导入 ---
       if ("simulation" %in% names(cached_sheets)) {
@@ -976,26 +979,28 @@
 
       # Import Expt Data should reset Step 2 state similarly to Data -> Fit.
       inferred_n_inj <- NULL
-      if ("integration" %in% names(sheets) && is.data.frame(sheets[["integration"]])) {
-        inferred_n_inj <- nrow(as.data.frame(sheets[["integration"]]))
+      preferred_int <- get_preferred_integration_sheet(sheets)
+      if (!is.null(preferred_int)) {
+        inferred_n_inj <- nrow(preferred_int)
       } else if ("simulation" %in% names(sheets) && is.data.frame(sheets[["simulation"]])) {
         inferred_n_inj <- nrow(as.data.frame(sheets[["simulation"]]))
-      } else if ("meta" %in% names(sheets) && is.data.frame(sheets[["meta"]]) &&
-                 all(c("parameter", "value") %in% names(sheets[["meta"]]))) {
-        meta_vals <- as.data.frame(sheets[["meta"]], stringsAsFactors = FALSE)
-        idx_n <- which(trimws(as.character(meta_vals$parameter)) == "n_inj")
-        if (length(idx_n) >= 1) {
-          inferred_n_inj <- suppressWarnings(as.integer(meta_vals$value[idx_n[1]]))
+      } else {
+        meta_num <- extract_meta_numeric_map_with_rev_priority(
+          meta_rev_df = sheets[["meta_rev"]],
+          meta_df = sheets[["meta"]]
+        )
+        if ("n_inj" %in% names(meta_num) && !is.na(meta_num[["n_inj"]])) {
+          inferred_n_inj <- suppressWarnings(as.integer(meta_num[["n_inj"]]))
         }
       }
       reset_step2_ui_for_new_dataset(default_n_inj = inferred_n_inj)
 
       # 填充实验参数：仅当有 integration 或 simulation（实验数据）时执行
-      # 优先级：meta（含有效参数）> fit_params > 默认值
+      # 优先级：meta_rev > meta > fit_params > 默认值
       exp_key_cols <- c("H_cell_0_mM", "G_syringe_mM", "V_cell_mL", "V_inj_uL", "n_inj", "V_pre_uL", "Temp_K")
       has_exp_data <- FALSE
-      if ("integration" %in% names(sheets)) {
-        int_df <- sheets[["integration"]]
+      if (!is.null(preferred_int)) {
+        int_df <- preferred_int
         if (!is.null(int_df) && "Ratio_App" %in% colnames(int_df) && "heat_cal_mol" %in% colnames(int_df)) {
           has_exp_data <- TRUE
         }
@@ -1009,89 +1014,94 @@
       if (has_exp_data) {
         meta_has_params <- FALSE
         source_vpre_applied <- FALSE
-        if ("meta" %in% names(sheets)) {
-          meta_df <- sheets[["meta"]]
-          if (!is.null(meta_df) && all(c("parameter", "value") %in% colnames(meta_df))) {
-            # 安全转换：trim 空格后转数值，非数值（空、文本等）变为 NA，避免 coercion 警告
-            vals <- suppressWarnings(as.numeric(trimws(as.character(meta_df$value))))
-            param_vals <- setNames(vals, meta_df$parameter)
-            meta_has_params <- any(vapply(exp_key_cols, function(k) {
-              k %in% names(param_vals) && !is.na(param_vals[[k]])
-            }, logical(1)))
-            if (meta_has_params) {
-              if ("H_cell_0_mM" %in% names(param_vals) && !is.na(param_vals[["H_cell_0_mM"]])) {
-                updateNumericInput(session, "H_cell_0", value = param_vals[["H_cell_0_mM"]])
-              }
-              if ("G_syringe_mM" %in% names(param_vals) && !is.na(param_vals[["G_syringe_mM"]])) {
-                updateNumericInput(session, "G_syringe", value = param_vals[["G_syringe_mM"]])
-              }
-              if ("V_cell_mL" %in% names(param_vals) && !is.na(param_vals[["V_cell_mL"]])) {
-                updateNumericInput(session, "V_cell", value = param_vals[["V_cell_mL"]])
-              }
-              if ("V_inj_uL" %in% names(param_vals) && !is.na(param_vals[["V_inj_uL"]])) {
-                updateNumericInput(session, "V_inj", value = param_vals[["V_inj_uL"]])
-              }
-              if ("V_pre_uL" %in% names(param_vals) && !is.na(param_vals[["V_pre_uL"]])) {
-                values$v_pre_programmatic_update <- TRUE
-                updateNumericInput(session, "V_pre", value = param_vals[["V_pre_uL"]])
-                updateNumericInput(session, "V_init_val", value = param_vals[["V_pre_uL"]])
-                source_vpre_applied <- TRUE
-              }
-              if ("n_inj" %in% names(param_vals) && !is.na(param_vals[["n_inj"]])) {
-                updateNumericInput(session, "n_inj", value = param_vals[["n_inj"]])
-              }
-              if ("Temp_K" %in% names(param_vals) && !is.na(param_vals[["Temp_K"]])) {
-                updateNumericInput(session, "Temp", value = param_vals[["Temp_K"]])
-              }
-              showNotification(tr("import_params_auto_filled", lang()), type = "message", duration = 3)
-            }
+        meta_vals <- extract_meta_numeric_map_with_rev_priority(
+          meta_rev_df = sheets[["meta_rev"]],
+          meta_df = sheets[["meta"]]
+        )
+        meta_has_params <- any(vapply(exp_key_cols, function(k) {
+          k %in% names(meta_vals) && !is.na(meta_vals[[k]])
+        }, logical(1)))
+        if (meta_has_params) {
+          if ("H_cell_0_mM" %in% names(meta_vals) && !is.na(meta_vals[["H_cell_0_mM"]])) {
+            updateNumericInput(session, "H_cell_0", value = meta_vals[["H_cell_0_mM"]])
           }
+          if ("G_syringe_mM" %in% names(meta_vals) && !is.na(meta_vals[["G_syringe_mM"]])) {
+            updateNumericInput(session, "G_syringe", value = meta_vals[["G_syringe_mM"]])
+          }
+          if ("V_cell_mL" %in% names(meta_vals) && !is.na(meta_vals[["V_cell_mL"]])) {
+            updateNumericInput(session, "V_cell", value = meta_vals[["V_cell_mL"]])
+          }
+          if ("V_inj_uL" %in% names(meta_vals) && !is.na(meta_vals[["V_inj_uL"]])) {
+            updateNumericInput(session, "V_inj", value = meta_vals[["V_inj_uL"]])
+          }
+          if ("V_pre_uL" %in% names(meta_vals) && !is.na(meta_vals[["V_pre_uL"]])) {
+            values$v_pre_programmatic_update <- TRUE
+            updateNumericInput(session, "V_pre", value = meta_vals[["V_pre_uL"]])
+            updateNumericInput(session, "V_init_val", value = meta_vals[["V_pre_uL"]])
+            source_vpre_applied <- TRUE
+          }
+          if ("n_inj" %in% names(meta_vals) && !is.na(meta_vals[["n_inj"]])) {
+            updateNumericInput(session, "n_inj", value = meta_vals[["n_inj"]])
+          }
+          if ("Temp_K" %in% names(meta_vals) && !is.na(meta_vals[["Temp_K"]])) {
+            updateNumericInput(session, "Temp", value = meta_vals[["Temp_K"]])
+          }
+          showNotification(tr("import_params_auto_filled", lang()), type = "message", duration = 3)
         }
-        if (!meta_has_params && "fit_params" %in% names(sheets)) {
-          fp_df <- sheets[["fit_params"]]
-          if (!is.null(fp_df) && nrow(fp_df) >= 1 && all(c("parameter", "value") %in% colnames(fp_df))) {
-            param_vals <- setNames(trimws(as.character(fp_df$value)), trimws(as.character(fp_df$parameter)))
-            fp_has_params <- any(vapply(exp_key_cols, function(k) {
-              k %in% names(param_vals) && !is.na(suppressWarnings(as.numeric(param_vals[[k]])))
-            }, logical(1)))
-            if (fp_has_params) {
-              if ("H_cell_0_mM" %in% names(param_vals) && !is.na(suppressWarnings(as.numeric(param_vals[["H_cell_0_mM"]])))) {
-                updateNumericInput(session, "H_cell_0", value = as.numeric(param_vals[["H_cell_0_mM"]]))
-              }
-              if ("G_syringe_mM" %in% names(param_vals) && !is.na(suppressWarnings(as.numeric(param_vals[["G_syringe_mM"]])))) {
-                updateNumericInput(session, "G_syringe", value = as.numeric(param_vals[["G_syringe_mM"]]))
-              }
-              if ("V_cell_mL" %in% names(param_vals) && !is.na(suppressWarnings(as.numeric(param_vals[["V_cell_mL"]])))) {
-                updateNumericInput(session, "V_cell", value = as.numeric(param_vals[["V_cell_mL"]]))
-              }
-              if ("V_inj_uL" %in% names(param_vals) && !is.na(suppressWarnings(as.numeric(param_vals[["V_inj_uL"]])))) {
-                updateNumericInput(session, "V_inj", value = as.numeric(param_vals[["V_inj_uL"]]))
-              }
-              if ("V_pre_uL" %in% names(param_vals) && !is.na(suppressWarnings(as.numeric(param_vals[["V_pre_uL"]])))) {
-                values$v_pre_programmatic_update <- TRUE
-                vpre_num <- as.numeric(param_vals[["V_pre_uL"]])
-                updateNumericInput(session, "V_pre", value = vpre_num)
-                updateNumericInput(session, "V_init_val", value = vpre_num)
-                source_vpre_applied <- TRUE
-              }
-              if ("n_inj" %in% names(param_vals) && !is.na(suppressWarnings(as.numeric(param_vals[["n_inj"]])))) {
-                updateNumericInput(session, "n_inj", value = as.integer(param_vals[["n_inj"]]))
-              }
-              if ("Temp_K" %in% names(param_vals) && !is.na(suppressWarnings(as.numeric(param_vals[["Temp_K"]])))) {
-                updateNumericInput(session, "Temp", value = as.numeric(param_vals[["Temp_K"]]))
-              }
-              showNotification(tr("import_params_from_fit_params", lang()), type = "message", duration = 4)
-            } else {
-              showNotification(tr("import_params_no_source", lang()), type = "warning", duration = 5)
+
+        fp_map <- extract_fit_params_map(sheets[["fit_params"]])
+        fp_restore <- extract_simfit_restore_params(fp_map)
+        fp_has_any <- any(vapply(fp_restore, function(v) is.finite(suppressWarnings(as.numeric(v))), logical(1)))
+        if (fp_has_any) {
+          restore_paths <- parse_active_paths_from_fit_params(fp_map)
+          updateCheckboxGroupInput(session, "active_paths", selected = restore_paths)
+
+          if (is.finite(fp_restore$logK1)) updateSliderInput(session, "logK1", value = fp_restore$logK1)
+          if (is.finite(fp_restore$H1)) updateSliderInput(session, "H1", value = fp_restore$H1)
+          if (is.finite(fp_restore$logK2)) updateSliderInput(session, "logK2", value = fp_restore$logK2)
+          if (is.finite(fp_restore$H2)) updateSliderInput(session, "H2", value = fp_restore$H2)
+          if (is.finite(fp_restore$logK3)) updateSliderInput(session, "logK3", value = fp_restore$logK3)
+          if (is.finite(fp_restore$H3)) updateSliderInput(session, "H3", value = fp_restore$H3)
+          if (is.finite(fp_restore$logK4)) updateSliderInput(session, "logK4", value = fp_restore$logK4)
+          if (is.finite(fp_restore$H4)) updateSliderInput(session, "H4", value = fp_restore$H4)
+          if (is.finite(fp_restore$logK5)) updateSliderInput(session, "logK5", value = fp_restore$logK5)
+          if (is.finite(fp_restore$H5)) updateSliderInput(session, "H5", value = fp_restore$H5)
+          if (is.finite(fp_restore$logK6)) updateSliderInput(session, "logK6", value = fp_restore$logK6)
+          if (is.finite(fp_restore$H6)) updateSliderInput(session, "H6", value = fp_restore$H6)
+
+          if (is.finite(fp_restore$fH)) updateNumericInput(session, "factor_H", value = fp_restore$fH)
+          if (is.finite(fp_restore$fG)) updateNumericInput(session, "factor_G", value = fp_restore$fG)
+          if (is.finite(fp_restore$Offset_cal)) updateSliderInput(session, "heat_offset", value = fp_restore$Offset_cal)
+          if (is.finite(fp_restore$V_init_uL)) {
+            values$v_pre_programmatic_update <- TRUE
+            updateNumericInput(session, "V_init_val", value = fp_restore$V_init_uL)
+            if (!isTRUE(source_vpre_applied)) {
+              updateNumericInput(session, "V_pre", value = fp_restore$V_init_uL)
+              source_vpre_applied <- TRUE
             }
-          } else {
-            showNotification(tr("import_params_no_source", lang()), type = "warning", duration = 5)
           }
+
+          if (!meta_has_params) {
+            if (is.finite(fp_restore$H_cell_0_mM)) updateNumericInput(session, "H_cell_0", value = fp_restore$H_cell_0_mM)
+            if (is.finite(fp_restore$G_syringe_mM)) updateNumericInput(session, "G_syringe", value = fp_restore$G_syringe_mM)
+            if (is.finite(fp_restore$V_cell_mL)) updateNumericInput(session, "V_cell", value = fp_restore$V_cell_mL)
+            if (is.finite(fp_restore$V_inj_uL)) updateNumericInput(session, "V_inj", value = fp_restore$V_inj_uL)
+            if (is.finite(fp_restore$n_inj)) updateNumericInput(session, "n_inj", value = as.integer(fp_restore$n_inj))
+            if (is.finite(fp_restore$Temp_K)) updateNumericInput(session, "Temp", value = fp_restore$Temp_K)
+            if (!isTRUE(source_vpre_applied) && is.finite(fp_restore$V_pre_uL)) {
+              values$v_pre_programmatic_update <- TRUE
+              updateNumericInput(session, "V_pre", value = fp_restore$V_pre_uL)
+              updateNumericInput(session, "V_init_val", value = fp_restore$V_pre_uL)
+              source_vpre_applied <- TRUE
+            }
+          }
+          showNotification(tr("import_params_from_fit_params", lang()), type = "message", duration = 4)
         } else if (!meta_has_params) {
           showNotification(tr("import_params_no_source", lang()), type = "warning", duration = 5)
         }
-        if (!isTRUE(source_vpre_applied) && "integration" %in% names(sheets)) {
-          int_df <- sheets[["integration"]]
+
+        if (!isTRUE(source_vpre_applied) && !is.null(preferred_int)) {
+          int_df <- preferred_int
           if (!is.null(int_df) && "V_titrate_uL" %in% colnames(int_df)) {
             first_v <- suppressWarnings(as.numeric(int_df$V_titrate_uL))
             first_v <- first_v[!is.na(first_v)]
@@ -1104,7 +1114,7 @@
         }
       }
       # 若为 SimFit 导出的拟合数据（无 integration，有 simulation），提示已作为实验数据导入
-      if ("simulation" %in% names(sheets) && !("integration" %in% names(sheets))) {
+      if ("simulation" %in% names(sheets) && is.null(preferred_int)) {
         sim_df <- sheets[["simulation"]]
         if (!is.null(sim_df) && "Ratio_App" %in% colnames(sim_df) && "dQ_App" %in% colnames(sim_df)) {
           showNotification(tr("import_fit_data_as_exp", lang()), type = "message", duration = 4)
