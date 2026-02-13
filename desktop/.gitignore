@@ -1,0 +1,6 @@
+node_modules/
+dist/
+out/
+resources/r-runtime/
+*.log
+.DS_Store

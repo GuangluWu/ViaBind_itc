@@ -1,0 +1,68 @@
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import process from "node:process";
+
+const scriptPath = fileURLToPath(import.meta.url);
+const desktopDir = path.resolve(path.dirname(scriptPath), "..");
+const electronBin = process.platform === "win32"
+  ? path.join(desktopDir, "node_modules", ".bin", "electron.cmd")
+  : path.join(desktopDir, "node_modules", ".bin", "electron");
+
+if (!existsSync(electronBin)) {
+  console.error(`Smoke failed: electron binary missing (${electronBin}). Run npm install first.`);
+  process.exit(1);
+}
+
+const child = spawn(electronBin, [".", "--smoke-test"], {
+  cwd: desktopDir,
+  env: {
+    ...process.env,
+    ITCSUITE_SMOKE_TEST: "1",
+    ITCSUITE_USE_BUNDLED_R: process.env.ITCSUITE_USE_BUNDLED_R || "0"
+  },
+  stdio: ["ignore", "pipe", "pipe"]
+});
+
+let stdout = "";
+let stderr = "";
+let sawSmokeMarker = false;
+
+const timeout = setTimeout(() => {
+  child.kill("SIGKILL");
+}, 120000);
+
+child.stdout.on("data", (chunk) => {
+  const text = chunk.toString("utf8");
+  stdout += text;
+  process.stdout.write(text);
+  if (text.includes("ITCSUITE_ELECTRON_SMOKE")) {
+    sawSmokeMarker = true;
+  }
+});
+
+child.stderr.on("data", (chunk) => {
+  const text = chunk.toString("utf8");
+  stderr += text;
+  process.stderr.write(text);
+});
+
+child.on("close", (code) => {
+  clearTimeout(timeout);
+  if (code !== 0) {
+    console.error(`Smoke failed: electron exited with code ${code}.`);
+    process.exit(code ?? 1);
+  }
+  if (!sawSmokeMarker) {
+    console.error("Smoke failed: marker ITCSUITE_ELECTRON_SMOKE not found in stdout.");
+    process.exit(1);
+  }
+  process.exit(0);
+});
+
+child.on("error", (err) => {
+  clearTimeout(timeout);
+  console.error(`Smoke failed: ${err.message}`);
+  process.exit(1);
+});

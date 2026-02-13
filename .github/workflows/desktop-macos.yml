@@ -1,0 +1,72 @@
+name: ITCSuite Desktop macOS
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "ITCSuiteWeb/scripts/launch_shiny.R"
+      - "ITCSuiteWeb/**"
+      - "ITCprocessor/**"
+      - "ITCsimfit/**"
+      - "ITCgraph/**"
+      - ".github/workflows/desktop-macos.yml"
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "desktop/**"
+      - "ITCSuiteWeb/scripts/launch_shiny.R"
+      - "ITCSuiteWeb/**"
+      - "ITCprocessor/**"
+      - "ITCsimfit/**"
+      - "ITCgraph/**"
+      - ".github/workflows/desktop-macos.yml"
+
+jobs:
+  desktop-macos:
+    name: desktop-macos
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "4.3"
+
+      - name: Install R test dependencies
+        run: |
+          Rscript -e 'install.packages(c("testthat","shinytest2","shiny","rootSolve","tidyverse","DT","DEoptim","readxl","writexl","plotly","patchwork","jsonlite","later","digest","MASS","gridExtra","colourpicker"), repos="https://cloud.r-project.org")'
+
+      - name: Run existing strict test suites
+        run: Rscript tests/run_all.R --strict
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+
+      - name: Build bundled R runtime
+        working-directory: desktop
+        run: ./scripts/build-r-runtime.sh
+
+      - name: Desktop smoke test
+        working-directory: desktop
+        run: npm run smoke
+
+      - name: Build macOS artifacts
+        working-directory: desktop
+        run: npm run dist
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: itcsuite-desktop-macos
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/*.zip

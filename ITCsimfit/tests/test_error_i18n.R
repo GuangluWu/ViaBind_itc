@@ -6,12 +6,12 @@
 # 设置测试环境
 # 不使用 testthat，使用基础 R 测试
 
-# 加载必要的模块
-source("R/constants.R")
-source("R/utils.R")
+# 加载必要的模块（加载到当前测试环境，避免依赖全局环境污染）
+source("R/constants.R", local = TRUE)
+source("R/utils.R", local = TRUE)
 
 # 模拟翻译函数（如果不存在）
-if(!exists("tr")) {
+if(!exists("tr", inherits = FALSE)) {
   # 加载翻译表
   if(file.exists("i18n_translation_table.csv")) {
     i18n_table <- read.csv("i18n_translation_table.csv", stringsAsFactors = FALSE)
@@ -135,8 +135,12 @@ cat("\n### 2. 测试 handle_error 函数的国际化\n")
 
 # 创建临时日志文件
 temp_log <- tempfile(fileext = ".log")
-old_file_paths <- if(exists("FILE_PATHS")) FILE_PATHS else NULL
-FILE_PATHS <- list(error_log = temp_log)
+old_file_paths <- if(exists("FILE_PATHS", envir = .GlobalEnv, inherits = FALSE)) {
+  get("FILE_PATHS", envir = .GlobalEnv, inherits = FALSE)
+} else {
+  NULL
+}
+assign("FILE_PATHS", list(error_log = temp_log, session_log = temp_log), envir = .GlobalEnv)
 
 # 测试 2.1: 带错误代码的错误处理 - 中文
 run_test("handle_error 带错误代码（中文）", {
@@ -254,9 +258,11 @@ run_test("safe_execute 集成错误代码", {
 
 # 恢复原始 FILE_PATHS
 if(!is.null(old_file_paths)) {
-  FILE_PATHS <- old_file_paths
+  assign("FILE_PATHS", old_file_paths, envir = .GlobalEnv)
 } else {
-  rm(FILE_PATHS)
+  if (exists("FILE_PATHS", envir = .GlobalEnv, inherits = FALSE)) {
+    rm("FILE_PATHS", envir = .GlobalEnv)
+  }
 }
 
 # 删除临时日志文件

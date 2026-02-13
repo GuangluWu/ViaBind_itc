@@ -34,10 +34,7 @@ run_testthat_file <- function(path, label = NULL) {
   lbl <- if (is.null(label)) basename(path) else label
   cat(sprintf("\n[TESTTHAT FILE] %s\n", lbl))
   ok <- tryCatch({
-    testthat::with_reporter(
-      reporter = testthat::StopReporter$new(),
-      code = testthat::test_file(path, reporter = "summary")
-    )
+    testthat::test_file(path, reporter = testthat::StopReporter$new())
     TRUE
   }, error = function(e) {
     cat(sprintf("[FAIL] %s: %s\n", lbl, conditionMessage(e)))
@@ -56,10 +53,7 @@ run_testthat_dir <- function(path, label = NULL) {
   lbl <- if (is.null(label)) basename(path) else label
   cat(sprintf("\n[TESTTHAT DIR] %s\n", lbl))
   ok <- tryCatch({
-    testthat::with_reporter(
-      reporter = testthat::StopReporter$new(),
-      code = testthat::test_dir(path, reporter = "summary")
-    )
+    testthat::test_dir(path, reporter = testthat::StopReporter$new())
     TRUE
   }, error = function(e) {
     cat(sprintf("[FAIL] %s: %s\n", lbl, conditionMessage(e)))

@@ -1,0 +1,73 @@
+{
+  "name": "itcsuite-desktop",
+  "version": "0.1.0",
+  "description": "ITCSuite desktop app powered by Electron + local Shiny backend",
+  "main": "src/main/index.js",
+  "engines": {
+    "node": ">=20 <21 || >=22 <23 || >=24 <25"
+  },
+  "scripts": {
+    "preinstall": "node scripts/check-node-version.mjs",
+    "dev": "electron .",
+    "smoke": "node scripts/smoke-desktop.mjs",
+    "pack:dir": "electron-builder --mac dir",
+    "dist": "electron-builder --mac dmg zip"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.itcsuite.desktop",
+    "productName": "ITCSuite",
+    "asar": true,
+    "files": [
+      "src/main/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../ITCSuiteWeb",
+        "to": "itcsuite/ITCSuiteWeb",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../ITCprocessor",
+        "to": "itcsuite/ITCprocessor",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../ITCsimfit",
+        "to": "itcsuite/ITCsimfit",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../ITCgraph",
+        "to": "itcsuite/ITCgraph",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/r-runtime",
+        "to": "r-runtime",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.science"
+    }
+  }
+}

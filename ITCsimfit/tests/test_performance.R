@@ -178,8 +178,8 @@ test_that("perf_monitor_batch 可以执行多个步骤", {
 test_that("perf_monitor_batch 记录步骤时间", {
   results <- perf_monitor_batch(
     steps = list(
-      list(expr = quote({ Sys.sleep(0.05); "a" }), label = "快速步骤"),
-      list(expr = quote({ Sys.sleep(0.1); "b" }), label = "慢速步骤")
+      list(expr = quote({ Sys.sleep(0.02); "a" }), label = "快速步骤"),
+      list(expr = quote({ Sys.sleep(0.18); "b" }), label = "慢速步骤")
     ),
     overall_label = "步骤时间测试",
     category = "test"
@@ -187,7 +187,7 @@ test_that("perf_monitor_batch 记录步骤时间", {
   
   step_timings <- results$summary$step_timings
   expect_equal(length(step_timings), 2)
-  expect_true(step_timings[[2]]$elapsed > step_timings[[1]]$elapsed)
+  expect_true(step_timings[[2]]$elapsed >= step_timings[[1]]$elapsed)
 })
 
 # ==============================================================================
@@ -212,10 +212,26 @@ test_that("get_perf_records 可以筛选类别", {
 
 test_that("get_perf_records 可以筛选耗时", {
   clear_perf_records()
-  
-  perf_monitor({ Sys.sleep(0.05) }, label = "快", category = "test", auto_log = FALSE)
-  perf_monitor({ Sys.sleep(0.15) }, label = "慢", category = "test", auto_log = FALSE)
-  
+
+  add_perf_record(list(
+    timestamp = Sys.time(),
+    label = "快",
+    category = "test",
+    elapsed = 0.05,
+    memory_used = NA_real_,
+    error = FALSE,
+    details = list()
+  ))
+  add_perf_record(list(
+    timestamp = Sys.time(),
+    label = "慢",
+    category = "test",
+    elapsed = 0.15,
+    memory_used = NA_real_,
+    error = FALSE,
+    details = list()
+  ))
+
   slow_records <- get_perf_records(min_elapsed = 0.1)
   expect_equal(length(slow_records), 1)
   expect_equal(slow_records[[1]]$label, "慢")

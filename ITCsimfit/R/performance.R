@@ -38,7 +38,8 @@ PERF_CONFIG <- list(
   max_records = 1000,
   
   # 性能日志文件路径
-  log_file = "performance.log",
+  # 默认不落盘；如需落盘可通过 set_perf_config(log_file = "performance.log") 显式开启
+  log_file = "",
   
   # 是否在控制台打印
   console_output = FALSE,
@@ -236,12 +237,16 @@ log_perf_record <- function(record) {
     msg <- paste0(msg, " | ", details_str)
   }
   
-  # 写入日志文件
-  tryCatch({
-    cat(msg, "\n", file = PERF_CONFIG$log_file, append = TRUE)
-  }, error = function(e) {
-    warning("无法写入性能日志文件: ", e$message)
-  })
+  # 写入日志文件（仅在显式配置了 log_file 时启用）
+  log_file <- as.character(PERF_CONFIG$log_file)[1]
+  if (is.na(log_file)) log_file <- ""
+  if (nzchar(trimws(log_file))) {
+    tryCatch({
+      cat(msg, "\n", file = log_file, append = TRUE)
+    }, error = function(e) {
+      warning("无法写入性能日志文件: ", e$message)
+    })
+  }
   
   # 控制台输出
   if (PERF_CONFIG$console_output) {

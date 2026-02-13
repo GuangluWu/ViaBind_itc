@@ -1,4 +1,14 @@
 strict_smoke <- identical(tolower(Sys.getenv("ITCSUITE_STRICT_SMOKE", unset = "false")), "true")
+repo_root <- Sys.getenv("ITCSUITE_REPO_ROOT", unset = "")
+if (!nzchar(repo_root)) {
+  repo_root <- normalizePath(file.path(getwd(), "..", ".."), winslash = "/", mustWork = FALSE)
+}
+web_app_dir <- normalizePath(file.path(repo_root, "ITCSuiteWeb"), winslash = "/", mustWork = FALSE)
+simfit_bridge_file <- normalizePath(
+  file.path(repo_root, "ITCsimfit", "R", "bridge_step1_import.R"),
+  winslash = "/",
+  mustWork = FALSE
+)
 
 if (!requireNamespace("testthat", quietly = TRUE)) {
   stop("Smoke tests require package `testthat`.")
@@ -6,11 +16,11 @@ if (!requireNamespace("testthat", quietly = TRUE)) {
   if (requireNamespace("shinytest2", quietly = TRUE)) {
     testthat::test_that("app launches", {
       app <- shinytest2::AppDriver$new(
-        app_dir = "/Users/guanglu/Documents/myScript/ITCSuite/ITCSuiteWeb",
+        app_dir = web_app_dir,
         name = "app-launch-smoke",
         load_timeout = 60000
       )
-      testthat::expect_true(app$get_value(input = "main_tabs") %in% c("Step 1 Baseline & Integration", "Step 2 Simulation & Fitting", "Step 3 Plot & Export"))
+      testthat::expect_true(app$get_value(input = "main_tabs") %in% c("step1", "step2", "step3"))
       app$stop()
     })
   } else {
@@ -20,7 +30,7 @@ if (!requireNamespace("testthat", quietly = TRUE)) {
     message("Skipping shinytest2 app launch smoke: shinytest2 not installed.")
   }
 
-  source("/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/bridge_step1_import.R")
+  source(simfit_bridge_file)
 
   make_signature_consumer <- function() {
     state <- new.env(parent = emptyenv())
