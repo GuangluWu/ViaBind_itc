@@ -4,13 +4,39 @@
   # 对外接口：output$export_params、publish_step2_plot_payload()、output$simfit_downloadData。
   # 副作用：写出 xlsx、更新 bridge channel、触发通知与 tab 切换。
   # 变更历史：2026-02-12 - 增加 Phase 4 注释规范样板。
+  observeEvent(input$export_params_trigger, {
+    if (lang_switching()) return()
+    checked_ids <- as.character(values$param_checked_ids %||% character(0))
+    if (length(checked_ids) == 0) {
+      showNotification(tr("snapshot_export_none_selected", lang()), type = "warning", duration = 4)
+      return()
+    }
+    session$sendCustomMessage("trigger-download", "export_params")
+  }, ignoreInit = TRUE)
+
   # --- 5. 导出参数快照 (xlsx，参数名带单位后缀) ---
   output$export_params <- downloadHandler(
     filename = function() {
-      paste("ITC_Snapshots_", format(Sys.time(), "%Y%m%d_%H%M"), ".xlsx", sep="")
+      export_bridge_build_params_snapshot_filename(
+        base_name = values$imported_xlsx_base_name,
+        fallback_name = values$imported_xlsx_filename,
+        now = Sys.time()
+      )
     },
     content = function(file) {
-      export_df <- values$param_list
+      export_df <- as.data.frame(values$param_list)
+      checked_ids <- as.character(values$param_checked_ids %||% character(0))
+      if (!is.null(export_df) && nrow(export_df) > 0 && "row_id" %in% colnames(export_df)) {
+        if (length(checked_ids) > 0) {
+          export_df <- export_df[export_df$row_id %in% checked_ids, , drop = FALSE]
+        } else {
+          export_df <- export_df[0, , drop = FALSE]
+        }
+      }
+      if ("row_id" %in% colnames(export_df)) {
+        export_df$row_id <- NULL
+      }
+      if (length(checked_ids) == 0) return(invisible(NULL))
       # 重命名实验条件列，加单位后缀（内部名 → 文件名）
       col_rename <- c(
         "H_cell_0" = "H_cell_0_mM", "G_syringe" = "G_syringe_mM",

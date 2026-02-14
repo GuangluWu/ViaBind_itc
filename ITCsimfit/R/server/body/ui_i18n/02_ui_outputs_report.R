@@ -30,12 +30,18 @@
     actionButton("save_params", tr("btn_save_snapshot", lang()), class = "btn-success btn-block")
   })
   
-  output$clear_params_button <- renderUI({
-    actionButton("clear_params", tr("btn_clear_all", lang()), class = "btn-danger btn-block")
+  output$delete_params_button <- renderUI({
+    actionButton("delete_selected_params", tr("btn_delete_selected", lang()), class = "btn-danger btn-block")
   })
   
   output$export_params_button <- renderUI({
-    downloadButton("export_params", tr("btn_export_params", lang()), class="btn-success btn-block")
+    tagList(
+      actionButton("export_params_trigger", tr("btn_export_params", lang()), class = "btn-success btn-block"),
+      tags$div(
+        style = "position:absolute; left:-9999px; top:auto; width:1px; height:1px; overflow:hidden;",
+        downloadButton("export_params", label = "hidden", class = "btn-default btn-xs")
+      )
+    )
   })
   
   output$import_params_file_input <- renderUI({

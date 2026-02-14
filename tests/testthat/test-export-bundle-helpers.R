@@ -114,3 +114,35 @@ testthat::test_that("resolve_step2_plot_source returns stable source label", {
   testthat::expect_equal(file_case$source, "file")
   testthat::expect_equal(file_case$source_label, "fit.xlsx")
 })
+
+testthat::test_that("sanitize_base_name prefers cleaned base_name first", {
+  out <- export_bridge_sanitize_base_name(
+    base_name = "sample_processed_20260214_0900",
+    fallback_name = "ignored.xlsx"
+  )
+  testthat::expect_equal(out, "sample")
+})
+
+testthat::test_that("sanitize_base_name falls back to filename then ITC", {
+  from_file <- export_bridge_sanitize_base_name(
+    base_name = "",
+    fallback_name = "demo_fitted_20260214_0900.xlsx"
+  )
+  testthat::expect_equal(from_file, "demo")
+
+  from_default <- export_bridge_sanitize_base_name(
+    base_name = "",
+    fallback_name = ""
+  )
+  testthat::expect_equal(from_default, "ITC")
+})
+
+testthat::test_that("build_params_snapshot_filename uses required format", {
+  now <- as.POSIXct("2026-02-14 10:11:12", tz = "UTC")
+  file_name <- export_bridge_build_params_snapshot_filename(
+    base_name = "abc",
+    fallback_name = "unused.xlsx",
+    now = now
+  )
+  testthat::expect_equal(file_name, "abc_FitParams_20260214_101112.xlsx")
+})

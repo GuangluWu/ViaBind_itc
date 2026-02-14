@@ -17,6 +17,9 @@
   # 空值策略：safe_input_get/safe_rv_get 吞掉读取异常并返回 NULL/默认值。
   # 输出保证：状态更新函数返回 invisible(TRUE/FALSE) 或结构化 list，避免抛出未处理异常。
   values <- reactiveValues(is_fitting = FALSE, param_list = data.frame(), error_analysis = NULL, 
+                           param_checked_ids = character(0), # snapshot table checked row ids
+                           snapshot_row_seq = 0L,            # monotonic sequence for snapshot row_id
+                           param_active_row_id = NA_character_, # highlighted snapshot row id
                            error_analysis_info = NULL,  # 存储误差分析可靠性信息
                            residuals_data = NULL,       # 存储残差数据（用于残差图）
                            correlation_matrix = NULL,   # 存储参数相关性矩阵
@@ -233,6 +236,7 @@
     values$correlation_matrix <- NULL
     values$residual_subtab <- "res1"
     values$current_report <- NULL
+    values$param_active_row_id <- NA_character_
     # New dataset should not carry snapshot table row focus.
     tryCatch(DT::selectRows(DT::dataTableProxy("param_table"), NULL), error = function(e) NULL)
     invisible(TRUE)

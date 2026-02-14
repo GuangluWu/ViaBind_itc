@@ -2,6 +2,32 @@
 # export_bundle_helpers.R - Step2 export/bridge helper functions
 # ==============================================================================
 
+export_bridge_sanitize_base_name <- function(base_name = NULL, fallback_name = NULL, default_name = "ITC") {
+  pick_first <- function(x) {
+    if (is.null(x) || length(x) == 0) return("")
+    out <- trimws(as.character(x[[1]]))
+    if (!nzchar(out)) return("")
+    out
+  }
+
+  base <- pick_first(base_name)
+  if (!nzchar(base)) {
+    base <- tools::file_path_sans_ext(basename(pick_first(fallback_name)))
+  }
+  base <- tools::file_path_sans_ext(base)
+  base <- sub("_(processed|fitted)_\\d{8}_\\d{4}$", "", base)
+  base <- gsub("[[:space:]/\\\\]+", "_", base)
+  base <- gsub("_+", "_", base)
+  base <- gsub("^_+|_+$", "", base)
+  if (!nzchar(base)) base <- default_name
+  base
+}
+
+export_bridge_build_params_snapshot_filename <- function(base_name = NULL, fallback_name = NULL, now = Sys.time()) {
+  clean_base <- export_bridge_sanitize_base_name(base_name, fallback_name, default_name = "ITC")
+  paste0(clean_base, "_FitParams_", format(now, "%Y%m%d_%H%M%S"), ".xlsx")
+}
+
 export_bridge_build_fit_params_df <- function(safe_inp, active_paths_save, rss_info) {
   data.frame(
     parameter = c(

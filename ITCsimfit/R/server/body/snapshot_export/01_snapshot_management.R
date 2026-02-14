@@ -18,6 +18,80 @@
     TRUE
   }
 
+  snapshot_expected_cols <- c(
+    "Name", "RSS", "Model", "logK1", "H1", "logK2", "H2",
+    "logK3", "H3", "logK4", "H4", "logK5", "H5", "logK6", "H6",
+    "fH", "fG", "V_init", "Offset",
+    "logK1_SE", "H1_SE", "logK2_SE", "H2_SE",
+    "logK3_SE", "H3_SE", "logK4_SE", "H4_SE",
+    "logK5_SE", "H5_SE", "logK6_SE", "H6_SE",
+    "fH_SE", "fG_SE",
+    "V_init_SE", "Offset_SE",
+    "H_cell_0", "G_syringe", "V_cell", "V_inj",
+    "n_inj", "V_pre", "Temp"
+  )
+  snapshot_rowid_col <- "row_id"
+
+  next_snapshot_row_ids <- function(n = 1L) {
+    n_int <- suppressWarnings(as.integer(n)[1])
+    if (!is.finite(n_int) || n_int <= 0L) return(character(0))
+    seq_now <- suppressWarnings(as.integer(values$snapshot_row_seq)[1])
+    if (!is.finite(seq_now)) seq_now <- 0L
+    seq_vec <- seq.int(from = seq_now + 1L, length.out = n_int)
+    values$snapshot_row_seq <- seq_vec[length(seq_vec)]
+    paste0("snap_", seq_vec)
+  }
+
+  normalize_snapshot_table <- function(df, add_row_id = TRUE) {
+    if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) {
+      return(data.frame(stringsAsFactors = FALSE))
+    }
+
+    out <- as.data.frame(df, stringsAsFactors = FALSE)
+    valid_cols <- intersect(colnames(out), c(snapshot_expected_cols, snapshot_rowid_col))
+    if (length(valid_cols) == 0) {
+      return(normalize_snapshot_table(data.frame(), add_row_id = add_row_id))
+    }
+    out <- out[, valid_cols, drop = FALSE]
+
+    missing_cols <- setdiff(snapshot_expected_cols, colnames(out))
+    for (col in missing_cols) out[[col]] <- NA
+    if (!snapshot_rowid_col %in% colnames(out)) out[[snapshot_rowid_col]] <- NA_character_
+
+    out[[snapshot_rowid_col]] <- trimws(as.character(out[[snapshot_rowid_col]]))
+    if (isTRUE(add_row_id) && nrow(out) > 0) {
+      bad_id_idx <- which(is.na(out[[snapshot_rowid_col]]) | !nzchar(out[[snapshot_rowid_col]]))
+      if (length(bad_id_idx) > 0) {
+        out[[snapshot_rowid_col]][bad_id_idx] <- next_snapshot_row_ids(length(bad_id_idx))
+      }
+      dup_idx <- duplicated(out[[snapshot_rowid_col]]) | duplicated(out[[snapshot_rowid_col]], fromLast = TRUE)
+      if (any(dup_idx)) {
+        out[[snapshot_rowid_col]][dup_idx] <- next_snapshot_row_ids(sum(dup_idx))
+      }
+    }
+
+    out <- out[, c(snapshot_expected_cols, snapshot_rowid_col), drop = FALSE]
+    rownames(out) <- NULL
+    out
+  }
+
+  observe({
+    normalized_df <- normalize_snapshot_table(values$param_list, add_row_id = TRUE)
+    checked_now <- as.character(values$param_checked_ids %||% character(0))
+    valid_ids <- as.character(normalized_df[[snapshot_rowid_col]] %||% character(0))
+    checked_keep <- checked_now[checked_now %in% valid_ids]
+    active_now <- as.character(values$param_active_row_id %||% "")[1]
+    active_keep <- if (nzchar(active_now) && active_now %in% valid_ids) active_now else NA_character_
+
+    changed_df <- !isTRUE(all.equal(values$param_list, normalized_df, check.attributes = FALSE))
+    changed_checked <- !isTRUE(identical(checked_now, checked_keep))
+    changed_active <- !isTRUE(identical(active_now, active_keep))
+
+    if (changed_df) values$param_list <- normalized_df
+    if (changed_checked) values$param_checked_ids <- checked_keep
+    if (changed_active) values$param_active_row_id <- active_keep
+  })
+
   observeEvent(input$save_params, {
     # [修复] 防止在语言切换时触发
     if(lang_switching()) return()
@@ -155,29 +229,47 @@
       V_inj=input$V_inj, n_inj=input$n_inj, V_pre=input$V_pre, Temp=input$Temp,
       stringsAsFactors=FALSE
     )
-    
-    values$param_list <- rbind(values$param_list, new_row)
+
+    new_row <- normalize_snapshot_table(new_row, add_row_id = TRUE)
+    values$param_list <- bind_rows(
+      new_row,
+      normalize_snapshot_table(values$param_list, add_row_id = TRUE)
+    )
+    values$param_active_row_id <- as.character(new_row[[snapshot_rowid_col]][1] %||% NA_character_)
     updateTextInput(session, "snap_name", value = "") 
   })
 
-  # --- [新增] 清除所有快照 (Modal 确认) ---
-  observeEvent(input$clear_params, {
+  # --- [新增] 删除选中快照 (Modal 确认) ---
+  observeEvent(input$delete_selected_params, {
     # [修复] 防止在语言切换时触发
     if(lang_switching()) return()
+    checked_ids <- as.character(values$param_checked_ids %||% character(0))
+    if (length(checked_ids) == 0) {
+      showNotification(tr("snapshot_delete_none", lang()), type = "warning")
+      return()
+    }
     showModal(modalDialog(
-      title = tr("snapshot_clear_confirm_title", lang()),
-      tr("snapshot_clear_confirm_msg", lang()),
+      title = tr("snapshot_delete_confirm_title", lang()),
+      tr("snapshot_delete_confirm_msg", lang()),
       footer = tagList(
-        modalButton(tr("snapshot_clear_confirm_cancel", lang())),
-        actionButton("confirm_clear", tr("snapshot_clear_confirm_ok", lang()), class = "btn-danger")
+        modalButton(tr("snapshot_delete_confirm_cancel", lang())),
+        actionButton("confirm_delete_params", tr("snapshot_delete_confirm_ok", lang()), class = "btn-danger")
       )
     ))
   })
-  
-  observeEvent(input$confirm_clear, {
-    values$param_list <- data.frame()
+
+  observeEvent(input$confirm_delete_params, {
+    df <- normalize_snapshot_table(values$param_list, add_row_id = TRUE)
+    checked_ids <- as.character(values$param_checked_ids %||% character(0))
+    if (nrow(df) > 0 && length(checked_ids) > 0) {
+      df <- df[!df[[snapshot_rowid_col]] %in% checked_ids, , drop = FALSE]
+    }
+    values$param_list <- df
+    values$param_checked_ids <- character(0)
+    if (nrow(df) == 0) values$param_active_row_id <- NA_character_
+    tryCatch(DT::selectRows(DT::dataTableProxy("param_table"), NULL), error = function(e) NULL)
     removeModal()
-    showNotification(tr("snapshot_clear_success", lang()), type = "message")
+    showNotification(tr("snapshot_delete_success", lang()), type = "message")
   })
 
   # --- [新增] 恢复默认参数 (Model 确认) ---
@@ -229,59 +321,164 @@
     showNotification(tr("reset_success", lang()), type = "message")
   })
 
-  # --- 2. 渲染表格 (修改：倒序显示，最新的在最上面) ---
-  output$param_table <- renderDT({ 
-    df <- values$param_list
-    
-    # 如果数据框为空，返回空表格
-    if(is.null(df) || nrow(df) == 0) {
-      return(datatable(data.frame(), 
-                      options=list(dom='t'), 
-                      rownames=FALSE))
+  # --- 2. 渲染表格（支持勾选、全选） ---
+  output$param_table <- renderDT({
+    df <- normalize_snapshot_table(values$param_list, add_row_id = FALSE)
+
+    if (is.null(df) || nrow(df) == 0) {
+      return(datatable(
+        data.frame(),
+        options = list(dom = "t"),
+        rownames = FALSE
+      ))
     }
-    
-    # 确保 df 是数据框且列名有效
-    # 移除任何意外的列名（比如翻译后的列名）
-    # 只保留预期的列名
-    expected_cols <- c("Name", "RSS", "Model", "logK1", "H1", "logK2", "H2", 
-                       "logK3", "H3", "logK4", "H4", "logK5", "H5", "logK6", "H6",
-                       "fH", "fG", "V_init", "Offset",
-                       "logK1_SE", "H1_SE", "logK2_SE", "H2_SE",
-                       "logK3_SE", "H3_SE", "logK4_SE", "H4_SE",
-                       "logK5_SE", "H5_SE", "logK6_SE", "H6_SE",
-                       "fH_SE", "fG_SE", 
-                       "V_init_SE", "Offset_SE",
-                       "H_cell_0", "G_syringe", "V_cell", "V_inj", 
-                       "n_inj", "V_pre", "Temp")
-    
-    # 只保留存在的列（避免列名不匹配的错误）
-    valid_cols <- intersect(colnames(df), expected_cols)
-    if(length(valid_cols) == 0) {
-      # 如果没有有效列，返回空表格
-      return(datatable(data.frame(), 
-                      options=list(dom='t'), 
-                      rownames=FALSE))
-    }
-    
-    # 只选择有效列
-    df <- df[, valid_cols, drop = FALSE]
-    
-    # 如果有数据，进行倒序排列
-    if(nrow(df) > 0) df <- df[nrow(df):1, ]
-    
-    datatable(df, 
-              options=list(
-                dom='tp', 
-                pageLength=5, 
-                scrollX=TRUE,
-                scrollY = "120px",  # 固定表头，设置滚动高度（减小以让两行就能滚动）
-                scrollCollapse = FALSE  # 改为 FALSE，确保即使内容少也显示滚动区域
-              ), 
-              selection='single',
-              rownames=FALSE) 
-  })
-  
-  # --- 3. 点击表格加载参数 (修改：适配倒序逻辑) ---
+
+    checked_ids <- as.character(values$param_checked_ids %||% character(0))
+    active_id <- as.character(values$param_active_row_id %||% "")[1]
+    if (is.na(active_id) || !nzchar(active_id)) active_id <- ""
+    active_id_js <- gsub("\\\\", "\\\\\\\\", active_id)
+    active_id_js <- gsub("'", "\\\\'", active_id_js, fixed = TRUE)
+    select_col <- vapply(df[[snapshot_rowid_col]], function(id) {
+      is_checked <- id %in% checked_ids
+      sprintf(
+        "<input type='checkbox' class='snap-select-row' data-row-id='%s' %s/>",
+        htmltools::htmlEscape(id),
+        if (is_checked) "checked='checked'" else ""
+      )
+    }, character(1))
+
+    display_df <- df
+    display_df[[".select"]] <- select_col
+    display_df <- display_df[, c(".select", snapshot_expected_cols, snapshot_rowid_col), drop = FALSE]
+    select_all_title <- htmltools::htmlEscape(tr("snapshot_select_all", lang()))
+    colnames(display_df)[1] <- sprintf("<input type='checkbox' class='snap-select-all' title='%s'/>", select_all_title)
+
+    # DataTables column index is 0-based.
+    rowid_col_idx <- ncol(display_df) - 1L
+    dt_callback <- JS(sprintf(
+      "var rowIdCol = %d;
+       var activeRowId = '%s';
+       var nsSelect = '.snapSelect';
+       var nsRow = '.snapRow';
+       var nsHead = '.snapHead';
+       var nsDraw = '.snapDraw';
+       var $container = $(table.table().container());
+       var $body = $(table.table().body());
+       var $header = $(table.table().header());
+       function syncSelectAll() {
+         var allRows = table.$('input.snap-select-row');
+         var checkedRows = table.$('input.snap-select-row:checked');
+         var allBox = $header.find('input.snap-select-all');
+         if (!allBox.length) return;
+         if (allRows.length === 0) {
+           allBox.prop('checked', false);
+           allBox.prop('indeterminate', false);
+           return;
+         }
+         allBox.prop('checked', checkedRows.length === allRows.length);
+         allBox.prop('indeterminate', checkedRows.length > 0 && checkedRows.length < allRows.length);
+       }
+       function emitChecked() {
+         var ids = [];
+         table.$('input.snap-select-row:checked').each(function() {
+           ids.push($(this).attr('data-row-id'));
+         });
+         Shiny.setInputValue(
+           'param_table_checked_payload',
+           {row_ids: ids, nonce: Date.now()},
+           {priority: 'event'}
+         );
+         syncSelectAll();
+       }
+       function emitRowClick(trNode) {
+         var rowApi = table.row(trNode);
+         var rowIndex = rowApi.index();
+         if (rowIndex === undefined || rowIndex === null) return;
+         var rowData = rowApi.data();
+         if (!rowData || rowData.length <= rowIdCol) return;
+         var rowId = String(rowData[rowIdCol] || '');
+         activeRowId = rowId;
+         Shiny.setInputValue(
+           'param_table_row_activate',
+           {row_id: rowId, row_index: rowIndex + 1, nonce: Date.now()},
+           {priority: 'event'}
+         );
+         markActiveById(activeRowId);
+       }
+       function markActiveById(id) {
+         table.rows({page: 'current'}).every(function() {
+           var rowData = this.data();
+           var rowId = (rowData && rowData.length > rowIdCol) ? String(rowData[rowIdCol] || '') : '';
+           $(this.node()).toggleClass('snap-row-active', !!id && rowId === id);
+         });
+       }
+       $container.off(nsSelect);
+       $body.off(nsRow);
+       $header.off(nsHead);
+       table.off('draw.dt' + nsDraw);
+       $container.on('mousedown' + nsSelect, 'input.snap-select-row', function(e) {
+         e.stopPropagation();
+       });
+       $container.on('click' + nsSelect, 'input.snap-select-row', function(e) {
+         e.stopPropagation();
+         e.stopImmediatePropagation();
+       });
+       $container.on('change' + nsSelect, 'input.snap-select-row', function(e) {
+         e.stopPropagation();
+         emitChecked();
+       });
+       $body.on('click' + nsRow, 'tr', function(e) {
+         if ($(e.target).closest('input.snap-select-row').length) return;
+         emitRowClick(this);
+       });
+       $header.on('click' + nsHead, 'input.snap-select-all', function(e) {
+         e.stopPropagation();
+         var checked = $(this).prop('checked');
+         table.$('input.snap-select-row').prop('checked', checked);
+         emitChecked();
+       });
+       table.on('draw.dt' + nsDraw, function() {
+         syncSelectAll();
+         markActiveById(activeRowId);
+       });
+       syncSelectAll();
+       markActiveById(activeRowId);",
+      rowid_col_idx,
+      active_id_js
+    ))
+
+    datatable(
+      display_df,
+      escape = FALSE,
+      rownames = FALSE,
+      selection = "none",
+      options = list(
+        dom = "tp",
+        pageLength = 5,
+        scrollX = TRUE,
+        scrollY = "120px",
+        scrollCollapse = FALSE,
+        searching = FALSE,
+        ordering = FALSE,
+        columnDefs = list(
+          list(orderable = FALSE, targets = c(0, rowid_col_idx)),
+          list(className = "dt-center", targets = 0),
+          list(visible = FALSE, targets = rowid_col_idx)
+        )
+      ),
+      callback = dt_callback
+    )
+  }, server = FALSE)
+
+  observeEvent(input$param_table_checked_payload, {
+    payload <- input$param_table_checked_payload
+    checked_in <- unique(as.character(payload$row_ids %||% character(0)))
+    df <- normalize_snapshot_table(values$param_list, add_row_id = FALSE)
+    valid_ids <- as.character(df[[snapshot_rowid_col]] %||% character(0))
+    values$param_checked_ids <- checked_in[checked_in %in% valid_ids]
+  }, ignoreInit = TRUE)
+
+  # --- 3. 点击表格加载参数 ---
   # [辅助] 判断参数是否有效（NA、空、字符串"NA"视为无效，读取时用默认值）
   is_valid_snap_param <- function(x) {
     if (is.null(x)) return(FALSE)
@@ -297,13 +494,15 @@
     suppressWarnings(as.numeric(x))
   }
   
-  observeEvent(input$param_table_rows_selected, {
-    # 1. 构建与显示一致的倒序数据框
-    df_display <- values$param_list
-    if(nrow(df_display) > 0) df_display <- df_display[nrow(df_display):1, ]
-    
-    # 2. 从倒序数据框中提取选中行
-    target_p <- df_display[input$param_table_rows_selected, ]
+  observeEvent(input$param_table_row_activate, {
+    clicked_id <- as.character(input$param_table_row_activate$row_id %||% "")[1]
+    if (is.na(clicked_id) || !nzchar(clicked_id)) return()
+    values$param_active_row_id <- clicked_id
+    df_display <- normalize_snapshot_table(values$param_list, add_row_id = FALSE)
+    if (nrow(df_display) == 0 || !snapshot_rowid_col %in% names(df_display)) return()
+    selected_idx <- match(clicked_id, as.character(df_display[[snapshot_rowid_col]]))
+    if (!is.finite(selected_idx) || is.na(selected_idx) || selected_idx < 1L) return()
+    target_p <- df_display[selected_idx, , drop = FALSE]
     
     # 3. 批量更新 UI (兼容性处理：列不存在或为NA/空时使用默认值)
     # 基础参数 (logK1, H1)
@@ -385,8 +584,17 @@
   observeEvent(input$import_params_file, {
     req(input$import_params_file)
     tryCatch({
+      import_obj <- input$import_params_file
+      if (is.data.frame(import_obj)) {
+        import_obj <- as.list(import_obj[1, , drop = FALSE])
+      }
+      datapath <- as.character(import_obj$datapath %||% "")[1]
+      if (!nzchar(datapath) || !file.exists(datapath)) {
+        showNotification(tr("import_params_error_format", lang()), type = "error")
+        return()
+      }
       # 读取 xlsx（snapshots sheet）
-      imported_df <- as.data.frame(readxl::read_excel(input$import_params_file$datapath, sheet = 1))
+      imported_df <- as.data.frame(readxl::read_excel(datapath, sheet = 1))
       
       # 将文件列名（带单位后缀）还原为内部列名
       file_to_internal <- c(
@@ -443,29 +651,23 @@
         imported_df$Temp[is.na(imported_df$Temp)] <- 298.15
       }
       
-      # 内部预期列名
-      expected_cols <- c("Name", "RSS", "Model", "logK1", "H1", "logK2", "H2", 
-                         "logK3", "H3", "logK4", "H4", "logK5", "H5", 
-                         "logK6", "H6",
-                         "fH", "fG", "V_init", "Offset",
-                         "logK1_SE", "H1_SE", "logK2_SE", "H2_SE",
-                         "logK3_SE", "H3_SE", "logK4_SE", "H4_SE",
-                         "logK5_SE", "H5_SE", "logK6_SE", "H6_SE",
-                         "fH_SE", "fG_SE", 
-                         "V_init_SE", "Offset_SE",
-                         "H_cell_0", "G_syringe", "V_cell", "V_inj", 
-                         "n_inj", "V_pre", "Temp")
-      
-      valid_cols <- intersect(colnames(imported_df), expected_cols)
+      valid_cols <- intersect(colnames(imported_df), c(snapshot_expected_cols, snapshot_rowid_col))
       if(length(valid_cols) == 0) {
         showNotification(tr("import_params_error_format", lang()), type = "error")
         return()
       }
-      
+
       imported_df <- imported_df[, valid_cols, drop = FALSE]
-      values$param_list <- bind_rows(values$param_list, imported_df)
+      imported_df <- normalize_snapshot_table(imported_df, add_row_id = TRUE)
+      values$param_list <- bind_rows(
+        normalize_snapshot_table(values$param_list, add_row_id = TRUE),
+        imported_df
+      )
+      values$param_checked_ids <- character(0)
       
-      showNotification(trf("import_params_success_count", lang(), count = nrow(imported_df)), type = "message")
+      success_tpl <- tr("import_params_success_count", lang())
+      success_msg <- gsub("\\{count\\}", as.character(nrow(imported_df)), success_tpl)
+      showNotification(success_msg, type = "message")
       
     }, error = function(e) {
       showNotification(paste(tr("import_params_error", lang()), e$message), type = "error")

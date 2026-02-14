@@ -24,6 +24,14 @@ ui <- fluidPage(
         background-color: #fff;
         margin-bottom: 15px;
       }
+
+      /* Snapshot 当前激活行高亮 */
+      .simfit-root #param_table table.dataTable tbody tr.snap-row-active > td {
+        background-color: #cfe7ff !important;
+      }
+      .simfit-root #param_table table.dataTable tbody tr.snap-row-active > td:first-child {
+        box-shadow: inset 3px 0 0 #2f80ed;
+      }
       
       /* 【新增】左栏：滑条容器样式（缩短高度，为路径构建模块腾出空间） */
       .simfit-root .slider-scroll-container {
@@ -411,6 +419,12 @@ ui <- fluidPage(
         }
       }
       
+    ")),
+    tags$script(HTML("
+      Shiny.addCustomMessageHandler('trigger-download', function(id) {
+        var el = document.getElementById(id);
+        if (el && typeof el.click === 'function') el.click();
+      });
     "))
   ),
   
@@ -433,7 +447,7 @@ ui <- fluidPage(
                  div(
                    column(6, uiOutput("snap_name_input")),
                    column(3, uiOutput("save_params_button")),
-                   column(3, uiOutput("clear_params_button"))
+                   column(3, uiOutput("delete_params_button"))
                  )
              ),
              div(class = "table-scroll-container", DTOutput("param_table")),
