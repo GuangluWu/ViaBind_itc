@@ -103,7 +103,7 @@ ui <- fluidPage(
       3,
       class = "step1-sidebar",
       div(uiOutput("label_choose_file")),
-      fileInput("file1", "", accept = c(".itc", ".txt"), buttonLabel = "Browse...", placeholder = "No file selected"),
+      uiOutput("step1_import_input"),
       uiOutput("ui_view_controls"),
       checkboxInput("zoom_baseline", tr("zoom_baseline"), value = TRUE),
       hr(style = "margin: 8px 0;"),
@@ -218,6 +218,17 @@ server <- function(input, output, session) {
     invisible(FALSE)
   }
 
+  session_desktop <- tryCatch({
+    d <- session$userData$itcsuite_desktop
+    if (is.null(d) || !is.list(d)) NULL else d
+  }, error = function(e) NULL)
+
+  desktop_open_file_enabled <- function() {
+    fn <- if (!is.null(session_desktop)) session_desktop$enabled else NULL
+    if (!is.function(fn)) return(FALSE)
+    isTRUE(fn())
+  }
+
   bridge_last_token <- reactiveVal(as.numeric(Sys.time()))
   next_bridge_token <- function() {
     now_token <- as.numeric(Sys.time())
@@ -243,6 +254,8 @@ server <- function(input, output, session) {
   local_lang_token <- reactiveVal(0)
   restored_step1_path <- reactiveVal(NULL)
   restored_step1_name <- reactiveVal(NULL)
+  step1_active_source_path <- reactiveVal("")
+  step1_active_source_kind <- reactiveVal("none")
   home_restore_inflight <- reactiveVal(FALSE)
   step1_last_export_name <- reactiveVal(NULL)
   set_local_lang <- function(value) {
@@ -283,6 +296,24 @@ server <- function(input, output, session) {
   baseline_defaults <- reactiveValues(duration = 20, offset = 5, spar = 0.1, ready = FALSE)
 
   output$label_choose_file <- renderUI({ strong(tr("choose_file", lang())) })
+  output$step1_import_input <- renderUI({
+    if (isTRUE(desktop_open_file_enabled())) {
+      return(
+        actionButton(
+          "step1_desktop_pick_file",
+          "Choose File (Desktop)...",
+          class = "btn btn-info btn-sm btn-block"
+        )
+      )
+    }
+    fileInput(
+      "file1",
+      "",
+      accept = c(".itc", ".txt"),
+      buttonLabel = "Browse...",
+      placeholder = "No file selected"
+    )
+  })
   output$ui_view_controls <- renderUI({ h4(tr("view_controls", lang())) })
   output$ui_baseline_settings <- renderUI({
     div(
@@ -315,6 +346,28 @@ server <- function(input, output, session) {
     tryCatch(normalizePath(p, winslash = "/", mustWork = FALSE), error = function(e) p)
   }
 
+  resolve_step1_recent_source_path <- function() {
+    active <- normalize_step1_path(step1_active_source_path())
+    if (nzchar(active)) return(active)
+    normalize_step1_path(tryCatch(input$file1$datapath, error = function(e) ""))
+  }
+
+  import_step1_path <- function(filepath, display_name = NULL, source_kind = "desktop_native", mark_restore = FALSE) {
+    path_norm <- normalize_step1_path(filepath)
+    if (!nzchar(path_norm) || !file.exists(path_norm)) return(FALSE)
+
+    name_norm <- as.character(display_name %||% "")[1]
+    name_norm <- trimws(name_norm)
+    if (!nzchar(name_norm)) name_norm <- basename(path_norm)
+
+    home_restore_inflight(isTRUE(mark_restore))
+    restored_step1_path(path_norm)
+    restored_step1_name(name_norm)
+    step1_active_source_path(path_norm)
+    step1_active_source_kind(as.character(source_kind %||% "unknown")[1])
+    TRUE
+  }
+
   restore_step1_home_payload <- function(record) {
     if (is.null(record) || !is.list(record)) return(FALSE)
     path <- normalize_step1_path(record$source_path)
@@ -326,10 +379,12 @@ server <- function(input, output, session) {
       display_name <- basename(path)
     }
 
-    home_restore_inflight(TRUE)
-    restored_step1_path(path)
-    restored_step1_name(trimws(display_name))
-    TRUE
+    import_step1_path(
+      filepath = path,
+      display_name = trimws(display_name),
+      source_kind = "home_restore",
+      mark_restore = TRUE
+    )
   }
 
   home_register_restore("step1", restore_step1_home_payload)
@@ -338,7 +393,46 @@ server <- function(input, output, session) {
     if (is.null(input$file1) || is.null(input$file1$datapath)) return()
     restored_step1_path(NULL)
     restored_step1_name(NULL)
+    step1_active_source_path(normalize_step1_path(input$file1$datapath))
+    step1_active_source_kind("upload")
     home_restore_inflight(FALSE)
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$step1_desktop_pick_file, {
+    fn <- if (!is.null(session_desktop)) session_desktop$open_file else NULL
+    if (!is.function(fn) || !isTRUE(desktop_open_file_enabled())) return()
+    lang_now <- lang()
+
+    fn(
+      purpose = "step1_import",
+      title = if (identical(lang_now, "zh")) "选择 ITC 文件" else "Select ITC File",
+      filters = list(list(name = "ITC Data", extensions = c("itc", "txt"))),
+      on_selected = function(result) {
+        result_path <- normalize_step1_path(result$file_path %||% "")
+        result_name <- as.character(result$file_name %||% "")[1]
+        ok <- isTRUE(import_step1_path(
+          filepath = result_path,
+          display_name = result_name,
+          source_kind = "desktop_native",
+          mark_restore = FALSE
+        ))
+        if (!isTRUE(ok)) {
+          showNotification(
+            if (identical(lang_now, "zh")) "所选文件无效或不存在。" else "Selected file is invalid or missing.",
+            type = "error",
+            duration = 4
+          )
+        }
+      },
+      on_cancel = function(...) invisible(NULL),
+      on_error = function(message, ...) {
+        msg <- as.character(message %||% "")[1]
+        if (!nzchar(trimws(msg))) {
+          msg <- if (identical(lang_now, "zh")) "桌面文件选择失败。" else "Desktop file picker failed."
+        }
+        showNotification(msg, type = "error", duration = 5)
+      }
+    )
   }, ignoreInit = TRUE)
 
   # 仅在有可导出数据时显示导出按钮，否则显示提示
@@ -452,7 +546,7 @@ server <- function(input, output, session) {
       baseline_defaults$ready <- TRUE
 
       if (!skip_recent_log) {
-        src_path <- normalize_step1_path(input$file1$datapath)
+        src_path <- resolve_step1_recent_source_path()
         home_add_recent(
           list(
             display_name = current_itc_name(),

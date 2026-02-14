@@ -33,6 +33,17 @@
     if (is.function(ch)) ch(payload)
     invisible(NULL)
   }
+
+  session_desktop <- tryCatch({
+    d <- session$userData$itcsuite_desktop
+    if (is.null(d) || !is.list(d)) NULL else d
+  }, error = function(e) NULL)
+
+  desktop_open_file_enabled <- function() {
+    fn <- if (!is.null(session_desktop)) session_desktop$enabled else NULL
+    if (!is.function(fn)) return(FALSE)
+    isTRUE(fn())
+  }
   
   # ============================================================================
   # [i18n] 使用 SimFit 私有翻译函数，避免被其他 legacy 模块覆盖

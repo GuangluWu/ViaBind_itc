@@ -16,6 +16,7 @@ source("R/bridge_contract.R")
 source("R/guide_annotations.R")
 source("R/home_recent_helpers.R")
 source("R/home_recent_store.R")
+source("R/home_desktop_helpers.R")
 
 if (!exists("load_guide_annotations", mode = "function")) {
   fail_fast("Startup check failed: guide annotation loader is unavailable.")
@@ -25,6 +26,9 @@ if (!exists("home_detect_import_type", mode = "function")) {
 }
 if (!exists("home_recent_store_load", mode = "function")) {
   fail_fast("Startup check failed: home recent store helper is unavailable.")
+}
+if (!exists("home_desktop_normalize_open_file_result", mode = "function")) {
+  fail_fast("Startup check failed: home desktop helper is unavailable.")
 }
 
 detect_repo_root <- function() {
@@ -377,6 +381,19 @@ ui <- fluidPage(
           window.location.reload();
         }
 
+        function desktopOpenFileSupported() {
+          return !!(window.itcsuiteDesktop && typeof window.itcsuiteDesktop.openFile === 'function');
+        }
+
+        function reportDesktopCapability() {
+          if (!(window.Shiny && typeof window.Shiny.setInputValue === 'function')) return;
+          window.Shiny.setInputValue(
+            'itcsuite_desktop_capability',
+            { open_file: desktopOpenFileSupported(), ts: Date.now() },
+            { priority: 'event' }
+          );
+        }
+
         Shiny.addCustomMessageHandler('itcsuite_i18n_set_lang', function(msg) {
           if (!msg || !msg.lang) return;
           try {
@@ -392,8 +409,38 @@ ui <- fluidPage(
           if (msg.step3) $('#main_tab_label_step3').text(msg.step3);
         });
 
+        Shiny.addCustomMessageHandler('itcsuite_desktop_open_file', async function(msg) {
+          var payload = msg || {};
+          var fallback = {
+            request_id: (payload.request_id || '').toString(),
+            purpose: (payload.purpose || '').toString(),
+            canceled: true,
+            file_path: '',
+            file_name: '',
+            error: 'Desktop open file API unavailable.'
+          };
+
+          if (!desktopOpenFileSupported()) {
+            Shiny.setInputValue('itcsuite_desktop_open_file_result', fallback, { priority: 'event' });
+            return;
+          }
+
+          try {
+            var result = await window.itcsuiteDesktop.openFile(payload);
+            if (!result || typeof result !== 'object') {
+              Shiny.setInputValue('itcsuite_desktop_open_file_result', fallback, { priority: 'event' });
+              return;
+            }
+            Shiny.setInputValue('itcsuite_desktop_open_file_result', result, { priority: 'event' });
+          } catch (e) {
+            fallback.error = (e && e.message) ? e.message : 'Desktop open file failed.';
+            Shiny.setInputValue('itcsuite_desktop_open_file_result', fallback, { priority: 'event' });
+          }
+        });
+
         $(document).on('shiny:connected', function() {
           Shiny.setInputValue('itcsuite_lang_init', detectInitialLang(), {priority: 'event'});
+          reportDesktopCapability();
         });
 
         $(document).on('shiny:disconnected', function() {
@@ -406,6 +453,7 @@ ui <- fluidPage(
 
         $(document).on('shiny:reconnected', function() {
           clearDisconnectTimer();
+          reportDesktopCapability();
         });
 
         window.addEventListener('beforeunload', clearDisconnectTimer);
@@ -457,6 +505,71 @@ server <- function(input, output, session) {
     }
     invisible(normalized)
   }
+
+  is_desktop_runtime <- identical(
+    home_desktop_scalar_chr(Sys.getenv("ITCSUITE_DESKTOP", unset = ""), default = ""),
+    "1"
+  )
+  desktop_open_file_capability <- reactiveVal(FALSE)
+  desktop_open_file_seq <- reactiveVal(0L)
+  desktop_open_file_pending <- new.env(parent = emptyenv())
+
+  desktop_enabled <- function() {
+    isTRUE(is_desktop_runtime) && isTRUE(desktop_open_file_capability())
+  }
+
+  desktop_default_filters <- function(purpose) {
+    p <- home_desktop_scalar_chr(purpose, default = "step2_import")
+    if (identical(p, "step1_import")) {
+      return(home_desktop_sanitize_filters(
+        list(list(name = "ITC Data", extensions = c("itc", "txt"))),
+        fallback_name = "ITC Data",
+        fallback_exts = c("itc", "txt")
+      ))
+    }
+    home_desktop_sanitize_filters(
+      list(list(name = "Excel Workbook", extensions = "xlsx")),
+      fallback_name = "Excel Workbook",
+      fallback_exts = "xlsx"
+    )
+  }
+
+  invoke_desktop_callback <- function(fn, ...) {
+    if (!is.function(fn)) return(invisible(FALSE))
+    tryCatch({
+      fn(...)
+      TRUE
+    }, error = function(e) FALSE)
+  }
+
+  observeEvent(input$itcsuite_desktop_capability, {
+    desktop_open_file_capability(home_desktop_capability_open_file(input$itcsuite_desktop_capability))
+  }, ignoreInit = FALSE)
+
+  observeEvent(input$itcsuite_desktop_open_file_result, {
+    normalized <- home_desktop_normalize_open_file_result(input$itcsuite_desktop_open_file_result)
+    pending <- home_desktop_pending_take(desktop_open_file_pending, normalized$request_id)
+    if (is.null(pending) || !is.list(pending)) return(invisible(NULL))
+
+    on_selected <- pending$on_selected
+    on_cancel <- pending$on_cancel
+    on_error <- pending$on_error
+
+    if (isTRUE(normalized$canceled)) {
+      invoke_desktop_callback(on_cancel, normalized)
+      return(invisible(NULL))
+    }
+    if (nzchar(normalized$error)) {
+      invoke_desktop_callback(on_error, normalized$error, normalized)
+      return(invisible(NULL))
+    }
+    if (!nzchar(normalized$file_path)) {
+      invoke_desktop_callback(on_error, "Desktop picker returned empty file path.", normalized)
+      return(invisible(NULL))
+    }
+    invoke_desktop_callback(on_selected, normalized)
+    invisible(NULL)
+  }, ignoreInit = TRUE)
 
   home_recent_max_records <- home_recent_store_max_records_default()
   load_home_recent_state <- function() {
@@ -802,6 +915,63 @@ server <- function(input, output, session) {
     },
     lang_token = function() {
       host_lang_token()
+    }
+  )
+
+  session$userData$itcsuite_desktop <- list(
+    enabled = function() {
+      desktop_enabled()
+    },
+    open_file = function(
+      purpose,
+      title,
+      filters,
+      on_selected,
+      on_cancel = NULL,
+      on_error = NULL
+    ) {
+      purpose_norm <- home_desktop_scalar_chr(purpose, default = "step2_import")
+      if (!purpose_norm %in% c("step1_import", "step2_import", "step3_import")) {
+        purpose_norm <- "step2_import"
+      }
+      if (!is.function(on_selected)) return(invisible(FALSE))
+
+      if (!isTRUE(desktop_enabled())) {
+        invoke_desktop_callback(on_error, "Desktop native file picker is unavailable.")
+        return(invisible(FALSE))
+      }
+
+      request_meta <- home_desktop_next_request_id(desktop_open_file_seq(), purpose = purpose_norm)
+      desktop_open_file_seq(request_meta$next_seq)
+      request_id <- request_meta$request_id
+      default_filters <- desktop_default_filters(purpose_norm)
+      payload <- list(
+        request_id = request_id,
+        purpose = purpose_norm,
+        title = home_desktop_scalar_chr(title, default = "Select File"),
+        filters = home_desktop_sanitize_filters(
+          filters,
+          fallback_name = default_filters[[1]]$name,
+          fallback_exts = default_filters[[1]]$extensions
+        )
+      )
+
+      ok_pending <- home_desktop_pending_register(
+        desktop_open_file_pending,
+        request_id,
+        callbacks = list(
+          on_selected = on_selected,
+          on_cancel = on_cancel,
+          on_error = on_error
+        )
+      )
+      if (!isTRUE(ok_pending)) {
+        invoke_desktop_callback(on_error, "Failed to register desktop open file request.")
+        return(invisible(FALSE))
+      }
+
+      session$sendCustomMessage("itcsuite_desktop_open_file", payload)
+      invisible(TRUE)
     }
   )
 

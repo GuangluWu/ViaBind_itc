@@ -1339,34 +1339,79 @@
 
   home_register_restore("step2", restore_step2_home_record)
 
+  import_step2_xlsx <- function(filepath, display_name = "data.xlsx", notify_messages = TRUE) {
+    path_norm <- normalize_step2_path(filepath)
+    if (!nzchar(path_norm) || !file.exists(path_norm)) return(FALSE)
+    name_norm <- as.character(display_name %||% "")[1]
+    name_norm <- trimws(name_norm)
+    if (!nzchar(name_norm)) name_norm <- basename(path_norm)
+
+    sheets <- read_xlsx_sheets(path_norm)
+    if (is.null(sheets)) return(FALSE)
+
+    ok <- isTRUE(apply_imported_xlsx_state(
+      sheets = sheets,
+      filepath = path_norm,
+      file_name = name_norm,
+      notify_messages = isTRUE(notify_messages)
+    ))
+    if (!isTRUE(ok)) return(FALSE)
+
+    home_add_recent(
+      list(
+        display_name = values$imported_xlsx_filename %||% name_norm,
+        file_name = values$imported_xlsx_filename %||% name_norm,
+        source_step = "step2",
+        target_step = "step2",
+        source_path = path_norm,
+        source_path_kind = "import"
+      )
+    )
+    TRUE
+  }
+
   # 监听文件上传：读取 xlsx、缓存 sheets，并立即根据 meta 更新实验参数（保证导入即更新）
   observeEvent(input$exp_file, {
     f <- input$exp_file
     if (is.null(f) || is.null(f$datapath)) return()
-    filepath <- f$datapath
+    filepath <- normalize_step2_path(f$datapath)
     display_name <- if (is.null(f$name) || f$name == "") "data.xlsx" else f$name
-    sheets <- read_xlsx_sheets(filepath)
-    if (is.null(sheets)) return()
-
-    ok <- isTRUE(apply_imported_xlsx_state(
-      sheets = sheets,
-      filepath = filepath,
-      file_name = display_name,
-      notify_messages = TRUE
-    ))
-    if (!isTRUE(ok)) return()
-
-    home_add_recent(
-      list(
-        display_name = values$imported_xlsx_filename %||% display_name,
-        file_name = values$imported_xlsx_filename %||% display_name,
-        source_step = "step2",
-        target_step = "step2",
-        source_path = normalize_step2_path(filepath),
-        source_path_kind = "import"
-      )
-    )
+    import_step2_xlsx(filepath = filepath, display_name = display_name, notify_messages = TRUE)
   })
+
+  observeEvent(input$desktop_pick_exp_file, {
+    fn <- if (!is.null(session_desktop)) session_desktop$open_file else NULL
+    if (!is.function(fn) || !isTRUE(desktop_open_file_enabled())) return()
+    lang_now <- lang()
+
+    fn(
+      purpose = "step2_import",
+      title = if (identical(lang_now, "zh")) "选择 Step2 数据文件" else "Select Step2 Data File",
+      filters = list(list(name = "Excel Workbook", extensions = "xlsx")),
+      on_selected = function(result) {
+        ok <- isTRUE(import_step2_xlsx(
+          filepath = result$file_path,
+          display_name = result$file_name,
+          notify_messages = TRUE
+        ))
+        if (!isTRUE(ok)) {
+          showNotification(
+            if (identical(lang_now, "zh")) "所选文件无效或读取失败。" else "Selected file is invalid or unreadable.",
+            type = "error",
+            duration = 4
+          )
+        }
+      },
+      on_cancel = function(...) invisible(NULL),
+      on_error = function(message, ...) {
+        msg <- as.character(message %||% "")[1]
+        if (!nzchar(trimws(msg))) {
+          msg <- if (identical(lang_now, "zh")) "桌面文件选择失败。" else "Desktop file picker failed."
+        }
+        showNotification(msg, type = "error", duration = 5)
+      }
+    )
+  }, ignoreInit = TRUE)
   
   # 判断“当前无实验数据”：不依赖 exp_data_processed()，避免无文件时 req() 挂起导致滑条无法随 n_inj 更新
   has_exp_data <- reactive({

@@ -157,6 +157,15 @@
   output$exp_file_input <- renderUI({
     input$sim_to_exp  # 依赖 Sim->Exp 按钮，点击时重置文件输入框
     input$rm_exp      # 依赖 rm Exp 按钮，清空实验数据后可重新导入同名文件
+    if (isTRUE(desktop_open_file_enabled())) {
+      return(
+        actionButton(
+          "desktop_pick_exp_file",
+          label = tr("btn_import_data", lang()),
+          class = "btn-info btn-sm btn-block"
+        )
+      )
+    }
     fileInput("exp_file", label=NULL, buttonLabel = tr("btn_import_data", lang()), accept = ".xlsx")
   })
 

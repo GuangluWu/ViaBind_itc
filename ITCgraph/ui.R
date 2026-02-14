@@ -266,8 +266,7 @@ ui <- fluidPage(
           uiOutput("section_import_ui"),
           div(
             class = "file-input-btn-style",
-            fileInput("xlsx_file", label = NULL, accept = ".xlsx",
-                      buttonLabel = "Import Data", placeholder = "No file selected")
+            uiOutput("step3_import_input")
           ),
           uiOutput("data_summary_ui"),
           uiOutput("heat_offset_label_ui"),

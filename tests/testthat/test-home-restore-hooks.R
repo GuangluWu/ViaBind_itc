@@ -9,6 +9,9 @@ testthat::test_that("host app defines home tab and itcsuite_home interface", {
   testthat::expect_true(grepl("selected\\s*=\\s*\"home\"", src, perl = TRUE))
   testthat::expect_true(grepl("value\\s*=\\s*\"home\"", src, perl = TRUE))
   testthat::expect_true(grepl("session\\$userData\\$itcsuite_home\\s*<-\\s*list", src, perl = TRUE))
+  testthat::expect_true(grepl("session\\$userData\\$itcsuite_desktop\\s*<-\\s*list", src, perl = TRUE))
+  testthat::expect_true(grepl("itcsuite_desktop_open_file", src, perl = TRUE))
+  testthat::expect_true(grepl("itcsuite_desktop_open_file_result", src, perl = TRUE))
   testthat::expect_true(grepl("register_restore_handler", src, perl = TRUE))
   testthat::expect_true(grepl("source\\(\"R/home_recent_store\\.R\"\\)", src, perl = TRUE))
   testthat::expect_true(grepl("home_recent_store_load\\(", src, perl = TRUE))
@@ -21,6 +24,8 @@ testthat::test_that("step1 registers restore handler and reports recent import",
   testthat::expect_true(grepl("home_add_recent\\(", src, perl = TRUE))
   testthat::expect_true(grepl("home_add_recent_export\\(", src, perl = TRUE))
   testthat::expect_true(grepl("import_type\\s*=\\s*\"itc\"", src, perl = TRUE))
+  testthat::expect_true(grepl("step1_import_input", src, perl = TRUE))
+  testthat::expect_true(grepl("step1_desktop_pick_file", src, perl = TRUE))
 })
 
 testthat::test_that("step2 registers restore handler and reuses import state function", {
@@ -35,8 +40,10 @@ testthat::test_that("step2 registers restore handler and reuses import state fun
   ))
   testthat::expect_true(grepl("home_register_restore\\(\"step2\"", src, perl = TRUE))
   testthat::expect_true(grepl("apply_imported_xlsx_state\\s*<-\\s*function", src, perl = TRUE))
+  testthat::expect_true(grepl("import_step2_xlsx\\s*<-\\s*function", src, perl = TRUE))
   testthat::expect_true(grepl("home_add_recent\\(", src, perl = TRUE))
   testthat::expect_true(grepl("home_add_recent_export\\s*<-\\s*function", src, perl = TRUE))
+  testthat::expect_true(grepl("desktop_pick_exp_file", src, perl = TRUE))
 })
 
 testthat::test_that("step3 registers restore handler and reports import/export to home", {
@@ -44,4 +51,6 @@ testthat::test_that("step3 registers restore handler and reports import/export t
   testthat::expect_true(grepl("home_register_restore\\(\"step3\"", src, perl = TRUE))
   testthat::expect_true(grepl("record_step3_recent_import", src, perl = TRUE))
   testthat::expect_true(grepl("record_step3_recent_export", src, perl = TRUE))
+  testthat::expect_true(grepl("step3_import_input", src, perl = TRUE))
+  testthat::expect_true(grepl("step3_desktop_pick_file", src, perl = TRUE))
 })

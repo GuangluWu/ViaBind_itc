@@ -72,6 +72,17 @@ server <- function(input, output, session) {
     if (is.function(fn)) return(invisible(isTRUE(fn(step, handler))))
     invisible(FALSE)
   }
+
+  session_desktop <- tryCatch({
+    d <- session$userData$itcsuite_desktop
+    if (is.null(d) || !is.list(d)) NULL else d
+  }, error = function(e) NULL)
+
+  desktop_open_file_enabled <- function() {
+    fn <- if (!is.null(session_desktop)) session_desktop$enabled else NULL
+    if (!is.function(fn)) return(FALSE)
+    isTRUE(fn())
+  }
   
   # ============================================================
   # 2. 数据存储
@@ -728,6 +739,25 @@ server <- function(input, output, session) {
   output$section_import_ui <- renderUI({
     h4(graph_tr("section_import", lang()))
   })
+
+  output$step3_import_input <- renderUI({
+    if (isTRUE(desktop_open_file_enabled())) {
+      return(
+        actionButton(
+          "step3_desktop_pick_file",
+          label = graph_tr("import_data", lang()),
+          class = "btn-info btn-sm btn-block"
+        )
+      )
+    }
+    fileInput(
+      "xlsx_file",
+      label = NULL,
+      accept = ".xlsx",
+      buttonLabel = graph_tr("import_data", lang()),
+      placeholder = graph_tr("no_file_selected", lang())
+    )
+  })
   
   output$data_summary_ui <- renderUI({
     if (is.null(imported_data$filename)) {
@@ -1019,32 +1049,76 @@ server <- function(input, output, session) {
   # ============================================================
   # 4. 数据导入
   # ============================================================
-  observeEvent(input$xlsx_file, {
-    req(input$xlsx_file)
-    filepath <- input$xlsx_file$datapath
-    sheets <- read_step3_xlsx_sheets(filepath)
+  import_step3_xlsx <- function(filepath, display_name = "data.xlsx", notify_messages = TRUE) {
+    path_norm <- normalize_step3_path(filepath)
+    if (!nzchar(path_norm) || !file.exists(path_norm)) return(FALSE)
+    name_norm <- normalize_step3_file_name(display_name, default = basename(path_norm))
+    sheets <- read_step3_xlsx_sheets(path_norm)
     if (is.null(sheets) || !is.list(sheets) || length(sheets) < 1) {
       showNotification(paste0(graph_tr("import_failed_prefix", lang()), "Invalid or empty workbook."), type = "error", duration = 8)
-      return(invisible(FALSE))
+      return(FALSE)
     }
 
     tryCatch({
       ok <- isTRUE(apply_step3_imported_sheets(
         sheets = sheets,
-        file_name = input$xlsx_file$name,
+        file_name = name_norm,
         source_tag = "xlsx_import",
-        source_path = filepath,
-        notify_messages = TRUE
+        source_path = path_norm,
+        notify_messages = isTRUE(notify_messages)
       ))
       if (!isTRUE(ok)) {
         showNotification(graph_tr("no_data_warning", lang()), type = "warning", duration = 4)
-        return(invisible(FALSE))
+        return(FALSE)
       }
-      record_step3_recent_import(input$xlsx_file$name, source_path = filepath)
+      record_step3_recent_import(name_norm, source_path = path_norm)
+      TRUE
     }, error = function(e) {
       showNotification(paste0(graph_tr("import_failed_prefix", lang()), e$message), type = "error", duration = 8)
+      FALSE
     })
+  }
+
+  observeEvent(input$xlsx_file, {
+    req(input$xlsx_file)
+    filepath <- normalize_step3_path(input$xlsx_file$datapath)
+    display_name <- normalize_step3_file_name(input$xlsx_file$name, default = basename(filepath))
+    import_step3_xlsx(filepath = filepath, display_name = display_name, notify_messages = TRUE)
   })
+
+  observeEvent(input$step3_desktop_pick_file, {
+    fn <- if (!is.null(session_desktop)) session_desktop$open_file else NULL
+    if (!is.function(fn) || !isTRUE(desktop_open_file_enabled())) return()
+    lang_now <- lang()
+
+    fn(
+      purpose = "step3_import",
+      title = if (identical(lang_now, "zh")) "选择 Step3 数据文件" else "Select Step3 Data File",
+      filters = list(list(name = "Excel Workbook", extensions = "xlsx")),
+      on_selected = function(result) {
+        ok <- isTRUE(import_step3_xlsx(
+          filepath = result$file_path,
+          display_name = result$file_name,
+          notify_messages = TRUE
+        ))
+        if (!isTRUE(ok)) {
+          showNotification(
+            if (identical(lang_now, "zh")) "所选文件无效或读取失败。" else "Selected file is invalid or unreadable.",
+            type = "error",
+            duration = 4
+          )
+        }
+      },
+      on_cancel = function(...) invisible(NULL),
+      on_error = function(message, ...) {
+        msg <- as.character(message %||% "")[1]
+        if (!nzchar(trimws(msg))) {
+          msg <- if (identical(lang_now, "zh")) "桌面文件选择失败。" else "Desktop file picker failed."
+        }
+        showNotification(msg, type = "error", duration = 5)
+      }
+    )
+  }, ignoreInit = TRUE)
   
   # ============================================================
   # 4b. 「自动范围」按钮：按当前数据与当前单位重新计算轴范围（尤其适合换单位后）

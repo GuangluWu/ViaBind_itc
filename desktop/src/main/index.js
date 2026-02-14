@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, shell, session, nativeImage, powerMonitor } = require("electron");
+const { app, BrowserWindow, Menu, dialog, shell, session, nativeImage, powerMonitor, ipcMain } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");
 const path = require("path");
@@ -15,6 +15,8 @@ const APP_TITLE = `${APP_NAME}: ${APP_SLOGAN}`;
 const APP_DEVELOPER_NAME = "Guanglu Wu (吴光鹭)";
 const APP_DEVELOPER_EMAIL = "guanglu.wu@gmail.com";
 const APP_DEVELOPER_SITE = "guanglu.xyz";
+const OPEN_FILE_CHANNEL = "itcsuite:open-file";
+const OPEN_FILE_PURPOSES = new Set(["step1_import", "step2_import", "step3_import"]);
 app.setName(APP_NAME);
 
 const smokeMode = process.argv.includes("--smoke-test") || process.env.ITCSUITE_SMOKE_TEST === "1";
@@ -633,6 +635,114 @@ function isAllowedNavigation(url) {
   return false;
 }
 
+function trimScalar(value, defaultValue = "") {
+  const out = typeof value === "string" ? value : String(value ?? "");
+  const trimmed = out.trim();
+  return trimmed || defaultValue;
+}
+
+function sanitizeOpenFileExtensions(extensions) {
+  if (!Array.isArray(extensions)) return [];
+  const cleaned = [];
+  for (const raw of extensions) {
+    const ext = trimScalar(raw, "").toLowerCase().replace(/^\.+/, "");
+    if (!ext || !/^[a-z0-9]+$/.test(ext)) continue;
+    if (!cleaned.includes(ext)) cleaned.push(ext);
+  }
+  return cleaned.slice(0, 12);
+}
+
+function sanitizeOpenFileFilters(filters, purpose) {
+  if (!Array.isArray(filters)) {
+    if (purpose === "step1_import") {
+      return [{ name: "ITC Data", extensions: ["itc", "txt"] }];
+    }
+    return [{ name: "Spreadsheet", extensions: ["xlsx"] }];
+  }
+
+  const cleaned = [];
+  for (const rawFilter of filters.slice(0, 4)) {
+    if (!rawFilter || typeof rawFilter !== "object") continue;
+    const name = trimScalar(rawFilter.name, "Files");
+    const extensions = sanitizeOpenFileExtensions(rawFilter.extensions);
+    if (extensions.length < 1) continue;
+    cleaned.push({ name, extensions });
+  }
+
+  if (cleaned.length > 0) return cleaned;
+  return sanitizeOpenFileFilters(null, purpose);
+}
+
+function sanitizeOpenFilePayload(rawPayload) {
+  const payload = rawPayload && typeof rawPayload === "object" ? rawPayload : {};
+  const requestId = trimScalar(payload.request_id, "");
+  let purpose = trimScalar(payload.purpose, "");
+  if (!OPEN_FILE_PURPOSES.has(purpose)) purpose = "step2_import";
+  const fallbackTitle = purpose === "step1_import" ? "Select ITC File" : "Select Data File";
+  const titleRaw = trimScalar(payload.title, fallbackTitle);
+  const title = titleRaw.slice(0, 160);
+  const filters = sanitizeOpenFileFilters(payload.filters, purpose);
+  return { request_id: requestId, purpose, title, filters };
+}
+
+function makeOpenFileResult(payload, patch = {}) {
+  return {
+    request_id: payload.request_id,
+    purpose: payload.purpose,
+    canceled: true,
+    file_path: "",
+    file_name: "",
+    error: "",
+    ...patch
+  };
+}
+
+function registerIpcHandlers() {
+  ipcMain.handle(OPEN_FILE_CHANNEL, async (_event, rawPayload) => {
+    const payload = sanitizeOpenFilePayload(rawPayload);
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return makeOpenFileResult(payload, { error: "Main window is unavailable." });
+    }
+
+    const smokeMockPath = trimScalar(process.env.ITCSUITE_SMOKE_OPEN_FILE_PATH, "");
+    if (smokeMode && smokeMockPath) {
+      const resolvedMockPath = path.resolve(smokeMockPath);
+      return makeOpenFileResult(payload, {
+        canceled: false,
+        file_path: resolvedMockPath,
+        file_name: path.basename(resolvedMockPath)
+      });
+    }
+
+    try {
+      const dialogResult = await dialog.showOpenDialog(mainWindow, {
+        title: payload.title,
+        properties: ["openFile"],
+        filters: payload.filters
+      });
+
+      if (dialogResult.canceled) {
+        return makeOpenFileResult(payload, { canceled: true });
+      }
+
+      const selectedPath = Array.isArray(dialogResult.filePaths) ? dialogResult.filePaths[0] : "";
+      const resolvedPath = trimScalar(selectedPath, "");
+      if (!resolvedPath) {
+        return makeOpenFileResult(payload, { error: "No file selected." });
+      }
+
+      return makeOpenFileResult(payload, {
+        canceled: false,
+        file_path: path.resolve(resolvedPath),
+        file_name: path.basename(resolvedPath)
+      });
+    } catch (error) {
+      const message = error && error.message ? error.message : "Failed to open file dialog.";
+      return makeOpenFileResult(payload, { error: message });
+    }
+  });
+}
+
 function uniqueDownloadPath(downloadsPath, filename) {
   const ext = path.extname(filename);
   const name = path.basename(filename, ext);
@@ -704,7 +814,8 @@ function createMainWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      preload: path.join(__dirname, "preload.js")
     }
   });
 
@@ -983,6 +1094,7 @@ app.whenReady().then(async () => {
   });
 
   buildAppMenu();
+  registerIpcHandlers();
   configureDownloadBehavior();
   createMainWindow();
   wireBackendEvents();
