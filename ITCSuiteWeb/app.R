@@ -45,6 +45,67 @@ detect_repo_root <- function() {
   )
 }
 
+register_home_icon_resource <- function(repo_root) {
+  get_resource_path <- function(prefix) {
+    paths <- shiny::resourcePaths()
+    val <- unname(paths[prefix])
+    out <- normalize_home_scalar_chr(val, default = "")
+    if (is.na(out)) "" else out
+  }
+
+  prefix <- "itcsuite_home_assets"
+  icon_candidates <- list(
+    list(
+      dir = file.path(repo_root, "icons"),
+      file = "ViaBind_1024.png"
+    ),
+    list(
+      dir = normalizePath(file.path(repo_root, ".."), winslash = "/", mustWork = FALSE),
+      file = "icon.png"
+    )
+  )
+
+  for (cand in icon_candidates) {
+    dir_norm <- normalizePath(cand$dir, winslash = "/", mustWork = FALSE)
+    icon_file <- file.path(dir_norm, cand$file)
+    if (!dir.exists(dir_norm) || !file.exists(icon_file)) next
+
+    existing_dir <- get_resource_path(prefix)
+    if (is.character(existing_dir) && nzchar(existing_dir)) {
+      existing_norm <- normalizePath(existing_dir, winslash = "/", mustWork = FALSE)
+      if (!identical(existing_norm, dir_norm)) {
+        try(shiny::removeResourcePath(prefix), silent = TRUE)
+      }
+    }
+
+    registered <- FALSE
+    tryCatch({
+      shiny::addResourcePath(prefix, dir_norm)
+      registered <- TRUE
+    }, error = function(e) {
+      mapped <- get_resource_path(prefix)
+      mapped_norm <- normalizePath(mapped %||% "", winslash = "/", mustWork = FALSE)
+      if (identical(mapped_norm, dir_norm)) {
+        registered <<- TRUE
+      }
+    })
+
+    if (isTRUE(registered)) {
+      return(file.path("/", prefix, cand$file))
+    }
+  }
+
+  NULL
+}
+
+resolve_home_icon_src <- function(repo_root) {
+  bundled_icon <- file.path(repo_root, "ITCSuiteWeb", "www", "assets", "ViaBind_1024.png")
+  if (file.exists(bundled_icon)) {
+    return("/assets/ViaBind_1024.png")
+  }
+  register_home_icon_resource(repo_root)
+}
+
 load_legacy_app <- function(app_dir, label, required_symbols = character(0)) {
   app_file <- file.path(app_dir, "app.R")
   if (!dir.exists(app_dir)) {
@@ -283,10 +344,7 @@ home_detect_export_type <- function(file_name = NULL, fallback = "xlsx") {
 }
 
 repo_root <- detect_repo_root()
-icon_assets_dir <- file.path(repo_root, "icons")
-if (dir.exists(icon_assets_dir)) {
-  try(shiny::addResourcePath("itcsuite_assets", icon_assets_dir), silent = TRUE)
-}
+home_icon_src <- resolve_home_icon_src(repo_root)
 processor_legacy <- load_legacy_app(file.path(repo_root, "ITCprocessor"), "ITCprocessor")
 simfit_legacy <- load_legacy_app(
   file.path(repo_root, "ITCsimfit"),
@@ -1087,7 +1145,10 @@ server <- function(input, output, session) {
       )
     }
 
-    home_icon <- file.path("/itcsuite_assets", "ViaBind_1024.png")
+    home_icon_tag <- NULL
+    if (is.character(home_icon_src) && nzchar(home_icon_src)) {
+      home_icon_tag <- tags$img(class = "home-title-icon", src = home_icon_src, alt = "ViaBind")
+    }
 
     div(
       class = "home-tab-wrap",
@@ -1095,7 +1156,7 @@ server <- function(input, output, session) {
         class = "home-panel",
         div(
           class = "home-title-row",
-          tags$img(class = "home-title-icon", src = home_icon, alt = "ViaBind"),
+          home_icon_tag,
           tags$h3(host_tr("home_welcome_title", l))
         ),
         tags$p(host_tr("home_welcome_desc", l)),

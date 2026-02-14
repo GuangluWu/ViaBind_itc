@@ -888,6 +888,39 @@ function createMainWindow() {
   });
 
   mainWindow.webContents.on("did-finish-load", async () => {
+    try {
+      const iconProbe = await mainWindow.webContents.executeJavaScript(`new Promise((resolve) => {
+        const deadline = Date.now() + 5000;
+        const snapshot = () => {
+          const el = document.querySelector(".home-title-icon");
+          if (el) {
+            const style = window.getComputedStyle(el);
+            resolve({
+              exists: true,
+              src: el.currentSrc || el.src || "",
+              complete: !!el.complete,
+              natural_width: Number(el.naturalWidth || 0),
+              natural_height: Number(el.naturalHeight || 0),
+              display: style.display || "",
+              visibility: style.visibility || "",
+              opacity: style.opacity || ""
+            });
+            return;
+          }
+
+          if (Date.now() >= deadline) {
+            resolve({ exists: false });
+            return;
+          }
+          setTimeout(snapshot, 100);
+        };
+        snapshot();
+      });`);
+      appendMainLog("home_icon_probe", iconProbe && typeof iconProbe === "object" ? iconProbe : {});
+    } catch (error) {
+      appendMainLog("home_icon_probe_error", { message: error.message });
+    }
+
     if (!smokeMode || smokeReported || !allowedUrlPrefix) {
       return;
     }
