@@ -162,7 +162,6 @@ host_tr <- function(key, lang) {
       home_recent_empty = "No recent imports in this session.",
       home_recent_export_title = "Recent Exports",
       home_recent_export_empty = "No recent exports in this session.",
-      home_guide_button = "Beginner Guide",
       home_table_col_name = "Name",
       home_table_col_type = "Type",
       home_table_col_target = "Target",
@@ -189,12 +188,6 @@ host_tr <- function(key, lang) {
       home_recent_path_label = "Path",
       home_recent_path_missing = "Path unavailable (file not found).",
       home_unknown_name = "Unnamed Import",
-      home_guide_title = "Beginner Guide",
-      home_guide_body_1 = "Home: enter Step 1, review recent imports, and quickly reopen prior work.",
-      home_guide_body_2 = "Step 1: import .itc data, baseline correction, and integration.",
-      home_guide_body_3 = "Step 2: simulation and fitting using imported or bridged data.",
-      home_guide_body_4 = "Step 3: plotting and export for publication-ready output.",
-      home_guide_placeholder = "A full interactive tour will be available in a later update.",
       close = "Close"
     ),
     zh = list(
@@ -209,7 +202,6 @@ host_tr <- function(key, lang) {
       home_recent_empty = "当前会话暂无最近导入记录。",
       home_recent_export_title = "最近导出",
       home_recent_export_empty = "当前会话暂无最近导出记录。",
-      home_guide_button = "新手导引",
       home_table_col_name = "名称",
       home_table_col_type = "类型",
       home_table_col_target = "目标",
@@ -236,12 +228,6 @@ host_tr <- function(key, lang) {
       home_recent_path_label = "路径",
       home_recent_path_missing = "路径不可用（文件不存在）。",
       home_unknown_name = "未命名导入",
-      home_guide_title = "新手导引",
-      home_guide_body_1 = "首页：进入 Step 1、查看最近导入、快速恢复历史数据。",
-      home_guide_body_2 = "Step 1：导入 .itc 数据并完成基线校正与积分。",
-      home_guide_body_3 = "Step 2：基于导入或桥接数据进行模拟与拟合。",
-      home_guide_body_4 = "Step 3：生成绘图并导出用于展示或发表的数据。",
-      home_guide_placeholder = "完整的交互式导引将在后续版本上线。",
       close = "关闭"
     )
   )
@@ -945,8 +931,7 @@ server <- function(input, output, session) {
         tags$p(host_tr("home_welcome_desc", l)),
         div(
           class = "home-action-row",
-          actionButton("home_start_step1", host_tr("home_start_step1", l), class = "btn btn-primary"),
-          actionButton("home_beginner_guide", host_tr("home_guide_button", l), class = "btn btn-info")
+          actionButton("home_start_step1", host_tr("home_start_step1", l), class = "btn btn-primary")
         ),
         tags$h4(host_tr("home_recent_title", l)),
         build_recent_table(import_recs, host_tr("home_recent_empty", l))
@@ -979,19 +964,6 @@ server <- function(input, output, session) {
 
   observeEvent(input$home_start_step1, {
     updateTabsetPanel(session, "main_tabs", selected = "step1")
-  }, ignoreInit = TRUE)
-
-  observeEvent(input$home_beginner_guide, {
-    showModal(modalDialog(
-      title = host_tr("home_guide_title", host_lang()),
-      tags$p(host_tr("home_guide_body_1", host_lang())),
-      tags$p(host_tr("home_guide_body_2", host_lang())),
-      tags$p(host_tr("home_guide_body_3", host_lang())),
-      tags$p(host_tr("home_guide_body_4", host_lang())),
-      tags$p(tags$em(host_tr("home_guide_placeholder", host_lang()))),
-      easyClose = TRUE,
-      footer = modalButton(host_tr("close", host_lang()))
-    ))
   }, ignoreInit = TRUE)
 
   session$userData$itcsuite_bridge <- list(
