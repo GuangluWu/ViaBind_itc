@@ -426,7 +426,15 @@
 
   output$save_report_txt <- downloadHandler(
     filename = function() {
-      paste("ITC_Report_", format(Sys.time(), "%Y%m%d_%H%M"), ".txt", sep="")
+      base <- values$imported_xlsx_base_name
+      if (is.null(base) || !nzchar(base)) {
+        fallback_name <- values$imported_xlsx_filename
+        if (!is.null(fallback_name) && nzchar(fallback_name)) {
+          base <- tools::file_path_sans_ext(basename(fallback_name))
+        }
+      }
+      if (is.null(base) || !nzchar(base)) base <- "ITC"
+      paste0(base, "_report_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".txt")
     },
     content = function(file) {
       writeLines(values$current_report, file)

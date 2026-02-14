@@ -414,7 +414,7 @@ ui <- fluidPage(
     "))
   ),
   
-  tags$head(tags$title("ViaBind: Your Path, Your Model!")),
+  tags$head(tags$title("ViaBind: Your Path, Your Model")),
   
   div(
     class = "simfit-root",
