@@ -330,7 +330,31 @@ function makeDataUrl(html) {
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 
+function resolveLoadingIconDataUrl() {
+  const iconPath = resolveAppIconPath();
+  if (!iconPath || !fs.existsSync(iconPath)) return "";
+
+  try {
+    const ext = path.extname(iconPath).toLowerCase();
+    const mime =
+      ext === ".png" ? "image/png" :
+      ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" :
+      ext === ".webp" ? "image/webp" :
+      "";
+    if (!mime) return "";
+
+    const base64 = fs.readFileSync(iconPath).toString("base64");
+    return `data:${mime};base64,${base64}`;
+  } catch (_) {
+    return "";
+  }
+}
+
 function loadingHtml() {
+  const iconDataUrl = resolveLoadingIconDataUrl();
+  const iconHtml = iconDataUrl
+    ? `<img class="app-icon" src="${iconDataUrl}" alt="${APP_NAME} icon" />`
+    : "";
   return `<!doctype html>
 <html>
 <head>
@@ -339,6 +363,8 @@ function loadingHtml() {
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; background: #f5f7fa; color: #1f2937; }
     .wrap { max-width: 680px; margin: 12vh auto; padding: 24px; background: #ffffff; border: 1px solid #d1d5db; border-radius: 12px; }
+    .title-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+    .app-icon { width: 42px; height: 42px; border-radius: 10px; object-fit: cover; box-shadow: 0 1px 4px rgba(0,0,0,0.16); }
     h1 { margin: 0 0 12px; font-size: 22px; }
     p { margin: 8px 0; line-height: 1.5; }
     code { background: #f3f4f6; padding: 1px 4px; border-radius: 4px; }
@@ -346,7 +372,10 @@ function loadingHtml() {
 </head>
 <body>
   <div class="wrap">
-    <h1>${APP_NAME} is starting</h1>
+    <div class="title-row">
+      ${iconHtml}
+      <h1>${APP_NAME} is starting</h1>
+    </div>
     <p><strong>${APP_SLOGAN}</strong></p>
     <p>The desktop shell is ready and the local Shiny backend is booting.</p>
     <p>First launch can take longer than usual.</p>
@@ -401,6 +430,20 @@ function uniqueDownloadPath(downloadsPath, filename) {
   return candidate;
 }
 
+function emitDownloadSavedEvent(fileName, savePath) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const payload = JSON.stringify({
+    file_name: fileName,
+    save_path: savePath
+  });
+  const script = `(() => {
+    if (window.Shiny && typeof window.Shiny.setInputValue === "function") {
+      window.Shiny.setInputValue("itcsuite_download_event", ${payload}, { priority: "event" });
+    }
+  })();`;
+  mainWindow.webContents.executeJavaScript(script).catch(() => {});
+}
+
 function configureDownloadBehavior() {
   session.defaultSession.on("will-download", (_event, item) => {
     const downloadsPath = app.getPath("downloads");
@@ -417,7 +460,14 @@ function configureDownloadBehavior() {
       item.cancel();
       return;
     }
+
+    const downloadName = item.getFilename();
     item.setSavePath(savePath);
+    item.once("done", (_doneEvent, state) => {
+      if (state !== "completed") return;
+      const finalPath = item.getSavePath() || savePath;
+      emitDownloadSavedEvent(downloadName, finalPath);
+    });
   });
 }
 

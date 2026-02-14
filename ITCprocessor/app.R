@@ -193,6 +193,31 @@ server <- function(input, output, session) {
     invisible(NULL)
   }
 
+  session_home <- tryCatch({
+    h <- session$userData$itcsuite_home
+    if (is.null(h) || !is.list(h)) NULL else h
+  }, error = function(e) NULL)
+
+  home_add_recent <- function(record, payload = NULL) {
+    fn <- if (!is.null(session_home)) session_home$add_recent_import else NULL
+    if (is.function(fn)) fn(record, payload)
+    invisible(NULL)
+  }
+
+  home_add_recent_export <- function(record, payload = NULL) {
+    fn <- if (!is.null(session_home)) session_home$add_recent_export else NULL
+    if (is.function(fn)) fn(record, payload)
+    invisible(NULL)
+  }
+
+  home_register_restore <- function(step, handler) {
+    fn <- if (!is.null(session_home)) session_home$register_restore_handler else NULL
+    if (is.function(fn)) {
+      return(invisible(isTRUE(fn(step, handler))))
+    }
+    invisible(FALSE)
+  }
+
   bridge_last_token <- reactiveVal(as.numeric(Sys.time()))
   next_bridge_token <- function() {
     now_token <- as.numeric(Sys.time())
@@ -216,6 +241,10 @@ server <- function(input, output, session) {
 
   local_lang <- reactiveVal("en")
   local_lang_token <- reactiveVal(0)
+  restored_step1_path <- reactiveVal(NULL)
+  restored_step1_name <- reactiveVal(NULL)
+  home_restore_inflight <- reactiveVal(FALSE)
+  step1_last_export_name <- reactiveVal(NULL)
   set_local_lang <- function(value) {
     normalized <- normalize_lang(value)
     if (!identical(local_lang(), normalized)) {
@@ -269,10 +298,52 @@ server <- function(input, output, session) {
   output$ui_param_interval <- renderText({ tr("interval_s", lang()) })
   output$ui_param_temp <- renderText({ tr("temp_c", lang()) })
   output$ui_param_cell_vol <- renderText({ tr("cell_vol", lang()) })
+
+  current_itc_name <- reactive({
+    restored_name <- as.character(restored_step1_name() %||% "")[1]
+    if (nzchar(trimws(restored_name))) {
+      return(trimws(restored_name))
+    }
+    if (!is.null(input$file1$name) && nzchar(trimws(input$file1$name))) return(trimws(input$file1$name))
+    ""
+  })
+
+  normalize_step1_path <- function(path) {
+    p <- as.character(path %||% "")[1]
+    p <- trimws(p)
+    if (!nzchar(p)) return("")
+    tryCatch(normalizePath(p, winslash = "/", mustWork = FALSE), error = function(e) p)
+  }
+
+  restore_step1_home_payload <- function(record) {
+    if (is.null(record) || !is.list(record)) return(FALSE)
+    path <- normalize_step1_path(record$source_path)
+    if (!nzchar(path) || !file.exists(path)) return(FALSE)
+
+    display_name <- as.character(record$display_name %||% "")[1]
+    display_name <- trimws(display_name)
+    if (!nzchar(display_name) || !grepl("\\.(itc|txt)$", tolower(display_name))) {
+      display_name <- basename(path)
+    }
+
+    home_restore_inflight(TRUE)
+    restored_step1_path(path)
+    restored_step1_name(trimws(display_name))
+    TRUE
+  }
+
+  home_register_restore("step1", restore_step1_home_payload)
+
+  observeEvent(input$file1, {
+    if (is.null(input$file1) || is.null(input$file1$datapath)) return()
+    restored_step1_path(NULL)
+    restored_step1_name(NULL)
+    home_restore_inflight(FALSE)
+  }, ignoreInit = TRUE)
+
   # 仅在有可导出数据时显示导出按钮，否则显示提示
   canExport <- reactive({
     tryCatch({
-      if (is.null(input$file1) || is.null(input$file1$datapath)) return(FALSE)
       rawData()
       processedData()
       TRUE
@@ -312,6 +383,16 @@ server <- function(input, output, session) {
 
   # 反应式存储读取的数据
   rawData <- reactive({
+    restored_path <- normalize_step1_path(restored_step1_path())
+    if (nzchar(restored_path)) {
+      req(file.exists(restored_path))
+      return(tryCatch({
+        read_itc(restored_path)
+      }, error = function(e) {
+        stop(safeError(e))
+      }))
+    }
+
     req(input$file1)
     tryCatch({
       read_itc(input$file1$datapath)
@@ -322,7 +403,10 @@ server <- function(input, output, session) {
 
   # 文件加载后，用解析出的实验参数更新侧栏输入
   observeEvent(rawData(), {
-    p <- rawData()$params
+    rd <- rawData()
+    p <- rd$params
+    skip_recent_log <- isTRUE(home_restore_inflight())
+    integration_window_snapshot <- input$integration_window
     if (!is.null(p)) {
       duration_init <- 20
       offset_init <- 5
@@ -358,6 +442,7 @@ server <- function(input, output, session) {
           suggested <- floor(0.9 * (typical_pts - 1))
           suggested <- max(1, suggested)
           updateNumericInput(session, "integration_window", value = suggested)
+          integration_window_snapshot <- suggested
         }
       }
 
@@ -365,7 +450,22 @@ server <- function(input, output, session) {
       baseline_defaults$offset <- offset_init
       baseline_defaults$spar <- spar_init
       baseline_defaults$ready <- TRUE
+
+      if (!skip_recent_log) {
+        src_path <- normalize_step1_path(input$file1$datapath)
+        home_add_recent(
+          list(
+            display_name = current_itc_name(),
+            file_name = current_itc_name(),
+            source_step = "step1",
+            import_type = "itc",
+            source_path = src_path,
+            source_path_kind = "import"
+          )
+        )
+      }
     }
+    if (skip_recent_log) home_restore_inflight(FALSE)
   })
 
   observeEvent(input$reset_baseline, {
@@ -408,7 +508,7 @@ server <- function(input, output, session) {
     
 
     l <- lang()
-    paste0(tr("loaded", l), input$file1$name,
+    paste0(tr("loaded", l), current_itc_name(),
            ";  ", tr("total_points", l), nrow(rawData()$data)
            )
   })
@@ -517,7 +617,7 @@ server <- function(input, output, session) {
     meta_df <- data.frame(
       parameter = c("original_itc_file", "Temp_K", "G_syringe_mM", "H_cell_0_mM", "V_pre_uL", "V_inj_uL", "n_inj", "V_cell_mL"),
       value = c(
-        if (is.null(input$file1$name) || input$file1$name == "") "" else input$file1$name,
+        current_itc_name(),
         temp_K,
         if (!is.na(input$param_syringe_mM)) input$param_syringe_mM else p$syringe_conc_mM,
         if (!is.na(input$param_cell_mM)) input$param_cell_mM else p$cell_conc_mM,
@@ -535,7 +635,7 @@ server <- function(input, output, session) {
       token = NA_real_,
       integration = pd$integration,
       meta = meta_df,
-      source = if (is.null(input$file1$name) || input$file1$name == "") "ITCprocessor" else input$file1$name,
+      source = if (nzchar(current_itc_name())) current_itc_name() else "ITCprocessor",
       bundle = list(
         schema_version = "itcsuite.bundle.v1",
         meta = meta_df,
@@ -933,8 +1033,11 @@ server <- function(input, output, session) {
   
   output$downloadData_processor <- downloadHandler(
     filename = function() {
-      base_name <- if (is.null(input$file1$name) || input$file1$name == "") "data" else tools::file_path_sans_ext(input$file1$name)
-      paste0(base_name, "_processed_", format(Sys.time(), "%Y%m%d_%H%M"), ".xlsx")
+      src_name <- current_itc_name()
+      base_name <- if (!nzchar(src_name)) "data" else tools::file_path_sans_ext(src_name)
+      fname <- paste0(base_name, "_processed_", format(Sys.time(), "%Y%m%d_%H%M"), ".xlsx")
+      step1_last_export_name(fname)
+      fname
     },
     content = function(file) {
       rd <- tryCatch(rawData(), error = function(e) NULL)
@@ -960,7 +1063,7 @@ server <- function(input, output, session) {
       if (is.na(n_inj)) n_inj <- length(rd$injections)
       cell_vol <- p$cell_volume_mL
 
-      original_itc_name <- if (is.null(input$file1$name) || input$file1$name == "") "" else input$file1$name
+      original_itc_name <- current_itc_name()
       meta_df <- data.frame(
         parameter = c("original_itc_file", "Temp_K", "G_syringe_mM", "H_cell_0_mM", "V_pre_uL", "V_inj_uL", "n_inj", "V_cell_mL"),
         value = c(original_itc_name, temp_K, syringe_mM, cell_mM, V_pre, V_inj, n_inj, cell_vol),
@@ -984,6 +1087,24 @@ server <- function(input, output, session) {
           integration = pd$integration
         ),
         path = file
+      )
+
+      export_name <- as.character(step1_last_export_name() %||% "")[1]
+      if (!nzchar(trimws(export_name))) export_name <- basename(file)
+      export_path <- normalize_step1_path(file)
+      import_path <- normalize_step1_path(restored_step1_path() %||% tryCatch(input$file1$datapath, error = function(e) ""))
+      if (!nzchar(import_path)) return(invisible(NULL))
+      home_add_recent_export(
+        list(
+          display_name = export_name,
+          file_name = export_name,
+          source_step = "step1",
+          target_step = "step1",
+          export_type = "xlsx",
+          source_path = import_path,
+          artifact_path = export_path,
+          source_path_kind = "import"
+        )
       )
     }
   )

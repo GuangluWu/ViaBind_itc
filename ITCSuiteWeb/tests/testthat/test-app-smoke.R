@@ -20,7 +20,8 @@ if (!requireNamespace("testthat", quietly = TRUE)) {
         name = "app-launch-smoke",
         load_timeout = 60000
       )
-      testthat::expect_true(app$get_value(input = "main_tabs") %in% c("step1", "step2", "step3"))
+      testthat::expect_true(app$get_value(input = "main_tabs") %in% c("home", "step1", "step2", "step3"))
+      testthat::expect_identical(app$get_value(input = "main_tabs"), "home")
       app$stop()
     })
 

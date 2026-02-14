@@ -38,6 +38,29 @@
   sim_cache_key <- reactiveVal(NULL)
   fit_slider_force_default <- reactiveVal(FALSE)
 
+  session_home <- tryCatch({
+    h <- session$userData$itcsuite_home
+    if (is.null(h) || !is.list(h)) NULL else h
+  }, error = function(e) NULL)
+
+  home_add_recent <- function(record, payload = NULL) {
+    fn <- if (!is.null(session_home)) session_home$add_recent_import else NULL
+    if (is.function(fn)) fn(record, payload)
+    invisible(NULL)
+  }
+
+  home_add_recent_export <- function(record, payload = NULL) {
+    fn <- if (!is.null(session_home)) session_home$add_recent_export else NULL
+    if (is.function(fn)) fn(record, payload)
+    invisible(NULL)
+  }
+
+  home_register_restore <- function(step, handler) {
+    fn <- if (!is.null(session_home)) session_home$register_restore_handler else NULL
+    if (is.function(fn)) return(invisible(isTRUE(fn(step, handler))))
+    invisible(FALSE)
+  }
+
   is_finite_scalar <- function(x) length(x) == 1 && is.finite(x)
 
   payload_token <- function(payload) {
@@ -167,8 +190,8 @@
     tab_chr %in% c(
       "step2",
       "Step 2 Simulation & Fitting",
-      "步骤 2 模拟 & 拟合",
-      "步骤 2 模拟与拟合"
+      "Step 2 模拟 & 拟合",
+      "Step 2 模拟与拟合"
     )
   }
 
@@ -1011,8 +1034,11 @@
       return(apply_updated_ratio(d))
     }
     
-    req(input$exp_file)
-    filepath <- input$exp_file$datapath
+    filepath <- values$imported_xlsx_file_path
+    if (is.null(filepath) || !nzchar(as.character(filepath)[1])) {
+      req(input$exp_file)
+      filepath <- input$exp_file$datapath
+    }
 
     # 若已在 observeEvent(input$exp_file) 中读取过同一文件，直接使用缓存数据
     if (!is.null(values$imported_xlsx_sheets) && identical(filepath, values$imported_xlsx_file_path)) {
@@ -1077,10 +1103,60 @@
     return(df)
   })
   
-  # 监听文件上传：读取 xlsx、缓存 sheets，并立即根据 meta 更新实验参数（保证导入即更新）
-  observeEvent(input$exp_file, {
-    f <- input$exp_file
-    if (is.null(f) || is.null(f$datapath)) return()
+  read_xlsx_sheets <- function(filepath) {
+    if (is.null(filepath) || !nzchar(as.character(filepath)[1])) return(NULL)
+    tryCatch({
+      snames <- readxl::excel_sheets(filepath)
+      lst <- list()
+      for (sn in snames) {
+        lst[[sn]] <- as.data.frame(readxl::read_excel(filepath, sheet = sn))
+      }
+      lst
+    }, error = function(e) NULL)
+  }
+
+  apply_step2_param_snapshot <- function(snapshot) {
+    if (is.null(snapshot) || !is.list(snapshot)) return(invisible(FALSE))
+    to_num1 <- function(x) {
+      v <- suppressWarnings(as.numeric(x))
+      if (length(v) < 1 || !is.finite(v[1])) return(NA_real_)
+      v[1]
+    }
+    h0 <- to_num1(snapshot$H_cell_0)
+    gs <- to_num1(snapshot$G_syringe)
+    vc <- to_num1(snapshot$V_cell)
+    vi <- to_num1(snapshot$V_inj)
+    ni <- to_num1(snapshot$n_inj)
+    vp <- to_num1(snapshot$V_pre)
+    tp <- to_num1(snapshot$Temp)
+    fh <- to_num1(snapshot$factor_H)
+    fg <- to_num1(snapshot$factor_G)
+    ho <- to_num1(snapshot$heat_offset)
+
+    if (is.finite(h0)) updateNumericInput(session, "H_cell_0", value = h0)
+    if (is.finite(gs)) updateNumericInput(session, "G_syringe", value = gs)
+    if (is.finite(vc)) updateNumericInput(session, "V_cell", value = vc)
+    if (is.finite(vi)) updateNumericInput(session, "V_inj", value = vi)
+    if (is.finite(ni)) updateNumericInput(session, "n_inj", value = as.integer(ni))
+    if (is.finite(vp)) updateNumericInput(session, "V_pre", value = vp)
+    if (is.finite(tp)) updateNumericInput(session, "Temp", value = tp)
+    if (is.finite(fh)) updateNumericInput(session, "factor_H", value = fh)
+    if (is.finite(fg)) updateNumericInput(session, "factor_G", value = fg)
+    if (is.finite(ho)) updateSliderInput(session, "heat_offset", value = ho)
+
+    paths <- snapshot$active_paths
+    if (is.character(paths) && length(paths) > 0) {
+      updateCheckboxGroupInput(session, "active_paths", selected = unique(paths))
+    }
+    invisible(TRUE)
+  }
+
+  apply_imported_xlsx_state <- function(sheets,
+                                        filepath,
+                                        file_name = NULL,
+                                        base_name_override = NULL,
+                                        notify_messages = TRUE) {
+    if (is.null(sheets) || !is.list(sheets) || length(sheets) < 1) return(FALSE)
 
     values$manual_exp_data <- NULL
     values$manual_exp_source <- NULL
@@ -1090,161 +1166,212 @@
     values$imported_xlsx_base_name <- NULL
     values$imported_xlsx_filename <- NULL
 
-    filepath <- f$datapath
-    # 显示用文件名（用户选择的原始文件名）
-    values$imported_xlsx_filename <- if (is.null(f$name) || f$name == "") NULL else f$name
-    # 记住导入文件基名（去掉时间戳如 _processed_20250108_1234 或 _fitted_20250108_1234）
-    base_raw <- tools::file_path_sans_ext(if (is.null(f$name) || f$name == "") "data" else f$name)
-    values$imported_xlsx_base_name <- sub("_(processed|fitted)_\\d{8}_\\d{4}$", "", base_raw)
+    file_display <- as.character(file_name %||% "")
+    if (length(file_display) < 1 || !nzchar(trimws(file_display[1]))) {
+      file_display <- "data.xlsx"
+    } else {
+      file_display <- trimws(file_display[1])
+    }
+    values$imported_xlsx_filename <- file_display
 
-    sheets <- tryCatch({
-      snames <- readxl::excel_sheets(filepath)
-      lst <- list()
-      for (sn in snames) {
-        lst[[sn]] <- as.data.frame(readxl::read_excel(filepath, sheet = sn))
-      }
-      lst
-    }, error = function(e) NULL)
+    base_raw <- tools::file_path_sans_ext(file_display)
+    base_norm <- sub("_(processed|fitted)_\\d{8}_\\d{4}$", "", base_raw)
+    base_override <- as.character(base_name_override %||% "")
+    if (length(base_override) >= 1 && nzchar(trimws(base_override[1]))) {
+      base_norm <- trimws(base_override[1])
+    }
+    values$imported_xlsx_base_name <- base_norm
 
-    if (!is.null(sheets)) {
-      values$imported_xlsx_sheets <- sheets
-      values$imported_xlsx_file_path <- filepath
+    values$imported_xlsx_sheets <- sheets
+    values$imported_xlsx_file_path <- as.character(filepath %||% "")[1]
 
-      # Import Expt Data should reset Step 2 state similarly to Data -> Fit.
-      inferred_n_inj <- NULL
-      preferred_int <- get_preferred_integration_sheet(sheets)
-      if (!is.null(preferred_int)) {
-        inferred_n_inj <- nrow(preferred_int)
-      } else if ("simulation" %in% names(sheets) && is.data.frame(sheets[["simulation"]])) {
-        inferred_n_inj <- nrow(as.data.frame(sheets[["simulation"]]))
-      } else {
-        meta_num <- extract_meta_numeric_map_with_rev_priority(
-          meta_rev_df = sheets[["meta_rev"]],
-          meta_df = sheets[["meta"]]
-        )
-        if ("n_inj" %in% names(meta_num) && !is.na(meta_num[["n_inj"]])) {
-          inferred_n_inj <- suppressWarnings(as.integer(meta_num[["n_inj"]]))
-        }
-      }
-      reset_step2_ui_for_new_dataset(default_n_inj = inferred_n_inj, apply_first_injection_default = FALSE)
-
-      # 填充实验参数：仅当有 integration 或 simulation（实验数据）时执行
-      # 优先级：meta_rev > meta > fit_params > 默认值
-      exp_key_cols <- c("H_cell_0_mM", "G_syringe_mM", "V_cell_mL", "V_inj_uL", "n_inj", "V_pre_uL", "Temp_K")
-      has_exp_data <- FALSE
-      if (!is.null(preferred_int)) {
-        int_df <- preferred_int
-        has_heat_src <- !is.null(int_df) && (("heat_cal_mol" %in% colnames(int_df)) || ("Heat_ucal" %in% colnames(int_df)))
-        if (!is.null(int_df) && "Ratio_App" %in% colnames(int_df) && isTRUE(has_heat_src)) {
-          has_exp_data <- TRUE
-        }
-      }
-      if (!has_exp_data && "simulation" %in% names(sheets)) {
-        sim_df <- sheets[["simulation"]]
-        if (!is.null(sim_df) && "Ratio_App" %in% colnames(sim_df) && "dQ_App" %in% colnames(sim_df)) {
-          has_exp_data <- TRUE
-        }
-      }
-      if (has_exp_data) {
-        meta_has_params <- FALSE
-        meta_vals <- extract_meta_numeric_map_with_rev_priority(
-          meta_rev_df = sheets[["meta_rev"]],
-          meta_df = sheets[["meta"]]
-        )
-        meta_has_params <- any(vapply(exp_key_cols, function(k) {
-          k %in% names(meta_vals) && !is.na(meta_vals[[k]])
-        }, logical(1)))
-        if (meta_has_params) {
-          if ("H_cell_0_mM" %in% names(meta_vals) && !is.na(meta_vals[["H_cell_0_mM"]])) {
-            updateNumericInput(session, "H_cell_0", value = meta_vals[["H_cell_0_mM"]])
-          }
-          if ("G_syringe_mM" %in% names(meta_vals) && !is.na(meta_vals[["G_syringe_mM"]])) {
-            updateNumericInput(session, "G_syringe", value = meta_vals[["G_syringe_mM"]])
-          }
-          if ("V_cell_mL" %in% names(meta_vals) && !is.na(meta_vals[["V_cell_mL"]])) {
-            updateNumericInput(session, "V_cell", value = meta_vals[["V_cell_mL"]])
-          }
-          if ("V_inj_uL" %in% names(meta_vals) && !is.na(meta_vals[["V_inj_uL"]])) {
-            updateNumericInput(session, "V_inj", value = meta_vals[["V_inj_uL"]])
-          }
-          if ("n_inj" %in% names(meta_vals) && !is.na(meta_vals[["n_inj"]])) {
-            updateNumericInput(session, "n_inj", value = meta_vals[["n_inj"]])
-          }
-          if ("Temp_K" %in% names(meta_vals) && !is.na(meta_vals[["Temp_K"]])) {
-            updateNumericInput(session, "Temp", value = meta_vals[["Temp_K"]])
-          }
-          showNotification(tr("import_params_auto_filled", lang()), type = "message", duration = 3)
-        }
-
-        fp_map <- extract_fit_params_map(sheets[["fit_params"]])
-        fp_restore <- extract_simfit_restore_params(fp_map)
-        fp_has_any <- any(vapply(fp_restore, function(v) is.finite(suppressWarnings(as.numeric(v))), logical(1)))
-        if (fp_has_any) {
-          restore_paths <- parse_active_paths_from_fit_params(fp_map)
-          updateCheckboxGroupInput(session, "active_paths", selected = restore_paths)
-
-          if (is.finite(fp_restore$logK1)) updateSliderInput(session, "logK1", value = fp_restore$logK1)
-          if (is.finite(fp_restore$H1)) updateSliderInput(session, "H1", value = fp_restore$H1)
-          if (is.finite(fp_restore$logK2)) updateSliderInput(session, "logK2", value = fp_restore$logK2)
-          if (is.finite(fp_restore$H2)) updateSliderInput(session, "H2", value = fp_restore$H2)
-          if (is.finite(fp_restore$logK3)) updateSliderInput(session, "logK3", value = fp_restore$logK3)
-          if (is.finite(fp_restore$H3)) updateSliderInput(session, "H3", value = fp_restore$H3)
-          if (is.finite(fp_restore$logK4)) updateSliderInput(session, "logK4", value = fp_restore$logK4)
-          if (is.finite(fp_restore$H4)) updateSliderInput(session, "H4", value = fp_restore$H4)
-          if (is.finite(fp_restore$logK5)) updateSliderInput(session, "logK5", value = fp_restore$logK5)
-          if (is.finite(fp_restore$H5)) updateSliderInput(session, "H5", value = fp_restore$H5)
-          if (is.finite(fp_restore$logK6)) updateSliderInput(session, "logK6", value = fp_restore$logK6)
-          if (is.finite(fp_restore$H6)) updateSliderInput(session, "H6", value = fp_restore$H6)
-
-          if (is.finite(fp_restore$fH)) updateNumericInput(session, "factor_H", value = fp_restore$fH)
-          if (is.finite(fp_restore$fG)) updateNumericInput(session, "factor_G", value = fp_restore$fG)
-          if (is.finite(fp_restore$Offset_cal)) updateSliderInput(session, "heat_offset", value = fp_restore$Offset_cal)
-
-          if (!meta_has_params) {
-            if (is.finite(fp_restore$H_cell_0_mM)) updateNumericInput(session, "H_cell_0", value = fp_restore$H_cell_0_mM)
-            if (is.finite(fp_restore$G_syringe_mM)) updateNumericInput(session, "G_syringe", value = fp_restore$G_syringe_mM)
-            if (is.finite(fp_restore$V_cell_mL)) updateNumericInput(session, "V_cell", value = fp_restore$V_cell_mL)
-            if (is.finite(fp_restore$V_inj_uL)) updateNumericInput(session, "V_inj", value = fp_restore$V_inj_uL)
-            if (is.finite(fp_restore$n_inj)) updateNumericInput(session, "n_inj", value = as.integer(fp_restore$n_inj))
-            if (is.finite(fp_restore$Temp_K)) updateNumericInput(session, "Temp", value = fp_restore$Temp_K)
-          }
-          showNotification(tr("import_params_from_fit_params", lang()), type = "message", duration = 4)
-        } else if (!meta_has_params) {
-          showNotification(tr("import_params_no_source", lang()), type = "warning", duration = 5)
-        }
-
-        default_first <- if (!is.null(UI_DEFAULTS$v_pre_default)) UI_DEFAULTS$v_pre_default else DEFAULT_PARAMS$V_init
-        first_target <- resolve_first_injection_targets(
-          mode = "import",
-          meta_vals = meta_vals,
-          fp_restore = if (isTRUE(fp_has_any)) fp_restore else NULL,
-          int_df = preferred_int,
-          default_v_pre = default_first
-        )
-        if (
-          isTRUE(first_target$has_source) &&
-          is.finite(first_target$v_pre_target) &&
-          is.finite(first_target$v_init_target)
-        ) {
-          apply_import_first_injection_targets(
-            v_pre_target = first_target$v_pre_target,
-            v_init_target = first_target$v_init_target
-          )
-        }
-      }
-      # 若为 SimFit 导出的拟合数据（无 integration，有 simulation），提示已作为实验数据导入
-      if ("simulation" %in% names(sheets) && is.null(preferred_int)) {
-        sim_df <- sheets[["simulation"]]
-        if (!is.null(sim_df) && "Ratio_App" %in% colnames(sim_df) && "dQ_App" %in% colnames(sim_df)) {
-          showNotification(tr("import_fit_data_as_exp", lang()), type = "message", duration = 4)
-        }
+    inferred_n_inj <- NULL
+    preferred_int <- get_preferred_integration_sheet(sheets)
+    if (!is.null(preferred_int)) {
+      inferred_n_inj <- nrow(preferred_int)
+    } else if ("simulation" %in% names(sheets) && is.data.frame(sheets[["simulation"]])) {
+      inferred_n_inj <- nrow(as.data.frame(sheets[["simulation"]]))
+    } else {
+      meta_num <- extract_meta_numeric_map_with_rev_priority(
+        meta_rev_df = sheets[["meta_rev"]],
+        meta_df = sheets[["meta"]]
+      )
+      if ("n_inj" %in% names(meta_num) && !is.na(meta_num[["n_inj"]])) {
+        inferred_n_inj <- suppressWarnings(as.integer(meta_num[["n_inj"]]))
       }
     }
+    reset_step2_ui_for_new_dataset(default_n_inj = inferred_n_inj, apply_first_injection_default = FALSE)
+
+    exp_key_cols <- c("H_cell_0_mM", "G_syringe_mM", "V_cell_mL", "V_inj_uL", "n_inj", "V_pre_uL", "Temp_K")
+    has_exp_data <- FALSE
+    if (!is.null(preferred_int)) {
+      int_df <- preferred_int
+      has_heat_src <- !is.null(int_df) && (("heat_cal_mol" %in% colnames(int_df)) || ("Heat_ucal" %in% colnames(int_df)))
+      if (!is.null(int_df) && "Ratio_App" %in% colnames(int_df) && isTRUE(has_heat_src)) {
+        has_exp_data <- TRUE
+      }
+    }
+    if (!has_exp_data && "simulation" %in% names(sheets)) {
+      sim_df <- sheets[["simulation"]]
+      if (!is.null(sim_df) && "Ratio_App" %in% colnames(sim_df) && "dQ_App" %in% colnames(sim_df)) {
+        has_exp_data <- TRUE
+      }
+    }
+
+    if (has_exp_data) {
+      meta_has_params <- FALSE
+      meta_vals <- extract_meta_numeric_map_with_rev_priority(
+        meta_rev_df = sheets[["meta_rev"]],
+        meta_df = sheets[["meta"]]
+      )
+      meta_has_params <- any(vapply(exp_key_cols, function(k) {
+        k %in% names(meta_vals) && !is.na(meta_vals[[k]])
+      }, logical(1)))
+      if (meta_has_params) {
+        if ("H_cell_0_mM" %in% names(meta_vals) && !is.na(meta_vals[["H_cell_0_mM"]])) updateNumericInput(session, "H_cell_0", value = meta_vals[["H_cell_0_mM"]])
+        if ("G_syringe_mM" %in% names(meta_vals) && !is.na(meta_vals[["G_syringe_mM"]])) updateNumericInput(session, "G_syringe", value = meta_vals[["G_syringe_mM"]])
+        if ("V_cell_mL" %in% names(meta_vals) && !is.na(meta_vals[["V_cell_mL"]])) updateNumericInput(session, "V_cell", value = meta_vals[["V_cell_mL"]])
+        if ("V_inj_uL" %in% names(meta_vals) && !is.na(meta_vals[["V_inj_uL"]])) updateNumericInput(session, "V_inj", value = meta_vals[["V_inj_uL"]])
+        if ("n_inj" %in% names(meta_vals) && !is.na(meta_vals[["n_inj"]])) updateNumericInput(session, "n_inj", value = meta_vals[["n_inj"]])
+        if ("Temp_K" %in% names(meta_vals) && !is.na(meta_vals[["Temp_K"]])) updateNumericInput(session, "Temp", value = meta_vals[["Temp_K"]])
+        if (isTRUE(notify_messages)) {
+          showNotification(tr("import_params_auto_filled", lang()), type = "message", duration = 3)
+        }
+      }
+
+      fp_map <- extract_fit_params_map(sheets[["fit_params"]])
+      fp_restore <- extract_simfit_restore_params(fp_map)
+      fp_has_any <- any(vapply(fp_restore, function(v) is.finite(suppressWarnings(as.numeric(v))), logical(1)))
+      if (fp_has_any) {
+        restore_paths <- parse_active_paths_from_fit_params(fp_map)
+        updateCheckboxGroupInput(session, "active_paths", selected = restore_paths)
+
+        if (is.finite(fp_restore$logK1)) updateSliderInput(session, "logK1", value = fp_restore$logK1)
+        if (is.finite(fp_restore$H1)) updateSliderInput(session, "H1", value = fp_restore$H1)
+        if (is.finite(fp_restore$logK2)) updateSliderInput(session, "logK2", value = fp_restore$logK2)
+        if (is.finite(fp_restore$H2)) updateSliderInput(session, "H2", value = fp_restore$H2)
+        if (is.finite(fp_restore$logK3)) updateSliderInput(session, "logK3", value = fp_restore$logK3)
+        if (is.finite(fp_restore$H3)) updateSliderInput(session, "H3", value = fp_restore$H3)
+        if (is.finite(fp_restore$logK4)) updateSliderInput(session, "logK4", value = fp_restore$logK4)
+        if (is.finite(fp_restore$H4)) updateSliderInput(session, "H4", value = fp_restore$H4)
+        if (is.finite(fp_restore$logK5)) updateSliderInput(session, "logK5", value = fp_restore$logK5)
+        if (is.finite(fp_restore$H5)) updateSliderInput(session, "H5", value = fp_restore$H5)
+        if (is.finite(fp_restore$logK6)) updateSliderInput(session, "logK6", value = fp_restore$logK6)
+        if (is.finite(fp_restore$H6)) updateSliderInput(session, "H6", value = fp_restore$H6)
+
+        if (is.finite(fp_restore$fH)) updateNumericInput(session, "factor_H", value = fp_restore$fH)
+        if (is.finite(fp_restore$fG)) updateNumericInput(session, "factor_G", value = fp_restore$fG)
+        if (is.finite(fp_restore$Offset_cal)) updateSliderInput(session, "heat_offset", value = fp_restore$Offset_cal)
+
+        if (!meta_has_params) {
+          if (is.finite(fp_restore$H_cell_0_mM)) updateNumericInput(session, "H_cell_0", value = fp_restore$H_cell_0_mM)
+          if (is.finite(fp_restore$G_syringe_mM)) updateNumericInput(session, "G_syringe", value = fp_restore$G_syringe_mM)
+          if (is.finite(fp_restore$V_cell_mL)) updateNumericInput(session, "V_cell", value = fp_restore$V_cell_mL)
+          if (is.finite(fp_restore$V_inj_uL)) updateNumericInput(session, "V_inj", value = fp_restore$V_inj_uL)
+          if (is.finite(fp_restore$n_inj)) updateNumericInput(session, "n_inj", value = as.integer(fp_restore$n_inj))
+          if (is.finite(fp_restore$Temp_K)) updateNumericInput(session, "Temp", value = fp_restore$Temp_K)
+        }
+        if (isTRUE(notify_messages)) {
+          showNotification(tr("import_params_from_fit_params", lang()), type = "message", duration = 4)
+        }
+      } else if (!meta_has_params && isTRUE(notify_messages)) {
+        showNotification(tr("import_params_no_source", lang()), type = "warning", duration = 5)
+      }
+
+      default_first <- if (!is.null(UI_DEFAULTS$v_pre_default)) UI_DEFAULTS$v_pre_default else DEFAULT_PARAMS$V_init
+      first_target <- resolve_first_injection_targets(
+        mode = "import",
+        meta_vals = meta_vals,
+        fp_restore = if (isTRUE(fp_has_any)) fp_restore else NULL,
+        int_df = preferred_int,
+        default_v_pre = default_first
+      )
+      if (
+        isTRUE(first_target$has_source) &&
+        is.finite(first_target$v_pre_target) &&
+        is.finite(first_target$v_init_target)
+      ) {
+        apply_import_first_injection_targets(
+          v_pre_target = first_target$v_pre_target,
+          v_init_target = first_target$v_init_target
+        )
+      }
+    }
+
+    if ("simulation" %in% names(sheets) && is.null(preferred_int) && isTRUE(notify_messages)) {
+      sim_df <- sheets[["simulation"]]
+      if (!is.null(sim_df) && "Ratio_App" %in% colnames(sim_df) && "dQ_App" %in% colnames(sim_df)) {
+        showNotification(tr("import_fit_data_as_exp", lang()), type = "message", duration = 4)
+      }
+    }
+
+    TRUE
+  }
+
+  normalize_step2_path <- function(path) {
+    p <- as.character(path %||% "")[1]
+    p <- trimws(p)
+    if (!nzchar(p)) return("")
+    tryCatch(normalizePath(p, winslash = "/", mustWork = FALSE), error = function(e) p)
+  }
+
+  restore_step2_home_record <- function(record) {
+    if (is.null(record) || !is.list(record)) return(FALSE)
+    filepath <- normalize_step2_path(record$source_path)
+    if (!nzchar(filepath) || !file.exists(filepath)) return(FALSE)
+
+    record_name <- as.character(record$display_name %||% "")[1]
+    record_name <- trimws(record_name)
+    file_name <- basename(filepath)
+    if (nzchar(record_name) && grepl("\\.xlsx$", tolower(record_name))) {
+      file_name <- record_name
+    }
+    sheets <- read_xlsx_sheets(filepath)
+    if (is.null(sheets) || !is.list(sheets) || length(sheets) < 1) return(FALSE)
+
+    isTRUE(apply_imported_xlsx_state(
+      sheets = sheets,
+      filepath = filepath,
+      file_name = trimws(file_name),
+      notify_messages = FALSE
+    ))
+  }
+
+  home_register_restore("step2", restore_step2_home_record)
+
+  # 监听文件上传：读取 xlsx、缓存 sheets，并立即根据 meta 更新实验参数（保证导入即更新）
+  observeEvent(input$exp_file, {
+    f <- input$exp_file
+    if (is.null(f) || is.null(f$datapath)) return()
+    filepath <- f$datapath
+    display_name <- if (is.null(f$name) || f$name == "") "data.xlsx" else f$name
+    sheets <- read_xlsx_sheets(filepath)
+    if (is.null(sheets)) return()
+
+    ok <- isTRUE(apply_imported_xlsx_state(
+      sheets = sheets,
+      filepath = filepath,
+      file_name = display_name,
+      notify_messages = TRUE
+    ))
+    if (!isTRUE(ok)) return()
+
+    home_add_recent(
+      list(
+        display_name = values$imported_xlsx_filename %||% display_name,
+        file_name = values$imported_xlsx_filename %||% display_name,
+        source_step = "step2",
+        target_step = "step2",
+        source_path = normalize_step2_path(filepath),
+        source_path_kind = "import"
+      )
+    )
   })
   
   # 判断“当前无实验数据”：不依赖 exp_data_processed()，避免无文件时 req() 挂起导致滑条无法随 n_inj 更新
   has_exp_data <- reactive({
     if (!is.null(values$manual_exp_data) && nrow(values$manual_exp_data) > 0) return(TRUE)
+    if (!is.null(values$imported_xlsx_sheets) && length(values$imported_xlsx_sheets) > 0) return(TRUE)
     if (is.null(input$exp_file) || length(input$exp_file) == 0) return(FALSE)
     exp_df <- tryCatch(exp_data_processed(), error = function(e) NULL)
     !is.null(exp_df) && nrow(exp_df) > 0

@@ -4,6 +4,16 @@
   # 对外接口：output$export_params、publish_step2_plot_payload()、output$simfit_downloadData。
   # 副作用：写出 xlsx、更新 bridge channel、触发通知与 tab 切换。
   # 变更历史：2026-02-12 - 增加 Phase 4 注释规范样板。
+  last_step2_export_params_name <- reactiveVal(NULL)
+  last_step2_export_fitted_name <- reactiveVal(NULL)
+
+  normalize_step2_export_path <- function(path) {
+    p <- as.character(path %||% "")[1]
+    p <- trimws(p)
+    if (!nzchar(p)) return("")
+    tryCatch(normalizePath(p, winslash = "/", mustWork = FALSE), error = function(e) p)
+  }
+
   observeEvent(input$export_params_trigger, {
     if (lang_switching()) return()
     checked_ids <- as.character(values$param_checked_ids %||% character(0))
@@ -17,11 +27,13 @@
   # --- 5. 导出参数快照 (xlsx，参数名带单位后缀) ---
   output$export_params <- downloadHandler(
     filename = function() {
-      export_bridge_build_params_snapshot_filename(
+      fname <- export_bridge_build_params_snapshot_filename(
         base_name = values$imported_xlsx_base_name,
         fallback_name = values$imported_xlsx_filename,
         now = Sys.time()
       )
+      last_step2_export_params_name(fname)
+      fname
     },
     content = function(file) {
       export_df <- as.data.frame(values$param_list)
@@ -52,6 +64,29 @@
         }
       }
       writexl::write_xlsx(list(snapshots = export_df), path = file)
+
+      export_name <- as.character(last_step2_export_params_name() %||% "")[1]
+      if (!nzchar(trimws(export_name))) export_name <- basename(file)
+      export_path <- normalize_step2_export_path(file)
+      import_raw <- as.character(values$imported_xlsx_file_path %||% "")[1]
+      import_raw <- trimws(import_raw)
+      source_import_path <- ""
+      if (nzchar(import_raw) && !startsWith(import_raw, "bridge://")) {
+        source_import_path <- normalize_step2_export_path(import_raw)
+      }
+      if (!nzchar(source_import_path)) return(invisible(NULL))
+      home_add_recent_export(
+        list(
+          display_name = export_name,
+          file_name = export_name,
+          source_step = "step2",
+          target_step = "step2",
+          export_type = "xlsx",
+          source_path = source_import_path,
+          artifact_path = export_path,
+          source_path_kind = "import"
+        )
+      )
     }
   )
   
@@ -180,10 +215,18 @@
     )
   }
 
+  resolve_step2_plot_source_path <- function() {
+    path_raw <- as.character(values$imported_xlsx_file_path %||% "")[1]
+    path_raw <- trimws(path_raw)
+    if (!nzchar(path_raw) || startsWith(path_raw, "bridge://")) return("")
+    tryCatch(normalizePath(path_raw, winslash = "/", mustWork = FALSE), error = function(e) path_raw)
+  }
+
   publish_step2_plot_payload <- function(sim = NULL) {
     bundle <- build_fit_export_bundle(sim = sim)
     if (is.null(bundle)) return(invisible(FALSE))
     src_info <- resolve_step2_plot_source()
+    source_path <- resolve_step2_plot_source_path()
     token <- next_bridge_token()
     bridge_set("step2_plot_payload", list(
       schema_version = "itcsuite.step2_plot.v1",
@@ -191,6 +234,7 @@
       token = token,
       source = src_info$source %||% "bridge",
       source_label = src_info$source_label %||% "",
+      source_path = if (nzchar(source_path)) source_path else NULL,
       sheets = bundle$sheets %||% list(),
       integration_rev = bundle$integration_rev %||% NULL,
       meta_rev = bundle$meta_rev %||% NULL,
@@ -220,7 +264,9 @@
     filename = function() {
       base <- values$imported_xlsx_base_name
       if (is.null(base) || length(base) == 0 || base == "") base <- "ITC_Fit_Data"
-      paste0(base, "_fitted_", format(Sys.time(), "%Y%m%d_%H%M"), ".xlsx")
+      fname <- paste0(base, "_fitted_", format(Sys.time(), "%Y%m%d_%H%M"), ".xlsx")
+      last_step2_export_fitted_name(fname)
+      fname
     },
     content = function(file) {
       bundle <- build_fit_export_bundle()
@@ -230,5 +276,21 @@
         return()
       }
       writexl::write_xlsx(bundle$sheets, path = file)
+
+      export_name <- as.character(last_step2_export_fitted_name() %||% "")[1]
+      if (!nzchar(trimws(export_name))) export_name <- basename(file)
+      export_path <- normalize_step2_export_path(file)
+      home_add_recent_export(
+        list(
+          display_name = export_name,
+          file_name = export_name,
+          source_step = "step2",
+          target_step = "step2",
+          export_type = "xlsx",
+          source_path = export_path,
+          artifact_path = export_path,
+          source_path_kind = "artifact"
+        )
+      )
     }
   )

@@ -440,10 +440,39 @@
         }
       }
       if (is.null(base) || !nzchar(base)) base <- "ITC"
-      paste0(base, "_report_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".txt")
+      fname <- paste0(base, "_report_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".txt")
+      values$last_report_export_name <- fname
+      fname
     },
     content = function(file) {
-      writeLines(values$current_report, file)
+      report_text <- values$current_report
+      if (is.null(report_text) || !nzchar(as.character(report_text %||% "")[1])) {
+        report_text <- build_fitting_report_text()
+      }
+      writeLines(report_text, file)
+
+      export_name <- as.character(values$last_report_export_name %||% "")[1]
+      if (!nzchar(trimws(export_name))) export_name <- basename(file)
+      export_path <- tryCatch(normalizePath(file, winslash = "/", mustWork = FALSE), error = function(e) as.character(file)[1])
+      import_path_raw <- as.character(values$imported_xlsx_file_path %||% "")[1]
+      import_path_raw <- trimws(import_path_raw)
+      import_path <- ""
+      if (nzchar(import_path_raw) && !startsWith(import_path_raw, "bridge://")) {
+        import_path <- tryCatch(normalizePath(import_path_raw, winslash = "/", mustWork = FALSE), error = function(e) import_path_raw)
+      }
+      if (!nzchar(trimws(import_path))) return(invisible(NULL))
+      home_add_recent_export(
+        list(
+          display_name = export_name,
+          file_name = export_name,
+          source_step = "step2",
+          target_step = "step2",
+          export_type = "txt",
+          source_path = import_path,
+          artifact_path = export_path,
+          source_path_kind = "import"
+        )
+      )
     }
   )
 

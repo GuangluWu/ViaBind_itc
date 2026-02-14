@@ -1375,3 +1375,30 @@
 2026-02-13 20:17:37 | INFO | [perform_fitting_sync] 参数边界设置完成，共 5 个参数待优化
 2026-02-13 20:17:37 | INFO | [perform_fitting_sync] L-BFGS-B优化参数：最大迭代=10
 2026-02-13 20:17:37 | INFO | [perform_fitting_sync] L-BFGS-B优化完成，目标函数值=944503.2934, 收敛=1
+2026-02-14 13:20:03 | INFO | [perform_fitting_sync] 参数边界设置完成，共 6 个参数待优化
+2026-02-14 13:20:03 | INFO | [perform_fitting_sync] L-BFGS-B优化参数：最大迭代=10
+2026-02-14 13:20:05 | INFO | [perform_fitting_sync] L-BFGS-B优化完成，目标函数值=23619654.2661, 收敛=1
+2026-02-14 13:20:07 | INFO | [perform_fitting_sync] 参数边界设置完成，共 6 个参数待优化
+2026-02-14 13:20:07 | INFO | [perform_fitting_sync] L-BFGS-B优化参数：最大迭代=10
+2026-02-14 13:20:09 | INFO | [perform_fitting_sync] L-BFGS-B优化完成，目标函数值=21887193.9039, 收敛=1
+2026-02-14 13:20:11 | INFO | [perform_fitting_sync] 参数边界设置完成，共 6 个参数待优化
+2026-02-14 13:20:11 | INFO | [perform_fitting_sync] L-BFGS-B优化参数：最大迭代=10
+2026-02-14 13:20:17 | INFO | [perform_fitting_sync] L-BFGS-B优化完成，目标函数值=21720839.3142, 收敛=1
+2026-02-14 13:20:17 | INFO | [perform_fitting_sync] 参数边界设置完成，共 7 个参数待优化
+2026-02-14 13:20:17 | INFO | [perform_fitting_sync] L-BFGS-B优化参数：最大迭代=10
+2026-02-14 13:20:25 | INFO | [perform_fitting_sync] L-BFGS-B优化完成，目标函数值=19311014.1903, 收敛=0
+2026-02-14 13:20:25 | INFO | [perform_fitting_sync] 参数边界设置完成，共 7 个参数待优化
+2026-02-14 13:20:25 | INFO | [perform_fitting_sync] L-BFGS-B优化参数：最大迭代=10
+2026-02-14 13:20:26 | INFO | [perform_fitting_sync] L-BFGS-B优化完成，目标函数值=23235.1514, 收敛=0
+2026-02-14 13:20:30 | INFO | [perform_fitting_sync] 参数边界设置完成，共 7 个参数待优化
+2026-02-14 13:20:30 | INFO | [perform_fitting_sync] L-BFGS-B优化参数：最大迭代=10
+2026-02-14 13:20:34 | INFO | [perform_fitting_sync] L-BFGS-B优化完成，目标函数值=23193.1733, 收敛=1
+2026-02-14 13:20:40 | INFO | [perform_fitting_sync] 参数边界设置完成，共 6 个参数待优化
+2026-02-14 13:20:40 | INFO | [perform_fitting_sync] L-BFGS-B优化参数：最大迭代=10
+2026-02-14 13:20:44 | INFO | [perform_fitting_sync] L-BFGS-B优化完成，目标函数值=15007923.7123, 收敛=1
+2026-02-14 13:20:45 | INFO | [perform_fitting_sync] 参数边界设置完成，共 6 个参数待优化
+2026-02-14 13:20:45 | INFO | [perform_fitting_sync] L-BFGS-B优化参数：最大迭代=10
+2026-02-14 13:20:51 | INFO | [perform_fitting_sync] L-BFGS-B优化完成，目标函数值=15008163.0313, 收敛=52
+2026-02-14 13:20:53 | INFO | [perform_fitting_sync] 参数边界设置完成，共 6 个参数待优化
+2026-02-14 13:20:53 | INFO | [perform_fitting_sync] L-BFGS-B优化参数：最大迭代=10
+2026-02-14 13:20:54 | INFO | [perform_fitting_sync] L-BFGS-B优化完成，目标函数值=15008087.9942, 收敛=0

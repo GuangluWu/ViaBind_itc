@@ -14,9 +14,13 @@ fail_fast <- function(...) {
 library(shiny)
 source("R/bridge_contract.R")
 source("R/guide_annotations.R")
+source("R/home_recent_helpers.R")
 
 if (!exists("load_guide_annotations", mode = "function")) {
   fail_fast("Startup check failed: guide annotation loader is unavailable.")
+}
+if (!exists("home_detect_import_type", mode = "function")) {
+  fail_fast("Startup check failed: home recent helper is unavailable.")
 }
 
 detect_repo_root <- function() {
@@ -143,14 +147,92 @@ normalize_lang <- function(lang) {
 host_tr <- function(key, lang) {
   dict <- list(
     en = list(
+      home = "Home",
       step1 = "Step 1 Baseline & Integration",
       step2 = "Step 2 Simulation & Fitting",
-      step3 = "Step 3 Plot & Export"
+      step3 = "Step 3 Plot & Export",
+      home_welcome_title = "Welcome to ViaBind",
+      home_welcome_desc = "Start from Step 1, or reopen one of your recently imported datasets.",
+      home_start_step1 = "Enter Step 1",
+      home_recent_title = "Recent Imports",
+      home_recent_empty = "No recent imports in this session.",
+      home_recent_export_title = "Recent Exports",
+      home_recent_export_empty = "No recent exports in this session.",
+      home_guide_button = "Beginner Guide",
+      home_table_col_name = "Name",
+      home_table_col_type = "Type",
+      home_table_col_target = "Target",
+      home_table_col_time = "Imported At",
+      home_table_col_action = "Action",
+      home_restore_action = "Restore & Open",
+      home_import_type_itc = "ITC",
+      home_import_type_processed_xlsx = "Processed XLSX",
+      home_import_type_fitted_xlsx = "Fitted XLSX",
+      home_export_type_xlsx = "XLSX",
+      home_export_type_pdf = "PDF",
+      home_export_type_png = "PNG",
+      home_export_type_tiff = "TIFF",
+      home_export_type_txt = "TXT",
+      home_export_type_json = "JSON",
+      home_target_step1 = "Step 1",
+      home_target_step2 = "Step 2",
+      home_target_step3 = "Step 3",
+      home_restore_ok = "Restored %s and opened %s.",
+      home_restore_failed_no_payload = "Source file is missing for %s.",
+      home_restore_failed_no_handler = "No restore handler registered for %s.",
+      home_restore_failed_general = "Restore failed: %s",
+      home_unknown_name = "Unnamed Import",
+      home_guide_title = "Beginner Guide",
+      home_guide_body_1 = "Home: enter Step 1, review recent imports, and quickly reopen prior work.",
+      home_guide_body_2 = "Step 1: import .itc data, baseline correction, and integration.",
+      home_guide_body_3 = "Step 2: simulation and fitting using imported or bridged data.",
+      home_guide_body_4 = "Step 3: plotting and export for publication-ready output.",
+      home_guide_placeholder = "A full interactive tour will be available in a later update.",
+      close = "Close"
     ),
     zh = list(
-      step1 = "步骤 1 基线校正 & 积分",
-      step2 = "步骤 2 模拟 & 拟合",
-      step3 = "步骤 3 绘图 & 导出"
+      home = "首页",
+      step1 = "Step 1 基线校正 & 积分",
+      step2 = "Step 2 模拟 & 拟合",
+      step3 = "Step 3 绘图 & 导出",
+      home_welcome_title = "欢迎使用 ViaBind",
+      home_welcome_desc = "你可以从 Step 1 开始，或从下方调用最近导入的数据。",
+      home_start_step1 = "进入 Step 1",
+      home_recent_title = "最近导入",
+      home_recent_empty = "当前会话暂无最近导入记录。",
+      home_recent_export_title = "最近导出",
+      home_recent_export_empty = "当前会话暂无最近导出记录。",
+      home_guide_button = "新手导引",
+      home_table_col_name = "名称",
+      home_table_col_type = "类型",
+      home_table_col_target = "目标",
+      home_table_col_time = "导入时间",
+      home_table_col_action = "操作",
+      home_restore_action = "恢复并进入",
+      home_import_type_itc = "ITC",
+      home_import_type_processed_xlsx = "Processed XLSX",
+      home_import_type_fitted_xlsx = "Fitted XLSX",
+      home_export_type_xlsx = "XLSX",
+      home_export_type_pdf = "PDF",
+      home_export_type_png = "PNG",
+      home_export_type_tiff = "TIFF",
+      home_export_type_txt = "TXT",
+      home_export_type_json = "JSON",
+      home_target_step1 = "Step 1",
+      home_target_step2 = "Step 2",
+      home_target_step3 = "Step 3",
+      home_restore_ok = "已恢复 %s，并进入 %s。",
+      home_restore_failed_no_payload = "缺少 %s 的源文件路径。",
+      home_restore_failed_no_handler = "未找到 %s 的恢复处理器。",
+      home_restore_failed_general = "恢复失败：%s",
+      home_unknown_name = "未命名导入",
+      home_guide_title = "新手导引",
+      home_guide_body_1 = "首页：进入 Step 1、查看最近导入、快速恢复历史数据。",
+      home_guide_body_2 = "Step 1：导入 .itc 数据并完成基线校正与积分。",
+      home_guide_body_3 = "Step 2：基于导入或桥接数据进行模拟与拟合。",
+      home_guide_body_4 = "Step 3：生成绘图并导出用于展示或发表的数据。",
+      home_guide_placeholder = "完整的交互式导引将在后续版本上线。",
+      close = "关闭"
     )
   )
   lang_norm <- normalize_lang(lang)
@@ -158,7 +240,53 @@ host_tr <- function(key, lang) {
   if (is.null(val)) key else val
 }
 
+host_trf <- function(key, lang, ...) {
+  template <- host_tr(key, lang)
+  args <- list(...)
+  if (length(args) < 1) return(template)
+  tryCatch(
+    do.call(sprintf, c(list(template), args)),
+    error = function(e) template
+  )
+}
+
+home_import_type_label <- function(type, lang) {
+  type_norm <- tolower(normalize_home_scalar_chr(type, default = "processed_xlsx"))
+  key_import <- paste0("home_import_type_", type_norm)
+  val <- host_tr(key_import, lang)
+  if (!identical(val, key_import)) return(val)
+
+  key_export <- paste0("home_export_type_", type_norm)
+  val2 <- host_tr(key_export, lang)
+  if (!identical(val2, key_export)) return(val2)
+
+  if (nzchar(type_norm)) toupper(type_norm) else host_tr("home_import_type_processed_xlsx", lang)
+}
+
+home_target_label <- function(step, lang) {
+  step_norm <- normalize_home_scalar_chr(step, default = "step2")
+  if (identical(step_norm, "step1")) return(host_tr("home_target_step1", lang))
+  if (identical(step_norm, "step3")) return(host_tr("home_target_step3", lang))
+  host_tr("home_target_step2", lang)
+}
+
+home_detect_export_type <- function(file_name = NULL, fallback = "xlsx") {
+  file_norm <- tolower(normalize_home_scalar_chr(file_name, default = ""))
+  if (grepl("\\.pdf$", file_norm)) return("pdf")
+  if (grepl("\\.png$", file_norm)) return("png")
+  if (grepl("\\.tiff?$", file_norm)) return("tiff")
+  if (grepl("\\.txt$", file_norm)) return("txt")
+  if (grepl("\\.json$", file_norm)) return("json")
+  if (grepl("\\.xlsx$", file_norm)) return("xlsx")
+  fallback_norm <- tolower(normalize_home_scalar_chr(fallback, default = "xlsx"))
+  if (!nzchar(fallback_norm)) "xlsx" else fallback_norm
+}
+
 repo_root <- detect_repo_root()
+icon_assets_dir <- file.path(repo_root, "icons")
+if (dir.exists(icon_assets_dir)) {
+  try(shiny::addResourcePath("itcsuite_assets", icon_assets_dir), silent = TRUE)
+}
 processor_legacy <- load_legacy_app(file.path(repo_root, "ITCprocessor"), "ITCprocessor")
 simfit_legacy <- load_legacy_app(
   file.path(repo_root, "ITCsimfit"),
@@ -184,6 +312,20 @@ ui <- fluidPage(
       .main-host-brand a { color: inherit; text-decoration: underline; }\
       .main-host-lang-switch { position: absolute; top: 5px; right: 0; z-index: 10; }\
       .main-host-lang-switch .btn { min-width: 92px; }\
+      .home-tab-wrap { padding: 4px 2px 12px; }\
+      .home-panel { background: #f8fafc; border: 1px solid #d8e2ef; border-radius: 10px; padding: 16px; margin-bottom: 12px; }\
+      .home-title-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }\
+      .home-title-icon { width: 44px; height: 44px; border-radius: 10px; object-fit: cover; box-shadow: 0 1px 4px rgba(0,0,0,0.15); }\
+      .home-panel h3 { margin-top: 0; margin-bottom: 8px; }\
+      .home-panel p { margin-bottom: 10px; color: #374151; }\
+      .home-action-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }\
+      .home-recent-table-wrap { overflow-x: auto; overflow-y: auto; height: 454px; }\
+      .home-recent-table-empty { display: flex; align-items: center; justify-content: center; background: #fff; border: 1px solid #e5e7eb; }\
+      .home-recent-table { width: 100%; border-collapse: collapse; table-layout: fixed; background: #fff; }\
+      .home-recent-table th, .home-recent-table td { border: 1px solid #e5e7eb; padding: 8px; font-size: 13px; vertical-align: middle; }\
+      .home-recent-table th { background: #eff6ff; font-weight: 600; position: sticky; top: 0; z-index: 1; }\
+      .home-recent-table td { word-break: break-word; }\
+      .home-empty-note { color: #6b7280; font-size: 13px; }\
     ")),
     tags$script(HTML("
       (function() {
@@ -211,6 +353,7 @@ ui <- fluidPage(
 
         Shiny.addCustomMessageHandler('itcsuite_i18n_tab_labels', function(msg) {
           if (!msg) return;
+          if (msg.home) $('#main_tab_label_home').text(msg.home);
           if (msg.step1) $('#main_tab_label_step1').text(msg.step1);
           if (msg.step2) $('#main_tab_label_step2').text(msg.step2);
           if (msg.step3) $('#main_tab_label_step3').text(msg.step3);
@@ -228,6 +371,8 @@ ui <- fluidPage(
       class = "main-host-topbar",
       tabsetPanel(
         id = "main_tabs",
+        selected = "home",
+        tabPanel(tags$span(id = "main_tab_label_home", "Home"), value = "home", uiOutput("home_panel_ui")),
         tabPanel(tags$span(id = "main_tab_label_step1", "Step 1 Baseline & Integration"), value = "step1", uiOutput("legacy_processor_ui")),
         tabPanel(tags$span(id = "main_tab_label_step2", "Step 2 Simulation & Fitting"), value = "step2", uiOutput("legacy_simfit_ui")),
         tabPanel(tags$span(id = "main_tab_label_step3", "Step 3 Plot & Export"), value = "step3", uiOutput("legacy_graph_ui"))
@@ -265,6 +410,194 @@ server <- function(input, output, session) {
     invisible(normalized)
   }
 
+  home_state <- reactiveValues(
+    import_records = list(),
+    next_seq = 0L,
+    import_observer_ids = character(0)
+  )
+  home_restore_handlers <- new.env(parent = emptyenv())
+
+  next_home_record_id <- function() {
+    seq_num <- suppressWarnings(as.integer(home_state$next_seq)[1])
+    if (!is.finite(seq_num) || seq_num < 0L) seq_num <- 0L
+    seq_num <- seq_num + 1L
+    home_state$next_seq <- seq_num
+    sprintf("home_rec_%06d", seq_num)
+  }
+
+  normalize_recent_display_name <- function(x) {
+    out <- normalize_home_scalar_chr(x, default = "")
+    if (!nzchar(out)) out <- host_tr("home_unknown_name", host_lang())
+    out
+  }
+
+  valid_target_step <- function(step) {
+    st <- normalize_home_scalar_chr(step, default = "")
+    st %in% c("step1", "step2", "step3")
+  }
+
+  normalize_recent_path <- function(path) {
+    p <- normalize_home_scalar_chr(path, default = "")
+    if (!nzchar(p)) return("")
+    tryCatch(normalizePath(p, winslash = "/", mustWork = FALSE), error = function(e) p)
+  }
+
+  add_recent_record <- function(kind = c("import", "export"), record) {
+    kind <- match.arg(kind)
+    if (!identical(kind, "import")) return(invisible(NULL))
+    rec <- if (is.list(record)) record else list()
+
+    display_name <- normalize_recent_display_name(rec$display_name %||% rec$file_name)
+    file_name <- normalize_home_scalar_chr(rec$file_name, default = display_name)
+    entry_type <- ""
+    target_step <- ""
+    sheets <- if (is.list(rec$sheets)) rec$sheets else NULL
+    fallback_type <- normalize_home_scalar_chr(rec$import_type, default = "processed_xlsx")
+    entry_type <- home_detect_import_type(
+      file_name = file_name,
+      sheets = sheets,
+      fallback = fallback_type
+    )
+    if (isTRUE(valid_target_step(rec$target_step))) {
+      target_step <- normalize_home_scalar_chr(rec$target_step, default = "")
+    } else {
+      target_step <- home_target_step_from_import_type(entry_type)
+    }
+
+    source_step <- normalize_home_scalar_chr(rec$source_step, default = target_step)
+    imported_at <- normalize_home_scalar_chr(
+      rec$imported_at,
+      default = paste0(format(Sys.time(), "%Y-%m-%dT%H:%M:%S", tz = "UTC"), "Z")
+    )
+    source_path <- normalize_recent_path(rec$source_path)
+    artifact_path <- normalize_recent_path(rec$artifact_path %||% source_path)
+    source_path_kind <- normalize_home_scalar_chr(rec$source_path_kind, default = "artifact")
+    if (!source_path_kind %in% c("artifact", "import")) source_path_kind <- "artifact"
+
+    record_id <- next_home_record_id()
+
+    entry <- list(
+      id = record_id,
+      import_type = entry_type,
+      display_name = display_name,
+      target_step = target_step,
+      imported_at = imported_at,
+      source_step = source_step,
+      source_path = source_path,
+      artifact_path = artifact_path,
+      source_path_kind = source_path_kind,
+      restore_payload_key = ""
+    )
+
+    current_records <- home_state$import_records
+    if (!is.list(current_records)) current_records <- list()
+    merged <- c(list(entry), current_records)
+    trimmed <- home_trim_recent_records(merged, max_records = 20L)
+    home_state$import_records <- trimmed$records
+
+    invisible(entry)
+  }
+
+  add_recent_import <- function(record) {
+    add_recent_record("import", record = record)
+  }
+
+  add_recent_export <- function(record) {
+    invisible(NULL)
+  }
+
+  register_restore_handler <- function(step, fn) {
+    step_norm <- normalize_home_scalar_chr(step, default = "")
+    if (!nzchar(step_norm) || !is.function(fn)) return(invisible(FALSE))
+    assign(step_norm, fn, envir = home_restore_handlers)
+    invisible(TRUE)
+  }
+
+  resolve_restore_handler <- function(step) {
+    step_norm <- normalize_home_scalar_chr(step, default = "")
+    if (!exists(step_norm, envir = home_restore_handlers, inherits = FALSE)) return(NULL)
+    handler <- get(step_norm, envir = home_restore_handlers, inherits = FALSE)
+    if (is.function(handler)) handler else NULL
+  }
+
+  find_recent_record <- function(record_id, kind = c("import", "export")) {
+    kind <- match.arg(kind)
+    if (!identical(kind, "import")) return(NULL)
+    id <- normalize_home_scalar_chr(record_id, default = "")
+    if (!nzchar(id)) return(NULL)
+    recs <- home_state$import_records
+    if (!is.list(recs) || length(recs) < 1) return(NULL)
+    idx <- which(vapply(recs, function(rec) {
+      is.list(rec) && identical(normalize_home_scalar_chr(rec$id, default = ""), id)
+    }, logical(1)))
+    if (length(idx) < 1) return(NULL)
+    recs[[idx[1]]]
+  }
+
+  format_recent_imported_at <- function(value) {
+    val <- normalize_home_scalar_chr(value, default = "")
+    if (!nzchar(val)) return("")
+    ts_num <- home_parse_imported_at(val)
+    if (is.finite(ts_num)) {
+      local_tz <- Sys.timezone()
+      if (is.null(local_tz) || !nzchar(local_tz)) local_tz <- ""
+      return(format(as.POSIXct(ts_num, origin = "1970-01-01", tz = "UTC"), "%Y-%m-%d %H:%M:%S", tz = local_tz))
+    }
+    val
+  }
+
+  restore_recent_record <- function(record_id, kind = c("import", "export")) {
+    kind <- match.arg(kind)
+    if (!identical(kind, "import")) return(invisible(FALSE))
+    rec <- find_recent_record(record_id, kind = kind)
+    if (is.null(rec) || !is.list(rec)) return(invisible(FALSE))
+
+    display_name <- normalize_recent_display_name(rec$display_name)
+    target_step <- normalize_home_scalar_chr(rec$target_step, default = "step2")
+    target_label <- home_target_label(target_step, host_lang())
+    source_path <- normalize_recent_path(rec$source_path)
+
+    if (!nzchar(source_path)) {
+      showNotification(
+        host_trf("home_restore_failed_no_payload", host_lang(), display_name),
+        type = "warning",
+        duration = 4
+      )
+      return(invisible(FALSE))
+    }
+
+    handler <- resolve_restore_handler(target_step)
+    if (!is.function(handler)) {
+      showNotification(
+        host_trf("home_restore_failed_no_handler", host_lang(), target_label),
+        type = "warning",
+        duration = 4
+      )
+      return(invisible(FALSE))
+    }
+
+    restored_ok <- tryCatch(
+      isTRUE(handler(rec)),
+      error = function(e) {
+        showNotification(
+          host_trf("home_restore_failed_general", host_lang(), conditionMessage(e)),
+          type = "error",
+          duration = 5
+        )
+        FALSE
+      }
+    )
+    if (!isTRUE(restored_ok)) return(invisible(FALSE))
+
+    tryCatch(updateTabsetPanel(session, "main_tabs", selected = target_step), error = function(e) NULL)
+    showNotification(
+      host_trf("home_restore_ok", host_lang(), display_name, target_label),
+      type = "message",
+      duration = 3
+    )
+    invisible(TRUE)
+  }
+
   session$userData$itcsuite_i18n <- list(
     get_lang = function() {
       host_lang()
@@ -274,6 +607,27 @@ server <- function(input, output, session) {
     },
     lang_token = function() {
       host_lang_token()
+    }
+  )
+
+  session$userData$itcsuite_home <- list(
+    add_recent_import = function(record, payload = NULL) {
+      add_recent_import(record)
+    },
+    add_recent_export = function(record, payload = NULL) {
+      invisible(NULL)
+    },
+    register_restore_handler = function(step, fn) {
+      register_restore_handler(step, fn)
+    },
+    restore_recent_record = function(record_id, kind = "import") {
+      restore_recent_record(record_id, kind = kind)
+    },
+    get_recent_imports = function() {
+      home_state$import_records
+    },
+    get_recent_exports = function() {
+      list()
     }
   )
 
@@ -288,6 +642,7 @@ server <- function(input, output, session) {
 
   observeEvent(host_lang(), {
     session$sendCustomMessage("itcsuite_i18n_tab_labels", list(
+      home = host_tr("home", host_lang()),
       step1 = host_tr("step1", host_lang()),
       step2 = host_tr("step2", host_lang()),
       step3 = host_tr("step3", host_lang())
@@ -298,6 +653,122 @@ server <- function(input, output, session) {
       label = if (identical(host_lang(), "en")) "\U0001F1E8\U0001F1F3 中文" else "\U0001F1EC\U0001F1E7 English"
     )
   }, ignoreInit = FALSE)
+
+  output$home_panel_ui <- renderUI({
+    l <- host_lang()
+    import_recs <- home_state$import_records
+    if (!is.list(import_recs)) import_recs <- list()
+
+    build_recent_table <- function(recs, empty_text) {
+      if (!is.list(recs) || length(recs) < 1) {
+        return(
+          div(
+            class = "home-recent-table-wrap home-recent-table-empty",
+            div(class = "home-empty-note", empty_text)
+          )
+        )
+      }
+      header <- tags$tr(
+        tags$th(host_tr("home_table_col_name", l)),
+        tags$th(host_tr("home_table_col_type", l)),
+        tags$th(host_tr("home_table_col_target", l)),
+        tags$th(host_tr("home_table_col_time", l)),
+        tags$th(host_tr("home_table_col_action", l))
+      )
+      colgroup <- tags$colgroup(
+        tags$col(style = "width:30%;"),
+        tags$col(style = "width:15%;"),
+        tags$col(style = "width:15%;"),
+        tags$col(style = "width:25%;"),
+        tags$col(style = "width:15%;")
+      )
+      rows <- lapply(recs, function(rec) {
+        if (!is.list(rec)) return(NULL)
+        rec_id <- normalize_home_scalar_chr(rec$id, default = "")
+        if (!nzchar(rec_id)) return(NULL)
+        action_id <- paste0("home_restore_import_", rec_id)
+        tags$tr(
+          tags$td(normalize_recent_display_name(rec$display_name)),
+          tags$td(home_import_type_label(rec$import_type, l)),
+          tags$td(home_target_label(rec$target_step, l)),
+          tags$td(format_recent_imported_at(rec$imported_at)),
+          tags$td(actionButton(action_id, host_tr("home_restore_action", l), class = "btn btn-primary btn-xs"))
+        )
+      })
+      rows <- Filter(Negate(is.null), rows)
+      div(
+        class = "home-recent-table-wrap",
+        tags$table(
+          class = "home-recent-table",
+          colgroup,
+          tags$thead(header),
+          tags$tbody(rows)
+        )
+      )
+    }
+
+    home_icon <- file.path("/itcsuite_assets", "ViaBind_1024.png")
+
+    div(
+      class = "home-tab-wrap",
+      div(
+        class = "home-panel",
+        div(
+          class = "home-title-row",
+          tags$img(class = "home-title-icon", src = home_icon, alt = "ViaBind"),
+          tags$h3(host_tr("home_welcome_title", l))
+        ),
+        tags$p(host_tr("home_welcome_desc", l)),
+        div(
+          class = "home-action-row",
+          actionButton("home_start_step1", host_tr("home_start_step1", l), class = "btn btn-primary"),
+          actionButton("home_beginner_guide", host_tr("home_guide_button", l), class = "btn btn-info")
+        ),
+        tags$h4(host_tr("home_recent_title", l)),
+        build_recent_table(import_recs, host_tr("home_recent_empty", l))
+      )
+    )
+  })
+
+  observe({
+    recs <- home_state$import_records
+    if (!is.list(recs) || length(recs) < 1) return()
+    ids <- vapply(recs, function(rec) {
+      if (!is.list(rec)) return("")
+      normalize_home_scalar_chr(rec$id, default = "")
+    }, character(1))
+    ids <- ids[nzchar(ids)]
+    known <- home_state$import_observer_ids %||% character(0)
+    new_ids <- setdiff(ids, known)
+    if (length(new_ids) < 1) return()
+
+    for (rid in new_ids) {
+      local({
+        rec_id <- rid
+        observeEvent(input[[paste0("home_restore_import_", rec_id)]], {
+          restore_recent_record(rec_id, kind = "import")
+        }, ignoreInit = TRUE)
+      })
+    }
+    home_state$import_observer_ids <- unique(c(known, new_ids))
+  })
+
+  observeEvent(input$home_start_step1, {
+    updateTabsetPanel(session, "main_tabs", selected = "step1")
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$home_beginner_guide, {
+    showModal(modalDialog(
+      title = host_tr("home_guide_title", host_lang()),
+      tags$p(host_tr("home_guide_body_1", host_lang())),
+      tags$p(host_tr("home_guide_body_2", host_lang())),
+      tags$p(host_tr("home_guide_body_3", host_lang())),
+      tags$p(host_tr("home_guide_body_4", host_lang())),
+      tags$p(tags$em(host_tr("home_guide_placeholder", host_lang()))),
+      easyClose = TRUE,
+      footer = modalButton(host_tr("close", host_lang()))
+    ))
+  }, ignoreInit = TRUE)
 
   session$userData$itcsuite_bridge <- list(
     step1_payload = bridge_bus$step1_payload,

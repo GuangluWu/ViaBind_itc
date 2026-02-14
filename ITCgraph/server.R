@@ -30,7 +30,12 @@ server <- function(input, output, session) {
 
   is_step3_tab_selected <- function(tab_value) {
     tab_chr <- as.character(tab_value %||% "")[1]
-    tab_chr %in% c("step3", "Step 3 Plot & Export", "步骤 3 绘图与导出", "步骤 3 绘图 & 导出")
+    tab_chr %in% c(
+      "step3",
+      "Step 3 Plot & Export",
+      "Step 3 绘图与导出",
+      "Step 3 绘图 & 导出"
+    )
   }
 
   push_static_i18n <- function(lang_val) {
@@ -43,6 +48,29 @@ server <- function(input, output, session) {
       export_png = graph_tr("export_png", lang_val),
       export_tiff = graph_tr("export_tiff", lang_val)
     ))
+  }
+
+  session_home <- tryCatch({
+    h <- session$userData$itcsuite_home
+    if (is.null(h) || !is.list(h)) NULL else h
+  }, error = function(e) NULL)
+
+  home_add_recent <- function(record, payload = NULL) {
+    fn <- if (!is.null(session_home)) session_home$add_recent_import else NULL
+    if (is.function(fn)) fn(record, payload)
+    invisible(NULL)
+  }
+
+  home_add_recent_export <- function(record, payload = NULL) {
+    fn <- if (!is.null(session_home)) session_home$add_recent_export else NULL
+    if (is.function(fn)) fn(record, payload)
+    invisible(NULL)
+  }
+
+  home_register_restore <- function(step, handler) {
+    fn <- if (!is.null(session_home)) session_home$register_restore_handler else NULL
+    if (is.function(fn)) return(invisible(isTRUE(fn(step, handler))))
+    invisible(FALSE)
   }
   
   # ============================================================
@@ -59,8 +87,10 @@ server <- function(input, output, session) {
     meta        = NULL,   # meta sheet
     sheets      = NULL,   # all imported sheets
     source      = NULL,   # data source id
-    filename    = NULL    # 原始文件名
+    filename    = NULL,   # 原始文件名
+    source_path = NULL    # 当前数据对应的 xlsx 路径（用于 Home restore）
   )
+  step3_export_names <- reactiveValues(pdf = NULL, png = NULL, tiff = NULL)
 
   reset_imported_data <- function() {
     imported_data$power_original <- NULL
@@ -74,8 +104,204 @@ server <- function(input, output, session) {
     imported_data$sheets <- NULL
     imported_data$source <- NULL
     imported_data$filename <- NULL
+    imported_data$source_path <- NULL
     invisible(TRUE)
   }
+
+  normalize_step3_file_name <- function(x, default = "data.xlsx") {
+    out <- as.character(x %||% "")[1]
+    out <- trimws(out)
+    if (!nzchar(out)) default else out
+  }
+
+  normalize_step3_path <- function(path) {
+    p <- as.character(path %||% "")[1]
+    p <- trimws(p)
+    if (!nzchar(p)) return("")
+    tryCatch(normalizePath(p, winslash = "/", mustWork = FALSE), error = function(e) p)
+  }
+
+  read_step3_xlsx_sheets <- function(filepath) {
+    if (is.null(filepath) || !nzchar(as.character(filepath)[1])) return(NULL)
+    tryCatch({
+      snames <- readxl::excel_sheets(filepath)
+      out <- list()
+      for (sn in snames) {
+        out[[sn]] <- as.data.frame(readxl::read_excel(filepath, sheet = sn))
+      }
+      out
+    }, error = function(e) NULL)
+  }
+
+  apply_step3_imported_sheets <- function(sheets,
+                                          file_name = NULL,
+                                          source_tag = "xlsx_import",
+                                          source_path = NULL,
+                                          notify_messages = TRUE) {
+    if (is.null(sheets) || !is.list(sheets) || length(sheets) < 1) return(FALSE)
+
+    reset_imported_data()
+    reset_plot_controls_to_defaults()
+    imported_data$sheets <- list()
+
+    sheet_lookup <- names(sheets) %||% character(0)
+    if (!is.character(sheet_lookup)) sheet_lookup <- as.character(sheet_lookup)
+    sheet_lookup_lc <- tolower(sheet_lookup)
+    pick_sheet <- function(sheet_name) {
+      idx <- match(tolower(sheet_name), sheet_lookup_lc)
+      if (!is.finite(idx) || is.na(idx)) return(NULL)
+      obj <- sheets[[idx]]
+      if (is.data.frame(obj)) as.data.frame(obj) else NULL
+    }
+
+    po <- pick_sheet("power_original")
+    if (!is.null(po)) {
+      imported_data$power_original <- po
+      imported_data$sheets[["power_original"]] <- po
+    }
+
+    pc <- pick_sheet("power_corrected")
+    if (!is.null(pc) && all(c("Time_s", "Power_corrected_ucal_s") %in% colnames(pc))) {
+      imported_data$power <- pc
+      imported_data$sheets[["power_corrected"]] <- pc
+    }
+
+    int_rev <- pick_sheet("integration_rev")
+    int_base <- pick_sheet("integration")
+    if (!is.null(int_rev) && all(c("Ratio_App", "heat_cal_mol") %in% colnames(int_rev))) {
+      imported_data$integration <- int_rev
+      imported_data$sheets[["integration_rev"]] <- int_rev
+    } else if (!is.null(int_base) && all(c("Ratio_App", "heat_cal_mol") %in% colnames(int_base))) {
+      imported_data$integration <- int_base
+      imported_data$sheets[["integration"]] <- int_base
+    }
+
+    sim_df <- pick_sheet("simulation")
+    if (!is.null(sim_df) && all(c("Ratio_App", "dQ_App") %in% colnames(sim_df))) {
+      imported_data$simulation <- sim_df
+      imported_data$sheets[["simulation"]] <- sim_df
+    }
+
+    offset_for_range <- PLOT_DEFAULTS$heat_offset
+    fit_df <- pick_sheet("fit_params")
+    if (!is.null(fit_df)) {
+      imported_data$fit_params <- fit_df
+      imported_data$sheets[["fit_params"]] <- fit_df
+      fp_map <- fit_param_map(imported_data$fit_params)
+      offset_num <- get_fit_param_num(fp_map, "Offset_cal", default = NA_real_)
+      if (is.finite(offset_num)) {
+        offset_for_range <- offset_num
+        updateNumericInput(session, "graph_heat_offset", value = offset_num)
+      }
+      imported_data$ratio_fh <- normalize_factor(get_fit_param_num(fp_map, "fH", default = 1), 1)
+      imported_data$ratio_fg <- normalize_factor(get_fit_param_num(fp_map, "fG", default = 1), 1)
+    } else {
+      imported_data$ratio_fh <- 1
+      imported_data$ratio_fg <- 1
+    }
+    sync_ratio_factor_display(imported_data$ratio_fh, imported_data$ratio_fg)
+    reset_no_dim_range_to_default(apply_ratio = isTRUE(input$graph_apply_ratio_correction))
+
+    meta_rev <- pick_sheet("meta_rev")
+    meta_base <- pick_sheet("meta")
+    if (!is.null(meta_rev)) {
+      imported_data$meta <- meta_rev
+      imported_data$sheets[["meta_rev"]] <- meta_rev
+    } else if (!is.null(meta_base)) {
+      imported_data$meta <- meta_base
+      imported_data$sheets[["meta"]] <- meta_base
+    }
+
+    imported_data$source <- as.character(source_tag %||% "xlsx_import")[1]
+    imported_data$filename <- normalize_step3_file_name(file_name, default = "data.xlsx")
+    imported_data$source_path <- normalize_step3_path(source_path)
+
+    has_any <- !is.null(imported_data$power) || !is.null(imported_data$integration) || !is.null(imported_data$simulation)
+    if (isTRUE(has_any) && isTRUE(notify_messages)) {
+      showNotification(graph_tr("data_import_success", lang()), type = "message", duration = 3)
+    }
+
+    if (isTRUE(has_any)) {
+      tryCatch(
+        apply_auto_ranges(
+          offset_override = offset_for_range,
+          apply_ratio = isTRUE(input$graph_apply_ratio_correction)
+        ),
+        error = function(e) NULL
+      )
+    }
+    isTRUE(has_any)
+  }
+
+  record_step3_recent_import <- function(file_name = imported_data$filename, source_path = imported_data$source_path) {
+    src_path <- normalize_step3_path(source_path)
+    if (!nzchar(src_path)) return(invisible(FALSE))
+    name <- normalize_step3_file_name(file_name, default = imported_data$filename %||% "data.xlsx")
+    home_add_recent(
+      list(
+        display_name = name,
+        file_name = name,
+        source_step = "step3",
+        target_step = "step3",
+        source_path = src_path,
+        source_path_kind = "import"
+      )
+    )
+    invisible(TRUE)
+  }
+
+  record_step3_recent_export <- function(file_path, export_type = "pdf") {
+    export_path <- normalize_step3_path(file_path)
+    if (!nzchar(export_path)) return(invisible(FALSE))
+    import_path <- normalize_step3_path(imported_data$source_path)
+    if (!nzchar(import_path)) return(invisible(FALSE))
+    cached_name <- tryCatch({
+      as.character(step3_export_names[[export_type]] %||% "")[1]
+    }, error = function(e) "")
+    fname <- normalize_step3_file_name(cached_name, default = basename(file_path))
+    if (!nzchar(trimws(fname))) {
+      fname <- normalize_step3_file_name(basename(file_path), default = paste0("step3_export.", export_type))
+    }
+    home_add_recent_export(
+      list(
+        display_name = fname,
+        file_name = fname,
+        source_step = "step3",
+        target_step = "step3",
+        export_type = export_type,
+        source_path = import_path,
+        artifact_path = export_path,
+        source_path_kind = "import"
+      )
+    )
+    invisible(TRUE)
+  }
+
+  restore_step3_home_record <- function(record) {
+    if (is.null(record) || !is.list(record)) return(FALSE)
+    filepath <- normalize_step3_path(record$source_path)
+    if (!nzchar(filepath) || !file.exists(filepath)) return(FALSE)
+
+    sheets <- read_step3_xlsx_sheets(filepath)
+    if (is.null(sheets) || !is.list(sheets) || length(sheets) < 1) return(FALSE)
+    record_name <- as.character(record$display_name %||% "")[1]
+    record_name <- trimws(record_name)
+    file_name <- basename(filepath)
+    if (nzchar(record_name) && grepl("\\.xlsx$", tolower(record_name))) {
+      file_name <- record_name
+    }
+    file_name <- normalize_step3_file_name(file_name, default = basename(filepath))
+
+    isTRUE(apply_step3_imported_sheets(
+      sheets = sheets,
+      file_name = file_name,
+      source_tag = "home_restore",
+      source_path = filepath,
+      notify_messages = FALSE
+    ))
+  }
+
+  home_register_restore("step3", restore_step3_home_record)
 
   session_bridge <- tryCatch({
     b <- session$userData$itcsuite_bridge
@@ -239,13 +465,24 @@ server <- function(input, output, session) {
   get_valid_injection_count <- function(apply_ratio = get_ratio_correction_enabled()) {
     bottom_data <- get_bottom_plot_data(apply_ratio = apply_ratio)
     int_data <- bottom_data$integration
-    if (is.null(int_data) || !is.data.frame(int_data)) return(1L)
-    if (!all(c("Ratio_App", "heat_cal_mol") %in% names(int_data))) return(1L)
+    sim_data <- bottom_data$simulation
 
-    valid_rows <- is.finite(int_data$Ratio_App) & is.finite(int_data$heat_cal_mol)
-    n_inj <- sum(valid_rows, na.rm = TRUE)
-    if (!is.finite(n_inj) || n_inj < 1) return(1L)
-    as.integer(n_inj)
+    count_valid <- function(df, y_col) {
+      if (is.null(df) || !is.data.frame(df)) return(NA_integer_)
+      if (!all(c("Ratio_App", y_col) %in% names(df))) return(NA_integer_)
+      valid_rows <- is.finite(df$Ratio_App) & is.finite(df[[y_col]])
+      n <- sum(valid_rows, na.rm = TRUE)
+      if (!is.finite(n) || n < 1) return(NA_integer_)
+      as.integer(n)
+    }
+
+    n_int <- count_valid(int_data, "heat_cal_mol")
+    if (is.finite(n_int) && n_int >= 1L) return(as.integer(n_int))
+
+    n_sim <- count_valid(sim_data, "dQ_App")
+    if (is.finite(n_sim) && n_sim >= 1L) return(as.integer(n_sim))
+
+    1L
   }
 
   resolve_no_dim_range <- function(value, n_inj) {
@@ -338,6 +575,7 @@ server <- function(input, output, session) {
 
       imported_data$source <- "step2_bridge"
       imported_data$filename <- payload_source
+      imported_data$source_path <- normalize_step3_path(payload$source_path)
     }
 
     apply_step2_payload_plot_settings()
@@ -784,100 +1022,25 @@ server <- function(input, output, session) {
   observeEvent(input$xlsx_file, {
     req(input$xlsx_file)
     filepath <- input$xlsx_file$datapath
-    
-    tryCatch({
-      reset_imported_data()
-      reset_plot_controls_to_defaults()
-      sheets <- readxl::excel_sheets(filepath)
-      imported_data$sheets <- list()
-      
-      # 读取 power_original（可选）
-      if ("power_original" %in% sheets) {
-        po <- readxl::read_excel(filepath, sheet = "power_original")
-        imported_data$power_original <- as.data.frame(po)
-        imported_data$sheets[["power_original"]] <- imported_data$power_original
-      }
+    sheets <- read_step3_xlsx_sheets(filepath)
+    if (is.null(sheets) || !is.list(sheets) || length(sheets) < 1) {
+      showNotification(paste0(graph_tr("import_failed_prefix", lang()), "Invalid or empty workbook."), type = "error", duration = 8)
+      return(invisible(FALSE))
+    }
 
-      # 读取 power_corrected
-      if ("power_corrected" %in% sheets) {
-        pc <- readxl::read_excel(filepath, sheet = "power_corrected")
-        if ("Time_s" %in% colnames(pc) && "Power_corrected_ucal_s" %in% colnames(pc)) {
-          imported_data$power <- as.data.frame(pc)
-          imported_data$sheets[["power_corrected"]] <- imported_data$power
-        }
+    tryCatch({
+      ok <- isTRUE(apply_step3_imported_sheets(
+        sheets = sheets,
+        file_name = input$xlsx_file$name,
+        source_tag = "xlsx_import",
+        source_path = filepath,
+        notify_messages = TRUE
+      ))
+      if (!isTRUE(ok)) {
+        showNotification(graph_tr("no_data_warning", lang()), type = "warning", duration = 4)
+        return(invisible(FALSE))
       }
-      
-      # 读取 integration_rev / integration
-      if ("integration_rev" %in% sheets) {
-        int_df <- readxl::read_excel(filepath, sheet = "integration_rev")
-        if ("Ratio_App" %in% colnames(int_df) && "heat_cal_mol" %in% colnames(int_df)) {
-          imported_data$integration <- as.data.frame(int_df)
-          imported_data$sheets[["integration_rev"]] <- imported_data$integration
-        }
-      } else if ("integration" %in% sheets) {
-        int_df <- readxl::read_excel(filepath, sheet = "integration")
-        if ("Ratio_App" %in% colnames(int_df) && "heat_cal_mol" %in% colnames(int_df)) {
-          imported_data$integration <- as.data.frame(int_df)
-          imported_data$sheets[["integration"]] <- imported_data$integration
-        }
-      }
-      
-      # 读取 simulation
-      if ("simulation" %in% sheets) {
-        sim_df <- readxl::read_excel(filepath, sheet = "simulation")
-        if ("Ratio_App" %in% colnames(sim_df) && "dQ_App" %in% colnames(sim_df)) {
-          imported_data$simulation <- as.data.frame(sim_df)
-          imported_data$sheets[["simulation"]] <- imported_data$simulation
-        }
-      }
-      
-      # 读取 fit_params（竖列 parameter/value）；读取 Offset_cal/fH/fG
-      offset_for_range <- PLOT_DEFAULTS$heat_offset
-      if ("fit_params" %in% sheets) {
-        imported_data$fit_params <- as.data.frame(readxl::read_excel(filepath, sheet = "fit_params"))
-        imported_data$sheets[["fit_params"]] <- imported_data$fit_params
-        fp_map <- fit_param_map(imported_data$fit_params)
-        offset_num <- get_fit_param_num(fp_map, "Offset_cal", default = NA_real_)
-        if (is.finite(offset_num)) {
-          offset_for_range <- offset_num
-          updateNumericInput(session, "graph_heat_offset", value = offset_num)
-        }
-        imported_data$ratio_fh <- normalize_factor(get_fit_param_num(fp_map, "fH", default = 1), 1)
-        imported_data$ratio_fg <- normalize_factor(get_fit_param_num(fp_map, "fG", default = 1), 1)
-      } else {
-        imported_data$ratio_fh <- 1
-        imported_data$ratio_fg <- 1
-      }
-      sync_ratio_factor_display(imported_data$ratio_fh, imported_data$ratio_fg)
-      reset_no_dim_range_to_default(apply_ratio = isTRUE(input$graph_apply_ratio_correction))
-      
-      # 读取 meta_rev/meta（可选）
-      if ("meta_rev" %in% sheets) {
-        imported_data$meta <- as.data.frame(readxl::read_excel(filepath, sheet = "meta_rev"))
-        imported_data$sheets[["meta_rev"]] <- imported_data$meta
-      } else if ("meta" %in% sheets) {
-        imported_data$meta <- as.data.frame(readxl::read_excel(filepath, sheet = "meta"))
-        imported_data$sheets[["meta"]] <- imported_data$meta
-      }
-      
-      imported_data$source <- "xlsx_import"
-      imported_data$filename <- input$xlsx_file$name
-      
-      # 通知
-      has_any <- !is.null(imported_data$power) || !is.null(imported_data$integration) || !is.null(imported_data$simulation)
-      if (has_any) {
-        showNotification(graph_tr("data_import_success", lang()), type = "message", duration = 3)
-      }
-      
-      # 导入后统一执行自动范围（与 Step2->Step3 桥接路径一致）
-      tryCatch(
-        apply_auto_ranges(
-          offset_override = offset_for_range,
-          apply_ratio = isTRUE(input$graph_apply_ratio_correction)
-        ),
-        error = function(e) NULL
-      )
-      
+      record_step3_recent_import(input$xlsx_file$name, source_path = filepath)
     }, error = function(e) {
       showNotification(paste0(graph_tr("import_failed_prefix", lang()), e$message), type = "error", duration = 8)
     })
@@ -1157,7 +1320,11 @@ server <- function(input, output, session) {
   
   # 导出 PDF
   output$export_pdf <- downloadHandler(
-    filename = function() make_filename("pdf"),
+    filename = function() {
+      fname <- make_filename("pdf")
+      step3_export_names$pdf <- fname
+      fname
+    },
     content = function(file) {
       fig <- current_figure()
       if (is.null(fig)) {
@@ -1168,12 +1335,17 @@ server <- function(input, output, session) {
              width = input$export_width %||% PLOT_DEFAULTS$export_width,
              height = input$export_height %||% PLOT_DEFAULTS$export_height,
              units = "in", dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi)
+      record_step3_recent_export(file, "pdf")
     }
   )
   
   # 导出 PNG
   output$export_png <- downloadHandler(
-    filename = function() make_filename("png"),
+    filename = function() {
+      fname <- make_filename("png")
+      step3_export_names$png <- fname
+      fname
+    },
     content = function(file) {
       fig <- current_figure()
       if (is.null(fig)) {
@@ -1185,12 +1357,17 @@ server <- function(input, output, session) {
              height = input$export_height %||% PLOT_DEFAULTS$export_height,
              units = "in", dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi,
              bg = "white")
+      record_step3_recent_export(file, "png")
     }
   )
   
   # 导出 TIFF
   output$export_tiff <- downloadHandler(
-    filename = function() make_filename("tiff"),
+    filename = function() {
+      fname <- make_filename("tiff")
+      step3_export_names$tiff <- fname
+      fname
+    },
     content = function(file) {
       fig <- current_figure()
       if (is.null(fig)) {
@@ -1202,6 +1379,7 @@ server <- function(input, output, session) {
              height = input$export_height %||% PLOT_DEFAULTS$export_height,
              units = "in", dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi,
              compression = "lzw", bg = "white")
+      record_step3_recent_export(file, "tiff")
     }
   )
   
@@ -1253,6 +1431,77 @@ server <- function(input, output, session) {
       export_dpi      = as.numeric(input$export_dpi %||% PLOT_DEFAULTS$export_dpi)
     )
   }
+
+  apply_plot_settings_snapshot <- function(s) {
+    if (!is.list(s)) return(invisible(FALSE))
+    if (!is.null(s$top_xlab)) updateTextInput(session, "top_xlab", value = as.character(s$top_xlab))
+    if (!is.null(s$top_ylab)) updateTextInput(session, "top_ylab", value = as.character(s$top_ylab))
+    if (!is.null(s$bot_xlab)) updateTextInput(session, "bot_xlab", value = as.character(s$bot_xlab))
+    if (!is.null(s$bot_ylab)) updateTextInput(session, "bot_ylab", value = as.character(s$bot_ylab))
+
+    if (!is.null(s$top_time_unit)) updateSelectInput(session, "top_time_unit", selected = as.character(s$top_time_unit))
+    if (!is.null(s$bot_point_shape)) updateSelectInput(session, "bot_point_shape", selected = as.character(as.integer(s$bot_point_shape)))
+    if (!is.null(s$bot_line_linetype)) updateSelectInput(session, "bot_line_linetype", selected = as.character(s$bot_line_linetype))
+    if (!is.null(s$bot_layer_order)) updateSelectInput(session, "bot_layer_order", selected = as.character(s$bot_layer_order))
+    if (!is.null(s$energy_unit)) updateSelectInput(session, "energy_unit", selected = as.character(s$energy_unit))
+
+    apply_no_dim_range_snapshot <- function(range_vec = NULL, old_dim_first = NULL) {
+      n_inj <- get_valid_injection_count(apply_ratio = isTRUE(input$graph_apply_ratio_correction))
+      if (!is.null(range_vec)) {
+        no_dim_range <- resolve_no_dim_range(range_vec, n_inj)
+      } else if (!is.null(old_dim_first)) {
+        no_dim_range <- if (isTRUE(old_dim_first)) c(2, n_inj) else c(1, n_inj)
+        no_dim_range <- resolve_no_dim_range(no_dim_range, n_inj)
+      } else {
+        return(invisible(FALSE))
+      }
+      updateSliderInput(session, "bot_no_dim_range", min = 1, max = n_inj, value = no_dim_range)
+      invisible(TRUE)
+    }
+
+    if (!is.null(s$bot_no_dim_start) || !is.null(s$bot_no_dim_end)) {
+      imported_range <- c(
+        safe_num_scalar(s$bot_no_dim_start, default = NA_real_),
+        safe_num_scalar(s$bot_no_dim_end, default = NA_real_)
+      )
+      apply_no_dim_range_snapshot(range_vec = imported_range)
+      session$onFlushed(function() {
+        tryCatch(apply_no_dim_range_snapshot(range_vec = imported_range), error = function(e) NULL)
+      }, once = TRUE)
+    } else if (!is.null(s$bot_dim_first_point)) {
+      old_dim_first <- isTRUE(as.logical(s$bot_dim_first_point))
+      apply_no_dim_range_snapshot(old_dim_first = old_dim_first)
+      session$onFlushed(function() {
+        tryCatch(apply_no_dim_range_snapshot(old_dim_first = old_dim_first), error = function(e) NULL)
+      }, once = TRUE)
+    }
+
+    if (!is.null(s$top_xmin)) updateNumericInput(session, "top_xmin", value = as.numeric(s$top_xmin))
+    if (!is.null(s$top_xmax)) updateNumericInput(session, "top_xmax", value = as.numeric(s$top_xmax))
+    if (!is.null(s$top_ymin)) updateNumericInput(session, "top_ymin", value = as.numeric(s$top_ymin))
+    if (!is.null(s$top_ymax)) updateNumericInput(session, "top_ymax", value = as.numeric(s$top_ymax))
+    if (!is.null(s$top_line_width)) updateNumericInput(session, "top_line_width", value = as.numeric(s$top_line_width))
+    if (!is.null(s$bot_xmin)) updateNumericInput(session, "bot_xmin", value = as.numeric(s$bot_xmin))
+    if (!is.null(s$bot_xmax)) updateNumericInput(session, "bot_xmax", value = as.numeric(s$bot_xmax))
+    if (!is.null(s$bot_ymin)) updateNumericInput(session, "bot_ymin", value = as.numeric(s$bot_ymin))
+    if (!is.null(s$bot_ymax)) updateNumericInput(session, "bot_ymax", value = as.numeric(s$bot_ymax))
+    if (!is.null(s$bot_point_size)) updateNumericInput(session, "bot_point_size", value = as.numeric(s$bot_point_size))
+    if (!is.null(s$bot_point_fill_alpha)) updateNumericInput(session, "bot_point_fill_alpha", value = as.numeric(s$bot_point_fill_alpha))
+    if (!is.null(s$bot_line_width)) updateNumericInput(session, "bot_line_width", value = as.numeric(s$bot_line_width))
+    if (!is.null(s$base_size)) updateNumericInput(session, "base_size", value = as.numeric(s$base_size))
+    if (!is.null(s$height_ratio_top)) updateNumericInput(session, "height_ratio_top", value = as.numeric(s$height_ratio_top))
+    if (!is.null(s$height_ratio_bot)) updateNumericInput(session, "height_ratio_bot", value = as.numeric(s$height_ratio_bot))
+    if (!is.null(s$border_linewidth)) updateNumericInput(session, "border_linewidth", value = as.numeric(s$border_linewidth))
+    if (!is.null(s$export_width)) updateNumericInput(session, "export_width", value = as.numeric(s$export_width))
+    if (!is.null(s$export_height)) updateNumericInput(session, "export_height", value = as.numeric(s$export_height))
+    if (!is.null(s$export_dpi)) updateNumericInput(session, "export_dpi", value = as.numeric(s$export_dpi))
+
+    if (!is.null(s$top_line_color)) update_color_input("top_line_color", as.character(s$top_line_color))
+    if (!is.null(s$bot_point_color)) update_color_input("bot_point_color", as.character(s$bot_point_color))
+    if (!is.null(s$bot_point_fill)) update_color_input("bot_point_fill", as.character(s$bot_point_fill))
+    if (!is.null(s$bot_line_color)) update_color_input("bot_line_color", as.character(s$bot_line_color))
+    invisible(TRUE)
+  }
   
   output$save_settings <- downloadHandler(
     filename = function() {
@@ -1277,80 +1526,7 @@ server <- function(input, output, session) {
       raw <- readLines(path, warn = FALSE)
       s <- jsonlite::fromJSON(paste(raw, collapse = "\n"))
       if (!is.list(s)) stop("Invalid JSON structure")
-      # 文本
-      if (!is.null(s$top_xlab)) updateTextInput(session, "top_xlab", value = as.character(s$top_xlab))
-      if (!is.null(s$top_ylab)) updateTextInput(session, "top_ylab", value = as.character(s$top_ylab))
-      if (!is.null(s$bot_xlab)) updateTextInput(session, "bot_xlab", value = as.character(s$bot_xlab))
-      if (!is.null(s$bot_ylab)) updateTextInput(session, "bot_ylab", value = as.character(s$bot_ylab))
-      # 选择
-      if (!is.null(s$top_time_unit)) updateSelectInput(session, "top_time_unit", selected = as.character(s$top_time_unit))
-      if (!is.null(s$bot_point_shape)) updateSelectInput(session, "bot_point_shape", selected = as.character(as.integer(s$bot_point_shape)))
-      if (!is.null(s$bot_line_linetype)) updateSelectInput(session, "bot_line_linetype", selected = as.character(s$bot_line_linetype))
-      if (!is.null(s$bot_layer_order)) updateSelectInput(session, "bot_layer_order", selected = as.character(s$bot_layer_order))
-      if (!is.null(s$energy_unit)) updateSelectInput(session, "energy_unit", selected = as.character(s$energy_unit))
-      n_inj <- get_valid_injection_count(apply_ratio = isTRUE(input$graph_apply_ratio_correction))
-      if (!is.null(s$bot_no_dim_start) || !is.null(s$bot_no_dim_end)) {
-        imported_range <- c(
-          safe_num_scalar(s$bot_no_dim_start, default = NA_real_),
-          safe_num_scalar(s$bot_no_dim_end, default = NA_real_)
-        )
-        no_dim_range <- resolve_no_dim_range(imported_range, n_inj)
-        updateSliderInput(session, "bot_no_dim_range", min = 1, max = n_inj, value = no_dim_range)
-      } else if (!is.null(s$bot_dim_first_point)) {
-        old_dim_first <- isTRUE(as.logical(s$bot_dim_first_point))
-        no_dim_range <- if (old_dim_first) c(2, n_inj) else c(1, n_inj)
-        no_dim_range <- resolve_no_dim_range(no_dim_range, n_inj)
-        updateSliderInput(session, "bot_no_dim_range", min = 1, max = n_inj, value = no_dim_range)
-      }
-      # 数值
-      if (!is.null(s$top_xmin)) updateNumericInput(session, "top_xmin", value = as.numeric(s$top_xmin))
-      if (!is.null(s$top_xmax)) updateNumericInput(session, "top_xmax", value = as.numeric(s$top_xmax))
-      if (!is.null(s$top_ymin)) updateNumericInput(session, "top_ymin", value = as.numeric(s$top_ymin))
-      if (!is.null(s$top_ymax)) updateNumericInput(session, "top_ymax", value = as.numeric(s$top_ymax))
-      if (!is.null(s$top_line_width)) updateNumericInput(session, "top_line_width", value = as.numeric(s$top_line_width))
-      if (!is.null(s$bot_xmin)) updateNumericInput(session, "bot_xmin", value = as.numeric(s$bot_xmin))
-      if (!is.null(s$bot_xmax)) updateNumericInput(session, "bot_xmax", value = as.numeric(s$bot_xmax))
-      if (!is.null(s$bot_ymin)) updateNumericInput(session, "bot_ymin", value = as.numeric(s$bot_ymin))
-      if (!is.null(s$bot_ymax)) updateNumericInput(session, "bot_ymax", value = as.numeric(s$bot_ymax))
-      if (!is.null(s$bot_point_size)) updateNumericInput(session, "bot_point_size", value = as.numeric(s$bot_point_size))
-      if (!is.null(s$bot_point_fill_alpha)) updateNumericInput(session, "bot_point_fill_alpha", value = as.numeric(s$bot_point_fill_alpha))
-      if (!is.null(s$bot_line_width)) updateNumericInput(session, "bot_line_width", value = as.numeric(s$bot_line_width))
-      if (!is.null(s$base_size)) updateNumericInput(session, "base_size", value = as.numeric(s$base_size))
-      if (!is.null(s$height_ratio_top)) updateNumericInput(session, "height_ratio_top", value = as.numeric(s$height_ratio_top))
-      if (!is.null(s$height_ratio_bot)) updateNumericInput(session, "height_ratio_bot", value = as.numeric(s$height_ratio_bot))
-      if (!is.null(s$border_linewidth)) updateNumericInput(session, "border_linewidth", value = as.numeric(s$border_linewidth))
-      if (!is.null(s$export_width)) updateNumericInput(session, "export_width", value = as.numeric(s$export_width))
-      if (!is.null(s$export_height)) updateNumericInput(session, "export_height", value = as.numeric(s$export_height))
-      if (!is.null(s$export_dpi)) updateNumericInput(session, "export_dpi", value = as.numeric(s$export_dpi))
-      # 颜色（colourpicker 或 text）
-      if (!is.null(s$top_line_color)) {
-        if (requireNamespace("colourpicker", quietly = TRUE)) {
-          colourpicker::updateColourInput(session, "top_line_color", value = as.character(s$top_line_color))
-        } else {
-          updateTextInput(session, "top_line_color", value = as.character(s$top_line_color))
-        }
-      }
-      if (!is.null(s$bot_point_color)) {
-        if (requireNamespace("colourpicker", quietly = TRUE)) {
-          colourpicker::updateColourInput(session, "bot_point_color", value = as.character(s$bot_point_color))
-        } else {
-          updateTextInput(session, "bot_point_color", value = as.character(s$bot_point_color))
-        }
-      }
-      if (!is.null(s$bot_point_fill)) {
-        if (requireNamespace("colourpicker", quietly = TRUE)) {
-          colourpicker::updateColourInput(session, "bot_point_fill", value = as.character(s$bot_point_fill))
-        } else {
-          updateTextInput(session, "bot_point_fill", value = as.character(s$bot_point_fill))
-        }
-      }
-      if (!is.null(s$bot_line_color)) {
-        if (requireNamespace("colourpicker", quietly = TRUE)) {
-          colourpicker::updateColourInput(session, "bot_line_color", value = as.character(s$bot_line_color))
-        } else {
-          updateTextInput(session, "bot_line_color", value = as.character(s$bot_line_color))
-        }
-      }
+      apply_plot_settings_snapshot(s)
       showNotification(graph_tr("settings_imported", lang()), type = "message", duration = 3)
     }, error = function(e) {
       showNotification(paste0(graph_tr("settings_import_failed_prefix", lang()), e$message), type = "error", duration = 8)
