@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, shell, session, nativeImage } = require("electron");
+const { app, BrowserWindow, Menu, dialog, shell, session, nativeImage, powerMonitor } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");
 const path = require("path");
@@ -23,11 +23,35 @@ let mainWindow = null;
 let backend = null;
 let allowedUrlPrefix = null;
 let logsDir = null;
+let mainLogPath = null;
 let isQuitting = false;
 let smokeReported = false;
+let recoveryInProgress = false;
+let lastRecoveryAt = 0;
+let unresponsiveRecoveryTimer = null;
+let rendererMarkedUnresponsive = false;
+
+const RECOVERY_COOLDOWN_MS = 10000;
+const UNRESPONSIVE_RECOVERY_DELAY_MS = 3000;
 
 function useBundledRuntimeInDev() {
   return process.env.ITCSUITE_USE_BUNDLED_R === "1";
+}
+
+function appendMainLog(eventName, details = {}) {
+  if (!mainLogPath) return;
+
+  const payload = {
+    ts: new Date().toISOString(),
+    event: eventName,
+    ...details
+  };
+
+  try {
+    fs.appendFileSync(mainLogPath, `${JSON.stringify(payload)}\n`);
+  } catch (_) {
+    // Best effort logging.
+  }
 }
 
 function resolveAppIconPath() {
@@ -327,6 +351,197 @@ async function waitForBackendReady(port, timeoutMs = 90000) {
   return false;
 }
 
+function parseAllowedPort() {
+  if (!allowedUrlPrefix) return null;
+
+  try {
+    const parsed = new URL(allowedUrlPrefix);
+    const rawPort = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+    const port = Number(rawPort);
+    if (!Number.isFinite(port) || port <= 0) {
+      return null;
+    }
+    return port;
+  } catch (_) {
+    return null;
+  }
+}
+
+function resolveKnownBackendPort() {
+  const fromAllowed = parseAllowedPort();
+  if (Number.isFinite(fromAllowed) && fromAllowed > 0) {
+    return fromAllowed;
+  }
+
+  const fromBackend = backend ? Number(backend.readyPort) : NaN;
+  if (Number.isFinite(fromBackend) && fromBackend > 0) {
+    return fromBackend;
+  }
+
+  return null;
+}
+
+async function isBackendAlive() {
+  const port = resolveKnownBackendPort();
+  if (!port) {
+    appendMainLog("backend_probe", { alive: false, reason: "missing_port" });
+    return false;
+  }
+
+  const alive = await probeBackend(port);
+  appendMainLog("backend_probe", { alive, port });
+  return alive;
+}
+
+async function waitForReachableBackendPort(timeoutMs = 90000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const port = resolveKnownBackendPort();
+    if (port) {
+      const alive = await probeBackend(port);
+      if (alive) {
+        return port;
+      }
+    }
+    await delay(500);
+  }
+  return null;
+}
+
+async function safeReloadRenderer(reason) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    appendMainLog("renderer_reload_skipped", { reason, skip: "window_missing" });
+    return false;
+  }
+
+  const currentUrl = mainWindow.webContents.getURL() || "";
+  if (allowedUrlPrefix && !currentUrl.startsWith(allowedUrlPrefix)) {
+    try {
+      await loadShinyPage(allowedUrlPrefix);
+      appendMainLog("renderer_reload_success", {
+        reason,
+        method: "loadShinyPage",
+        url: allowedUrlPrefix
+      });
+      return true;
+    } catch (error) {
+      appendMainLog("renderer_reload_failed", {
+        reason,
+        method: "loadShinyPage",
+        url: allowedUrlPrefix,
+        error: error.message
+      });
+    }
+  }
+
+  try {
+    mainWindow.webContents.reloadIgnoringCache();
+    appendMainLog("renderer_reload_success", { reason, method: "reloadIgnoringCache" });
+    return true;
+  } catch (error) {
+    appendMainLog("renderer_reload_failed", {
+      reason,
+      method: "reloadIgnoringCache",
+      error: error.message
+    });
+  }
+
+  return false;
+}
+
+async function restartBackendAndReload(reason) {
+  if (!backend) {
+    throw new Error("Backend controller not ready");
+  }
+
+  appendMainLog("backend_restart_start", { reason });
+  allowedUrlPrefix = null;
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      await mainWindow.loadURL(makeDataUrl(loadingHtml()));
+    } catch (_) {
+      // Best effort.
+    }
+  }
+
+  await backend.restart();
+
+  const port = await waitForReachableBackendPort(90000);
+  if (!port) {
+    appendMainLog("backend_restart_failed", {
+      reason,
+      error: "Backend not reachable after restart timeout"
+    });
+    throw new Error("Backend not reachable after restart timeout");
+  }
+
+  allowedUrlPrefix = `http://${HOST}:${port}`;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const currentUrl = mainWindow.webContents.getURL();
+    if (!currentUrl.startsWith(allowedUrlPrefix)) {
+      await loadShinyPage(allowedUrlPrefix);
+    }
+  }
+
+  appendMainLog("backend_restart_success", { reason, port, url: allowedUrlPrefix });
+}
+
+async function recoverAfterResume(reason) {
+  if (isQuitting) {
+    appendMainLog("recover_skipped", { reason, skip: "quitting" });
+    return;
+  }
+
+  if (recoveryInProgress) {
+    appendMainLog("recover_skipped", { reason, skip: "in_progress" });
+    return;
+  }
+
+  const now = Date.now();
+  const elapsed = now - lastRecoveryAt;
+  if (elapsed < RECOVERY_COOLDOWN_MS) {
+    appendMainLog("recover_skipped", {
+      reason,
+      skip: "cooldown",
+      elapsed_ms: elapsed
+    });
+    return;
+  }
+
+  recoveryInProgress = true;
+  lastRecoveryAt = now;
+  appendMainLog("recover_start", { reason });
+
+  try {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      appendMainLog("recover_window_recreate", { reason });
+      createMainWindow();
+    }
+
+    const knownPort = resolveKnownBackendPort();
+    if (!allowedUrlPrefix && knownPort) {
+      allowedUrlPrefix = `http://${HOST}:${knownPort}`;
+    }
+
+    const backendAlive = await isBackendAlive();
+    if (!backendAlive) {
+      appendMainLog("recover_path", { reason, action: "restart_backend" });
+      await restartBackendAndReload(reason);
+      appendMainLog("recover_end", { reason, result: "backend_restarted" });
+      return;
+    }
+
+    appendMainLog("recover_path", { reason, action: "reload_renderer" });
+    await safeReloadRenderer(reason);
+    appendMainLog("recover_end", { reason, result: "renderer_reloaded" });
+  } catch (error) {
+    appendMainLog("recover_error", { reason, error: error.message });
+  } finally {
+    recoveryInProgress = false;
+  }
+}
+
 function makeDataUrl(html) {
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
@@ -473,6 +688,12 @@ function configureDownloadBehavior() {
 }
 
 function createMainWindow() {
+  if (unresponsiveRecoveryTimer) {
+    clearTimeout(unresponsiveRecoveryTimer);
+    unresponsiveRecoveryTimer = null;
+  }
+  rendererMarkedUnresponsive = false;
+
   mainWindow = new BrowserWindow({
     width: 1500,
     height: 980,
@@ -486,6 +707,53 @@ function createMainWindow() {
       sandbox: true
     }
   });
+
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    appendMainLog("render_process_gone", {
+      reason: details && details.reason ? details.reason : "unknown",
+      exit_code: details && Number.isFinite(details.exitCode) ? details.exitCode : null
+    });
+    recoverAfterResume("render-process-gone");
+  });
+
+  mainWindow.webContents.on("unresponsive", () => {
+    rendererMarkedUnresponsive = true;
+    appendMainLog("renderer_unresponsive", {});
+    if (unresponsiveRecoveryTimer) {
+      clearTimeout(unresponsiveRecoveryTimer);
+    }
+    unresponsiveRecoveryTimer = setTimeout(() => {
+      if (!rendererMarkedUnresponsive) return;
+      recoverAfterResume("renderer-unresponsive");
+    }, UNRESPONSIVE_RECOVERY_DELAY_MS);
+  });
+
+  mainWindow.webContents.on("responsive", () => {
+    rendererMarkedUnresponsive = false;
+    if (unresponsiveRecoveryTimer) {
+      clearTimeout(unresponsiveRecoveryTimer);
+      unresponsiveRecoveryTimer = null;
+    }
+    appendMainLog("renderer_responsive", {});
+  });
+
+  mainWindow.webContents.on(
+    "did-fail-load",
+    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (!isMainFrame) return;
+      if (errorCode === -3) return; // Ignore aborted navigations.
+      appendMainLog("did_fail_load", {
+        error_code: errorCode,
+        error_description: errorDescription,
+        url: validatedURL || ""
+      });
+      recoverAfterResume("did-fail-load");
+    }
+  );
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedNavigation(url)) {
@@ -636,8 +904,10 @@ function buildAppMenu() {
 
 function wireBackendEvents() {
   backend.on("backend-ready", async (port) => {
+    appendMainLog("backend_ready_event", { port });
     const backendReady = await waitForBackendReady(port, 90000);
     if (!backendReady) {
+      appendMainLog("backend_ready_timeout", { port });
       showStartupError(`Backend did not become reachable on ${HOST}:${port} within timeout.`);
       return;
     }
@@ -645,16 +915,24 @@ function wireBackendEvents() {
     allowedUrlPrefix = `http://${HOST}:${port}`;
     try {
       await loadShinyPage(allowedUrlPrefix);
+      appendMainLog("backend_page_load_success", { port, url: allowedUrlPrefix });
     } catch (error) {
+      appendMainLog("backend_page_load_failed", {
+        port,
+        url: allowedUrlPrefix,
+        error: error.message
+      });
       showStartupError(`Unable to load Shiny URL (${allowedUrlPrefix}): ${error.message}`);
     }
   });
 
   backend.on("backend-error", (message) => {
+    appendMainLog("backend_error_event", { message });
     showStartupError(message);
   });
 
   backend.on("backend-exit", (code, wasReady, wasStopping) => {
+    appendMainLog("backend_exit_event", { code, wasReady, wasStopping });
     if (isQuitting) return;
     if (wasStopping) return;
     if (code === 0 && !wasReady) return;
@@ -667,6 +945,10 @@ app.on("before-quit", (event) => {
   if (isQuitting) return;
   isQuitting = true;
   event.preventDefault();
+  if (unresponsiveRecoveryTimer) {
+    clearTimeout(unresponsiveRecoveryTimer);
+    unresponsiveRecoveryTimer = null;
+  }
 
   Promise.resolve()
     .then(() => (backend ? backend.stop() : null))
@@ -692,6 +974,8 @@ app.whenReady().then(async () => {
 
   logsDir = path.join(app.getPath("userData"), "logs");
   fs.mkdirSync(logsDir, { recursive: true });
+  mainLogPath = path.join(logsDir, "main.log");
+  appendMainLog("app_ready", { platform: process.platform });
 
   backend = new BackendController({
     logsDir,
@@ -702,6 +986,14 @@ app.whenReady().then(async () => {
   configureDownloadBehavior();
   createMainWindow();
   wireBackendEvents();
+  powerMonitor.on("resume", () => {
+    appendMainLog("power_resume", {});
+    recoverAfterResume("power-resume");
+  });
+  powerMonitor.on("unlock-screen", () => {
+    appendMainLog("unlock_screen", {});
+    recoverAfterResume("unlock-screen");
+  });
 
   try {
     await backend.start();

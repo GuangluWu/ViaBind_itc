@@ -342,6 +342,11 @@ ui <- fluidPage(
     ")),
     tags$script(HTML("
       (function() {
+        var disconnectTimer = null;
+        var disconnectReloadKey = 'itcsuite.auto_reload_ts';
+        var disconnectGraceMs = 8000;
+        var disconnectReloadCooldownMs = 60000;
+
         function normalizeLang(value) {
           var v = (value || '').toLowerCase();
           return v === 'zh' ? 'zh' : 'en';
@@ -355,6 +360,35 @@ ui <- fluidPage(
           var navLang = ((navigator.language || navigator.userLanguage || '') + '').toLowerCase();
           if (navLang.indexOf('zh') === 0) return 'zh';
           return 'en';
+        }
+
+        function clearDisconnectTimer() {
+          if (!disconnectTimer) return;
+          clearTimeout(disconnectTimer);
+          disconnectTimer = null;
+        }
+
+        function canAutoReload() {
+          try {
+            var raw = sessionStorage.getItem(disconnectReloadKey) || '0';
+            var last = parseInt(raw, 10);
+            if (!Number.isFinite(last)) return true;
+            return (Date.now() - last) >= disconnectReloadCooldownMs;
+          } catch (e) {
+            return true;
+          }
+        }
+
+        function markAutoReload() {
+          try {
+            sessionStorage.setItem(disconnectReloadKey, String(Date.now()));
+          } catch (e) {}
+        }
+
+        function tryAutoReload() {
+          if (!canAutoReload()) return;
+          markAutoReload();
+          window.location.reload();
         }
 
         Shiny.addCustomMessageHandler('itcsuite_i18n_set_lang', function(msg) {
@@ -375,6 +409,20 @@ ui <- fluidPage(
         $(document).on('shiny:connected', function() {
           Shiny.setInputValue('itcsuite_lang_init', detectInitialLang(), {priority: 'event'});
         });
+
+        $(document).on('shiny:disconnected', function() {
+          clearDisconnectTimer();
+          disconnectTimer = setTimeout(function() {
+            disconnectTimer = null;
+            tryAutoReload();
+          }, disconnectGraceMs);
+        });
+
+        $(document).on('shiny:reconnected', function() {
+          clearDisconnectTimer();
+        });
+
+        window.addEventListener('beforeunload', clearDisconnectTimer);
       })();
     "))
   ),
@@ -405,6 +453,7 @@ server <- function(input, output, session) {
   # 用户可见性：启动失败为阻断错误；运行态桥接拒绝为非阻断告警。
   # 日志级别：启动阶段 error；运行阶段 warning。
   # 恢复动作：启动阶段停止应用；运行阶段忽略本次无效 payload 并保留既有状态。
+  try(session$allowReconnect(TRUE), silent = TRUE)
   bridge_bus <- bridge_bus_server("bridge_bus")
   bridge_s1s2 <- bridge_step1_to_step2_server("bridge_s1s2", bridge_bus)
   bridge_s2s3 <- bridge_step2_to_step3_server("bridge_s2s3", bridge_bus)
@@ -440,6 +489,57 @@ server <- function(input, output, session) {
     p <- normalize_home_scalar_chr(path, default = "")
     if (!nzchar(p)) return("")
     tryCatch(normalizePath(p, winslash = "/", mustWork = FALSE), error = function(e) p)
+  }
+
+  resolve_home_user_data_dir <- function() {
+    base_dir <- normalize_home_scalar_chr(Sys.getenv("ITCSUITE_USER_DATA_DIR", unset = ""), default = "")
+    if (!nzchar(base_dir)) {
+      base_dir <- tools::R_user_dir("itcsuite", which = "data")
+    }
+    tryCatch(normalizePath(base_dir, winslash = "/", mustWork = FALSE), error = function(e) base_dir)
+  }
+
+  is_temporary_import_path <- function(path) {
+    p <- normalize_recent_path(path)
+    if (!nzchar(p)) return(FALSE)
+    p_low <- tolower(p)
+    if (startsWith(p_low, "/tmp/")) return(TRUE)
+    if (startsWith(p_low, "/private/tmp/")) return(TRUE)
+    if (startsWith(p_low, "/var/folders/")) return(TRUE)
+    if (startsWith(p_low, "/private/var/folders/")) return(TRUE)
+    grepl("/rtmp[^/]+/", p_low)
+  }
+
+  infer_recent_source_ext <- function(path, import_type = NULL) {
+    ext <- tolower(tools::file_ext(path))
+    if (nzchar(ext)) return(paste0(".", ext))
+    import_type_norm <- normalize_home_scalar_chr(import_type, default = "")
+    if (identical(import_type_norm, "itc")) return(".itc")
+    ".xlsx"
+  }
+
+  persist_recent_import_source <- function(path, record_id, import_type, source_path_kind) {
+    src <- normalize_recent_path(path)
+    if (!nzchar(src)) return("")
+    if (!identical(source_path_kind, "import")) return(src)
+    if (!isTRUE(file.exists(src))) return(src)
+    if (!is_temporary_import_path(src)) return(src)
+
+    cache_dir <- file.path(resolve_home_user_data_dir(), "cache", "recent_imports")
+    ok_dir <- tryCatch({
+      dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+      TRUE
+    }, error = function(e) FALSE)
+    if (!isTRUE(ok_dir)) return(src)
+
+    ext <- infer_recent_source_ext(src, import_type = import_type)
+    cache_path <- file.path(cache_dir, paste0(record_id, ext))
+    ok_copy <- tryCatch(
+      isTRUE(file.copy(src, cache_path, overwrite = TRUE, copy.date = TRUE)),
+      error = function(e) FALSE
+    )
+    if (!isTRUE(ok_copy)) return(src)
+    normalize_recent_path(cache_path)
   }
 
   recent_path_exists <- function(path) {
@@ -513,12 +613,17 @@ server <- function(input, output, session) {
       rec$imported_at,
       default = paste0(format(Sys.time(), "%Y-%m-%dT%H:%M:%S", tz = "UTC"), "Z")
     )
-    source_path <- normalize_recent_path(rec$source_path)
-    artifact_path <- normalize_recent_path(rec$artifact_path %||% source_path)
     source_path_kind <- normalize_home_scalar_chr(rec$source_path_kind, default = "artifact")
     if (!source_path_kind %in% c("artifact", "import")) source_path_kind <- "artifact"
-
     record_id <- next_home_record_id()
+    source_path <- persist_recent_import_source(
+      path = rec$source_path,
+      record_id = record_id,
+      import_type = entry_type,
+      source_path_kind = source_path_kind
+    )
+    artifact_path_input <- normalize_recent_path(rec$artifact_path)
+    artifact_path <- if (nzchar(artifact_path_input)) artifact_path_input else source_path
 
     entry <- list(
       id = record_id,
@@ -550,6 +655,46 @@ server <- function(input, output, session) {
   add_recent_export <- function(record) {
     invisible(NULL)
   }
+
+  promote_recent_import_paths_to_cache <- function() {
+    recs <- home_state$import_records
+    if (!is.list(recs) || length(recs) < 1) return(invisible(FALSE))
+
+    changed <- FALSE
+    migrated <- lapply(recs, function(rec) {
+      if (!is.list(rec)) return(rec)
+      record_id <- normalize_home_scalar_chr(rec$id, default = "")
+      if (!nzchar(record_id)) return(rec)
+      source_kind <- normalize_home_scalar_chr(rec$source_path_kind, default = "artifact")
+      if (!source_kind %in% c("artifact", "import")) source_kind <- "artifact"
+
+      old_source <- normalize_recent_path(rec$source_path)
+      new_source <- persist_recent_import_source(
+        path = old_source,
+        record_id = record_id,
+        import_type = rec$import_type,
+        source_path_kind = source_kind
+      )
+      if (!identical(new_source, old_source)) {
+        rec$source_path <- new_source
+        artifact_path <- normalize_recent_path(rec$artifact_path)
+        if (!nzchar(artifact_path)) {
+          rec$artifact_path <- new_source
+        }
+        changed <<- TRUE
+      }
+      rec
+    })
+
+    if (!isTRUE(changed)) return(invisible(FALSE))
+    home_state$import_records <- migrated
+    persist_home_recent_state()
+    invisible(TRUE)
+  }
+
+  observeEvent(TRUE, {
+    promote_recent_import_paths_to_cache()
+  }, once = TRUE, ignoreInit = FALSE)
 
   register_restore_handler <- function(step, fn) {
     step_norm <- normalize_home_scalar_chr(step, default = "")
