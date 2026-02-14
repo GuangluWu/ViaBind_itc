@@ -15,12 +15,16 @@ library(shiny)
 source("R/bridge_contract.R")
 source("R/guide_annotations.R")
 source("R/home_recent_helpers.R")
+source("R/home_recent_store.R")
 
 if (!exists("load_guide_annotations", mode = "function")) {
   fail_fast("Startup check failed: guide annotation loader is unavailable.")
 }
 if (!exists("home_detect_import_type", mode = "function")) {
   fail_fast("Startup check failed: home recent helper is unavailable.")
+}
+if (!exists("home_recent_store_load", mode = "function")) {
+  fail_fast("Startup check failed: home recent store helper is unavailable.")
 }
 
 detect_repo_root <- function() {
@@ -179,8 +183,11 @@ host_tr <- function(key, lang) {
       home_target_step3 = "Step 3",
       home_restore_ok = "Restored %s and opened %s.",
       home_restore_failed_no_payload = "Source file is missing for %s.",
+      home_restore_failed_path_missing = "Source path no longer exists for %s.",
       home_restore_failed_no_handler = "No restore handler registered for %s.",
       home_restore_failed_general = "Restore failed: %s",
+      home_recent_path_label = "Path",
+      home_recent_path_missing = "Path unavailable (file not found).",
       home_unknown_name = "Unnamed Import",
       home_guide_title = "Beginner Guide",
       home_guide_body_1 = "Home: enter Step 1, review recent imports, and quickly reopen prior work.",
@@ -223,8 +230,11 @@ host_tr <- function(key, lang) {
       home_target_step3 = "Step 3",
       home_restore_ok = "已恢复 %s，并进入 %s。",
       home_restore_failed_no_payload = "缺少 %s 的源文件路径。",
+      home_restore_failed_path_missing = "%s 的源路径不存在。",
       home_restore_failed_no_handler = "未找到 %s 的恢复处理器。",
       home_restore_failed_general = "恢复失败：%s",
+      home_recent_path_label = "路径",
+      home_recent_path_missing = "路径不可用（文件不存在）。",
       home_unknown_name = "未命名导入",
       home_guide_title = "新手导引",
       home_guide_body_1 = "首页：进入 Step 1、查看最近导入、快速恢复历史数据。",
@@ -325,6 +335,9 @@ ui <- fluidPage(
       .home-recent-table th, .home-recent-table td { border: 1px solid #e5e7eb; padding: 8px; font-size: 13px; vertical-align: middle; }\
       .home-recent-table th { background: #eff6ff; font-weight: 600; position: sticky; top: 0; z-index: 1; }\
       .home-recent-table td { word-break: break-word; }\
+      .home-recent-name { font-weight: 600; color: #111827; line-height: 1.2; }\
+      .home-recent-path { margin-top: 4px; font-size: 11px; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }\
+      .home-recent-path-missing { color: #b91c1c; font-weight: 600; }\
       .home-empty-note { color: #6b7280; font-size: 13px; }\
     ")),
     tags$script(HTML("
@@ -410,12 +423,49 @@ server <- function(input, output, session) {
     invisible(normalized)
   }
 
+  home_recent_max_records <- home_recent_store_max_records_default()
+  load_home_recent_state <- function() {
+    home_recent_store_load(max_records = home_recent_max_records)
+  }
+  initial_home_recent_state <- load_home_recent_state()
+
   home_state <- reactiveValues(
-    import_records = list(),
-    next_seq = 0L,
+    import_records = initial_home_recent_state$import_records %||% list(),
+    next_seq = initial_home_recent_state$next_seq %||% 0L,
     import_observer_ids = character(0)
   )
   home_restore_handlers <- new.env(parent = emptyenv())
+
+  normalize_recent_path <- function(path) {
+    p <- normalize_home_scalar_chr(path, default = "")
+    if (!nzchar(p)) return("")
+    tryCatch(normalizePath(p, winslash = "/", mustWork = FALSE), error = function(e) p)
+  }
+
+  recent_path_exists <- function(path) {
+    p <- normalize_recent_path(path)
+    if (!nzchar(p)) return(FALSE)
+    isTRUE(file.exists(p))
+  }
+
+  with_recent_path_status <- function(records) {
+    if (!is.list(records)) return(list())
+    lapply(records, function(rec) {
+      if (!is.list(rec)) return(rec)
+      rec$path_exists <- recent_path_exists(rec$source_path)
+      rec
+    })
+  }
+
+  persist_home_recent_state <- function() {
+    state <- list(
+      schema_version = home_recent_store_schema(),
+      next_seq = suppressWarnings(as.integer(home_state$next_seq)[1]),
+      import_records = home_state$import_records %||% list(),
+      updated_at = paste0(format(Sys.time(), "%Y-%m-%dT%H:%M:%S", tz = "UTC"), "Z")
+    )
+    invisible(home_recent_store_save(state, max_records = home_recent_max_records))
+  }
 
   next_home_record_id <- function() {
     seq_num <- suppressWarnings(as.integer(home_state$next_seq)[1])
@@ -434,12 +484,6 @@ server <- function(input, output, session) {
   valid_target_step <- function(step) {
     st <- normalize_home_scalar_chr(step, default = "")
     st %in% c("step1", "step2", "step3")
-  }
-
-  normalize_recent_path <- function(path) {
-    p <- normalize_home_scalar_chr(path, default = "")
-    if (!nzchar(p)) return("")
-    tryCatch(normalizePath(p, winslash = "/", mustWork = FALSE), error = function(e) p)
   }
 
   add_recent_record <- function(kind = c("import", "export"), record) {
@@ -492,8 +536,9 @@ server <- function(input, output, session) {
     current_records <- home_state$import_records
     if (!is.list(current_records)) current_records <- list()
     merged <- c(list(entry), current_records)
-    trimmed <- home_trim_recent_records(merged, max_records = 20L)
+    trimmed <- home_trim_recent_records(merged, max_records = home_recent_max_records)
     home_state$import_records <- trimmed$records
+    persist_home_recent_state()
 
     invisible(entry)
   }
@@ -546,6 +591,17 @@ server <- function(input, output, session) {
     val
   }
 
+  format_recent_path_short <- function(path, max_chars = 72L) {
+    p <- normalize_recent_path(path)
+    if (!nzchar(p)) return("")
+    max_n <- suppressWarnings(as.integer(max_chars)[1])
+    if (!is.finite(max_n) || max_n < 14L) max_n <- 72L
+    if (nchar(p, type = "width") <= max_n) return(p)
+    left_n <- as.integer(floor((max_n - 3L) / 2L))
+    right_n <- as.integer(max_n - left_n - 3L)
+    paste0(substr(p, 1L, left_n), "...", substr(p, nchar(p) - right_n + 1L, nchar(p)))
+  }
+
   restore_recent_record <- function(record_id, kind = c("import", "export")) {
     kind <- match.arg(kind)
     if (!identical(kind, "import")) return(invisible(FALSE))
@@ -560,6 +616,14 @@ server <- function(input, output, session) {
     if (!nzchar(source_path)) {
       showNotification(
         host_trf("home_restore_failed_no_payload", host_lang(), display_name),
+        type = "warning",
+        duration = 4
+      )
+      return(invisible(FALSE))
+    }
+    if (!isTRUE(file.exists(source_path))) {
+      showNotification(
+        host_trf("home_restore_failed_path_missing", host_lang(), display_name),
         type = "warning",
         duration = 4
       )
@@ -624,7 +688,7 @@ server <- function(input, output, session) {
       restore_recent_record(record_id, kind = kind)
     },
     get_recent_imports = function() {
-      home_state$import_records
+      with_recent_path_status(home_state$import_records)
     },
     get_recent_exports = function() {
       list()
@@ -656,7 +720,7 @@ server <- function(input, output, session) {
 
   output$home_panel_ui <- renderUI({
     l <- host_lang()
-    import_recs <- home_state$import_records
+    import_recs <- with_recent_path_status(home_state$import_records)
     if (!is.list(import_recs)) import_recs <- list()
 
     build_recent_table <- function(recs, empty_text) {
@@ -687,12 +751,27 @@ server <- function(input, output, session) {
         rec_id <- normalize_home_scalar_chr(rec$id, default = "")
         if (!nzchar(rec_id)) return(NULL)
         action_id <- paste0("home_restore_import_", rec_id)
+        source_path <- normalize_recent_path(rec$source_path)
+        path_exists <- isTRUE(rec$path_exists)
+        path_body <- if (path_exists) {
+          paste0(host_tr("home_recent_path_label", l), ": ", format_recent_path_short(source_path))
+        } else {
+          host_tr("home_recent_path_missing", l)
+        }
+        path_class <- if (path_exists) "home-recent-path" else "home-recent-path home-recent-path-missing"
+        action_btn <- actionButton(action_id, host_tr("home_restore_action", l), class = "btn btn-primary btn-xs")
+        if (!path_exists) {
+          action_btn <- tagAppendAttributes(action_btn, disabled = "disabled")
+        }
         tags$tr(
-          tags$td(normalize_recent_display_name(rec$display_name)),
+          tags$td(
+            div(class = "home-recent-name", normalize_recent_display_name(rec$display_name)),
+            div(class = path_class, title = source_path, path_body)
+          ),
           tags$td(home_import_type_label(rec$import_type, l)),
           tags$td(home_target_label(rec$target_step, l)),
           tags$td(format_recent_imported_at(rec$imported_at)),
-          tags$td(actionButton(action_id, host_tr("home_restore_action", l), class = "btn btn-primary btn-xs"))
+          tags$td(action_btn)
         )
       })
       rows <- Filter(Negate(is.null), rows)

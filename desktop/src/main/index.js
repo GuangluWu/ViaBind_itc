@@ -105,6 +105,7 @@ class BackendController extends EventEmitter {
   buildEnv(runtimeRoot) {
     const env = { ...process.env };
     env.ITCSUITE_DESKTOP = "1";
+    env.ITCSUITE_USER_DATA_DIR = app.getPath("userData");
 
     const bundledLib = path.join(runtimeRoot, "library");
     if (fs.existsSync(bundledLib) && (app.isPackaged || useBundledRuntimeInDev())) {

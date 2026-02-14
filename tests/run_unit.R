@@ -46,6 +46,12 @@ results[["ITCSuiteWeb home recent helpers"]] <- run_testthat_file(
 )
 required_keys <- c(required_keys, "ITCSuiteWeb home recent helpers")
 
+results[["ITCSuiteWeb home recent store"]] <- run_testthat_file(
+  file.path(repo_root, "ITCSuiteWeb", "tests", "testthat", "test-home-recent-store.R"),
+  label = "ITCSuiteWeb/test-home-recent-store.R"
+)
+required_keys <- c(required_keys, "ITCSuiteWeb home recent store")
+
 results[["ITCSuiteWeb comment standard minimal"]] <- run_testthat_file(
   file.path(repo_root, "ITCSuiteWeb", "tests", "testthat", "test-commenting-standard-minimal.R"),
   label = "ITCSuiteWeb/test-commenting-standard-minimal.R"

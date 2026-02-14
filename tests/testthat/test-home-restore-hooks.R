@@ -10,6 +10,9 @@ testthat::test_that("host app defines home tab and itcsuite_home interface", {
   testthat::expect_true(grepl("value\\s*=\\s*\"home\"", src, perl = TRUE))
   testthat::expect_true(grepl("session\\$userData\\$itcsuite_home\\s*<-\\s*list", src, perl = TRUE))
   testthat::expect_true(grepl("register_restore_handler", src, perl = TRUE))
+  testthat::expect_true(grepl("source\\(\"R/home_recent_store\\.R\"\\)", src, perl = TRUE))
+  testthat::expect_true(grepl("home_recent_store_load\\(", src, perl = TRUE))
+  testthat::expect_true(grepl("home_recent_store_save\\(", src, perl = TRUE))
 })
 
 testthat::test_that("step1 registers restore handler and reports recent import", {

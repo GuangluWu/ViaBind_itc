@@ -99,10 +99,10 @@ home_sort_recent_records <- function(records) {
   records[ord]
 }
 
-home_trim_recent_records <- function(records, max_records = 20L) {
+home_trim_recent_records <- function(records, max_records = 200L) {
   if (!is.list(records)) records <- list()
   max_n <- suppressWarnings(as.integer(max_records)[1])
-  if (!is.finite(max_n) || max_n < 1L) max_n <- 20L
+  if (!is.finite(max_n) || max_n < 1L) max_n <- 200L
 
   sorted <- home_sort_recent_records(records)
   if (length(sorted) <= max_n) {

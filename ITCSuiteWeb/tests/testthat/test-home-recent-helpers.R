@@ -61,6 +61,18 @@ testthat::test_that("home_trim_recent_records sorts desc and trims overflow", {
   testthat::expect_true("k1" %in% out$dropped_payload_keys)
 })
 
+testthat::test_that("home_trim_recent_records defaults to 200 when max is invalid", {
+  records <- lapply(seq_len(210L), function(i) {
+    list(
+      id = sprintf("r%03d", i),
+      imported_at = sprintf("2026-02-14T10:%02d:%02dZ", (i - 1L) %% 60L, (i - 1L) %% 60L),
+      restore_payload_key = sprintf("k%03d", i)
+    )
+  })
+  out <- home_trim_recent_records(records, max_records = 0L)
+  testthat::expect_equal(length(out$records), 200L)
+})
+
 testthat::test_that("home_parse_imported_at keeps hh:mm:ss for ISO timestamps with Z suffix", {
   ts_num <- home_parse_imported_at("2026-02-14T11:28:34.123Z")
   testthat::expect_true(is.finite(ts_num))
