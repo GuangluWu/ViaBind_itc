@@ -978,6 +978,17 @@ server <- function(input, output, session) {
       ticks = FALSE
     )
   })
+
+  # Keep style controls alive while Step 3 tab is hidden, so restore/bridge
+  # updates are not dropped before first tab activation.
+  outputOptions(output, "top_color_ui", suspendWhenHidden = FALSE)
+  outputOptions(output, "bot_point_color_ui", suspendWhenHidden = FALSE)
+  outputOptions(output, "bot_point_fill_ui", suspendWhenHidden = FALSE)
+  outputOptions(output, "bot_shape_ui", suspendWhenHidden = FALSE)
+  outputOptions(output, "bot_line_color_ui", suspendWhenHidden = FALSE)
+  outputOptions(output, "bot_line_linetype_ui", suspendWhenHidden = FALSE)
+  outputOptions(output, "bot_layer_order_ui", suspendWhenHidden = FALSE)
+  outputOptions(output, "bot_no_dim_range_ui", suspendWhenHidden = FALSE)
   
   # ---- Global settings labels ----
   output$section_global_ui <- renderUI({

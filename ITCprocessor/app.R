@@ -104,6 +104,7 @@ ui <- fluidPage(
       class = "step1-sidebar",
       div(uiOutput("label_choose_file")),
       uiOutput("step1_import_input"),
+      uiOutput("step1_import_summary_ui"),
       uiOutput("ui_view_controls"),
       checkboxInput("zoom_baseline", tr("zoom_baseline"), value = TRUE),
       hr(style = "margin: 8px 0;"),
@@ -337,6 +338,22 @@ server <- function(input, output, session) {
     }
     if (!is.null(input$file1$name) && nzchar(trimws(input$file1$name))) return(trimws(input$file1$name))
     ""
+  })
+  output$step1_import_summary_ui <- renderUI({
+    file_name <- current_itc_name()
+    if (!nzchar(file_name)) {
+      return(
+        div(
+          style = "color:#888;font-size:0.85em;margin-top:4px;",
+          em(tr("no_file_selected", lang()))
+        )
+      )
+    }
+    div(
+      style = "margin-top:4px;font-size:0.9em;",
+      tags$b(paste0(tr("file_label", lang()), ": ")),
+      file_name
+    )
   })
 
   normalize_step1_path <- function(path) {

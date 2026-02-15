@@ -1207,14 +1207,17 @@ server <- function(input, output, session) {
   output$legacy_processor_ui <- renderUI({
     processor_legacy$ui
   })
+  outputOptions(output, "legacy_processor_ui", suspendWhenHidden = FALSE)
 
   output$legacy_simfit_ui <- renderUI({
     simfit_legacy$ui
   })
+  outputOptions(output, "legacy_simfit_ui", suspendWhenHidden = FALSE)
 
   output$legacy_graph_ui <- renderUI({
     graph_legacy$ui
   })
+  outputOptions(output, "legacy_graph_ui", suspendWhenHidden = FALSE)
 
   processor_legacy$server(input, output, session)
   simfit_legacy$server(input, output, session)

@@ -16,6 +16,9 @@ testthat::test_that("host app defines home tab and itcsuite_home interface", {
   testthat::expect_true(grepl("source\\(\"R/home_recent_store\\.R\"\\)", src, perl = TRUE))
   testthat::expect_true(grepl("home_recent_store_load\\(", src, perl = TRUE))
   testthat::expect_true(grepl("home_recent_store_save\\(", src, perl = TRUE))
+  testthat::expect_true(grepl("outputOptions\\(output,\\s*\"legacy_processor_ui\",\\s*suspendWhenHidden\\s*=\\s*FALSE\\)", src, perl = TRUE))
+  testthat::expect_true(grepl("outputOptions\\(output,\\s*\"legacy_simfit_ui\",\\s*suspendWhenHidden\\s*=\\s*FALSE\\)", src, perl = TRUE))
+  testthat::expect_true(grepl("outputOptions\\(output,\\s*\"legacy_graph_ui\",\\s*suspendWhenHidden\\s*=\\s*FALSE\\)", src, perl = TRUE))
 })
 
 testthat::test_that("step1 registers restore handler and reports recent import", {
@@ -25,6 +28,7 @@ testthat::test_that("step1 registers restore handler and reports recent import",
   testthat::expect_true(grepl("home_add_recent_export\\(", src, perl = TRUE))
   testthat::expect_true(grepl("import_type\\s*=\\s*\"itc\"", src, perl = TRUE))
   testthat::expect_true(grepl("step1_import_input", src, perl = TRUE))
+  testthat::expect_true(grepl("step1_import_summary_ui", src, perl = TRUE))
   testthat::expect_true(grepl("step1_desktop_pick_file", src, perl = TRUE))
 })
 
@@ -44,6 +48,18 @@ testthat::test_that("step2 registers restore handler and reuses import state fun
   testthat::expect_true(grepl("home_add_recent\\(", src, perl = TRUE))
   testthat::expect_true(grepl("home_add_recent_export\\s*<-\\s*function", src, perl = TRUE))
   testthat::expect_true(grepl("desktop_pick_exp_file", src, perl = TRUE))
+
+  ui_src <- read_src(file.path(
+    repo_root,
+    "ITCsimfit",
+    "R",
+    "server",
+    "body",
+    "ui_i18n",
+    "02_ui_outputs_report.R"
+  ))
+  testthat::expect_true(grepl("outputOptions\\(output,\\s*\"active_paths_checkbox\",\\s*suspendWhenHidden\\s*=\\s*FALSE\\)", ui_src, perl = TRUE))
+  testthat::expect_true(grepl("outputOptions\\(output,\\s*\"factor_G_input\",\\s*suspendWhenHidden\\s*=\\s*FALSE\\)", ui_src, perl = TRUE))
 })
 
 testthat::test_that("step3 registers restore handler and reports import/export to home", {
@@ -53,4 +69,7 @@ testthat::test_that("step3 registers restore handler and reports import/export t
   testthat::expect_true(grepl("record_step3_recent_export", src, perl = TRUE))
   testthat::expect_true(grepl("step3_import_input", src, perl = TRUE))
   testthat::expect_true(grepl("step3_desktop_pick_file", src, perl = TRUE))
+  testthat::expect_true(grepl("outputOptions\\(output,\\s*\"bot_point_color_ui\",\\s*suspendWhenHidden\\s*=\\s*FALSE\\)", src, perl = TRUE))
+  testthat::expect_true(grepl("outputOptions\\(output,\\s*\"bot_line_linetype_ui\",\\s*suspendWhenHidden\\s*=\\s*FALSE\\)", src, perl = TRUE))
+  testthat::expect_true(grepl("outputOptions\\(output,\\s*\"bot_no_dim_range_ui\",\\s*suspendWhenHidden\\s*=\\s*FALSE\\)", src, perl = TRUE))
 })

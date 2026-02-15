@@ -144,6 +144,15 @@
     })
     sliderInput("heat_offset", tr("param_heat_offset", lang()), -1500, 1500, current_value, 10, ticks=FALSE)
   })
+
+  # Restore from Home can happen before Step 2 tab is opened once.
+  # Keep key dynamic input outputs active while hidden so update*Input
+  # calls do not get dropped on first restore.
+  outputOptions(output, "active_paths_checkbox", suspendWhenHidden = FALSE)
+  outputOptions(output, "factor_H_input", suspendWhenHidden = FALSE)
+  outputOptions(output, "factor_G_input", suspendWhenHidden = FALSE)
+  outputOptions(output, "V_init_input", suspendWhenHidden = FALSE)
+  outputOptions(output, "heat_offset_slider", suspendWhenHidden = FALSE)
   
   # 右栏 - 实验数据
   output$section_exp_data_title <- renderUI({
