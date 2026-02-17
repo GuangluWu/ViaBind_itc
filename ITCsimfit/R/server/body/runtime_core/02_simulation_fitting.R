@@ -304,10 +304,10 @@
       return(list(error = tr("fit_error_no_match", lang_val)))
     }
     
-    # 使用常量定义获取参数边界
-    # [注释] V_inj 在 UI 中是 uL，get_parameter_bounds 也期望 uL
+    # 使用会话有效边界（用户可编辑）获取参数边界
+    # [注释] V_inj 在 UI 中是 uL，get_effective_parameter_bounds 也期望 uL
     v_inj_val <- safe_numeric(input$V_inj, default = UI_DEFAULTS$v_inj_default * 1000, min = 0)
-    bounds <- get_parameter_bounds(names(par_vec), v_inj = v_inj_val)
+    bounds <- get_effective_parameter_bounds(names(par_vec), v_inj = v_inj_val)
     lower_b <- bounds$lower
     upper_b <- bounds$upper
     
@@ -484,38 +484,49 @@
     values$is_fitting <- TRUE
     
     # 使用 safe_numeric 准备当前参数，确保输入有效
+    get_bound <- function(param_name) {
+      get_effective_param_bound(param_name)
+    }
+    b_logK1 <- get_bound("logK1"); b_H1 <- get_bound("H1")
+    b_logK2 <- get_bound("logK2"); b_H2 <- get_bound("H2")
+    b_logK3 <- get_bound("logK3"); b_H3 <- get_bound("H3")
+    b_logK4 <- get_bound("logK4"); b_H4 <- get_bound("H4")
+    b_logK5 <- get_bound("logK5"); b_H5 <- get_bound("H5")
+    b_logK6 <- get_bound("logK6"); b_H6 <- get_bound("H6")
+    b_Offset <- get_bound("Offset")
+
     p_curr <- list(
       logK1 = safe_numeric(input$logK1, default = DEFAULT_PARAMS$logK, 
-                          min = PARAM_BOUNDS$logK["lower"], max = PARAM_BOUNDS$logK["upper"]),
+                          min = b_logK1["lower"], max = b_logK1["upper"]),
       H1 = safe_numeric(input$H1, default = DEFAULT_PARAMS$H, 
-                       min = PARAM_BOUNDS$H["lower"], max = PARAM_BOUNDS$H["upper"]),
+                       min = b_H1["lower"], max = b_H1["upper"]),
       logK2 = safe_numeric(input$logK2, default = DEFAULT_PARAMS$logK, 
-                          min = PARAM_BOUNDS$logK["lower"], max = PARAM_BOUNDS$logK["upper"]),
+                          min = b_logK2["lower"], max = b_logK2["upper"]),
       H2 = safe_numeric(input$H2, default = DEFAULT_PARAMS$H, 
-                       min = PARAM_BOUNDS$H["lower"], max = PARAM_BOUNDS$H["upper"]),
+                       min = b_H2["lower"], max = b_H2["upper"]),
       logK3 = safe_numeric(input$logK3, default = DEFAULT_PARAMS$logK, 
-                          min = PARAM_BOUNDS$logK["lower"], max = PARAM_BOUNDS$logK["upper"]),
+                          min = b_logK3["lower"], max = b_logK3["upper"]),
       H3 = safe_numeric(input$H3, default = DEFAULT_PARAMS$H, 
-                       min = PARAM_BOUNDS$H["lower"], max = PARAM_BOUNDS$H["upper"]),
+                       min = b_H3["lower"], max = b_H3["upper"]),
       logK4 = safe_numeric(input$logK4, default = DEFAULT_PARAMS$logK, 
-                          min = PARAM_BOUNDS$logK["lower"], max = PARAM_BOUNDS$logK["upper"]),
+                          min = b_logK4["lower"], max = b_logK4["upper"]),
       H4 = safe_numeric(input$H4, default = DEFAULT_PARAMS$H, 
-                       min = PARAM_BOUNDS$H["lower"], max = PARAM_BOUNDS$H["upper"]),
+                       min = b_H4["lower"], max = b_H4["upper"]),
       logK5 = safe_numeric(input$logK5, default = DEFAULT_PARAMS$logK, 
-                          min = PARAM_BOUNDS$logK["lower"], max = PARAM_BOUNDS$logK["upper"]),
+                          min = b_logK5["lower"], max = b_logK5["upper"]),
       H5 = safe_numeric(input$H5, default = DEFAULT_PARAMS$H, 
-                       min = PARAM_BOUNDS$H["lower"], max = PARAM_BOUNDS$H["upper"]),
+                       min = b_H5["lower"], max = b_H5["upper"]),
       logK6 = safe_numeric(input$logK6, default = DEFAULT_PARAMS$logK, 
-                          min = PARAM_BOUNDS$logK["lower"], max = PARAM_BOUNDS$logK["upper"]),
+                          min = b_logK6["lower"], max = b_logK6["upper"]),
       H6 = safe_numeric(input$H6, default = DEFAULT_PARAMS$H, 
-                       min = PARAM_BOUNDS$H["lower"], max = PARAM_BOUNDS$H["upper"]),
+                       min = b_H6["lower"], max = b_H6["upper"]),
       fH = safe_numeric(input$factor_H, default = DEFAULT_PARAMS$fH, 
                        min = PARAM_BOUNDS$fH_fG["lower"], max = PARAM_BOUNDS$fH_fG["upper"]),
       fG = safe_numeric(input$factor_G, default = DEFAULT_PARAMS$fG, 
                        min = PARAM_BOUNDS$fH_fG["lower"], max = PARAM_BOUNDS$fH_fG["upper"]),
       V_init = safe_numeric(input$V_init_val, default = DEFAULT_PARAMS$V_init, min = 0),
       Offset = safe_numeric(input$heat_offset, default = DEFAULT_PARAMS$Offset, 
-                           min = PARAM_BOUNDS$Offset["lower"], max = PARAM_BOUNDS$Offset["upper"])
+                           min = b_Offset["lower"], max = b_Offset["upper"])
     )
     
     # 使用 safe_numeric 准备固定参数

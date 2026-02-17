@@ -270,46 +270,72 @@ ERROR_CODES <- list(
 #' 
 #' @param param_name 参数名称（如 "logK1", "H2", "fH", "V_init", "Offset"）
 #' @param v_inj 注射体积（仅当 param_name 为 "V_init" 时需要）
+#' @param override_bounds 可选的运行时边界覆盖列表（按参数名映射为 c(lower, upper)）
 #' @return 包含 lower 和 upper 的命名向量
 #' 
 #' @examples
 #' get_param_bound("logK1")  # 返回 c(lower=1, upper=9)
 #' get_param_bound("V_init", v_inj=0.01)  # 返回 c(lower=0, upper=0.01)
-get_param_bound <- function(param_name, v_inj = NULL) {
-  if(grepl("logK", param_name)) {
-    return(PARAM_BOUNDS$logK)
-  } else if(grepl("^H[0-9]+$", param_name)) {  # 支持 H1, H2, ... H10, H11 等
-    return(PARAM_BOUNDS$H)
-  } else if(grepl("fH|fG", param_name)) {
-    return(PARAM_BOUNDS$fH_fG)
-  } else if(grepl("Offset", param_name)) {
-    return(PARAM_BOUNDS$Offset)
-  } else if(param_name == "V_init") {
-    if(is.null(v_inj) || is.na(v_inj) || v_inj <= 0) {
-      warning("V_init bound requires valid v_inj value, using default 1.5")
-      v_inj <- 1.5
+get_param_bound <- function(param_name, v_inj = NULL, override_bounds = NULL) {
+  get_default_param_bound <- function(name, v_inj_local = NULL) {
+    if(grepl("logK", name)) {
+      return(PARAM_BOUNDS$logK)
+    } else if(grepl("^H[0-9]+$", name)) {  # 支持 H1, H2, ... H10, H11 等
+      return(PARAM_BOUNDS$H)
+    } else if(grepl("fH|fG", name)) {
+      return(PARAM_BOUNDS$fH_fG)
+    } else if(grepl("Offset", name)) {
+      return(PARAM_BOUNDS$Offset)
+    } else if(name == "V_init") {
+      if(is.null(v_inj_local) || is.na(v_inj_local) || v_inj_local <= 0) {
+        warning("V_init bound requires valid v_inj value, using default 1.5")
+        v_inj_local <- 1.5
+      }
+      lower_mult <- PARAM_BOUNDS$V_init_multiplier["lower"]
+      upper_mult <- PARAM_BOUNDS$V_init_multiplier["upper"]
+      return(c(
+        lower = as.numeric(lower_mult) * v_inj_local,
+        upper = as.numeric(upper_mult) * v_inj_local
+      ))
+    } else {
+      warning(sprintf("Unknown parameter name: %s, using default bounds [0, 10]", name))
+      return(c(lower = 0, upper = 10))
     }
-    lower_mult <- PARAM_BOUNDS$V_init_multiplier["lower"]
-    upper_mult <- PARAM_BOUNDS$V_init_multiplier["upper"]
-    return(c(
-      lower = as.numeric(lower_mult) * v_inj,
-      upper = as.numeric(upper_mult) * v_inj
-    ))
-  } else {
-    warning(sprintf("Unknown parameter name: %s, using default bounds [0, 10]", param_name))
-    return(c(lower = 0, upper = 10))
   }
+
+  base_bounds <- get_default_param_bound(param_name, v_inj_local = v_inj)
+
+  # 运行时覆盖（仅在提供了合法覆盖时生效）
+  if (is.list(override_bounds) && !is.null(override_bounds[[param_name]])) {
+    candidate <- override_bounds[[param_name]]
+    lower_c <- suppressWarnings(as.numeric(candidate["lower"])[1])
+    upper_c <- suppressWarnings(as.numeric(candidate["upper"])[1])
+    if (is.finite(lower_c) && is.finite(upper_c)) {
+      if (lower_c > upper_c) {
+        tmp <- lower_c
+        lower_c <- upper_c
+        upper_c <- tmp
+      }
+      if (lower_c == upper_c) {
+        upper_c <- upper_c + .Machine$double.eps^0.5
+      }
+      return(c(lower = lower_c, upper = upper_c))
+    }
+  }
+  
+  base_bounds
 }
 
 #' 获取多个参数的边界
 #' 
 #' @param param_names 参数名称向量
 #' @param v_inj 注射体积（用于 V_init）
+#' @param override_bounds 可选的运行时边界覆盖列表（按参数名映射为 c(lower, upper)）
 #' @return 包含 lower 和 upper 的列表，每个都是命名向量
 #' 
 #' @examples
 #' get_parameter_bounds(c("logK1", "H1", "V_init"), v_inj=0.01)
-get_parameter_bounds <- function(param_names, v_inj = NULL) {
+get_parameter_bounds <- function(param_names, v_inj = NULL, override_bounds = NULL) {
   n <- length(param_names)
   lower <- numeric(n)
   upper <- numeric(n)
@@ -317,7 +343,7 @@ get_parameter_bounds <- function(param_names, v_inj = NULL) {
   
   for(i in seq_along(param_names)) {
     nm <- param_names[i]
-    bounds <- get_param_bound(nm, v_inj)
+    bounds <- get_param_bound(nm, v_inj = v_inj, override_bounds = override_bounds)
     lower[i] <- bounds["lower"]
     upper[i] <- bounds["upper"]
   }

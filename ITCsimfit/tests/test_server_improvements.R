@@ -53,6 +53,22 @@ assert_true(bounds$upper["H1"] == 5000, "H1 上界 = 5000")
 assert_true(bounds$lower["V_init"] == 0, "V_init 下界 = 0")
 assert_true(bounds$upper["V_init"] == v_inj_val, "V_init 上界 = v_inj")
 
+# 运行时覆盖边界（用于会话级用户范围）
+override_bounds <- list(
+  logK1 = c(lower = 3, upper = 4),
+  H1 = c(lower = -8000, upper = -2000),
+  Offset = c(lower = -500, upper = 500)
+)
+bounds_override <- get_parameter_bounds(
+  c("logK1", "H1", "Offset"),
+  v_inj = v_inj_val,
+  override_bounds = override_bounds
+)
+assert_true(bounds_override$lower["logK1"] == 3, "override logK1 下界生效")
+assert_true(bounds_override$upper["logK1"] == 4, "override logK1 上界生效")
+assert_true(bounds_override$lower["H1"] == -8000, "override H1 下界生效")
+assert_true(bounds_override$upper["Offset"] == 500, "override Offset 上界生效")
+
 # ==============================================================================
 # 测试2：safe_numeric 在输入验证中的使用
 # ==============================================================================
@@ -83,6 +99,12 @@ test_H <- safe_numeric(-6000,
                       min = PARAM_BOUNDS$H["lower"],
                       max = PARAM_BOUNDS$H["upper"])
 assert_true(test_H == -6000, "有效 H 值通过")
+
+test_logK_override <- safe_numeric(5.5,
+                                   default = DEFAULT_PARAMS$logK,
+                                   min = bounds_override$lower["logK1"],
+                                   max = bounds_override$upper["logK1"])
+assert_true(test_logK_override == 4, "override 范围下 logK 会被限制到上界")
 
 # ==============================================================================
 # 测试3：DE 优化参数计算

@@ -116,6 +116,19 @@ bounds <- get_param_bound("V_init", v_inj = 0.01)
 assert_equal(bounds["lower"], 0, "get_param_bound('V_init') 下界")
 assert_equal(bounds["upper"], 0.01, "get_param_bound('V_init') 上界（v_inj=0.01）")
 
+# 运行时覆盖边界
+override_bounds <- list(
+  logK1 = c(lower = 3, upper = 4),
+  H1 = c(lower = -8000, upper = -2000),
+  Offset = c(lower = -500, upper = 500)
+)
+bounds <- get_param_bound("logK1", override_bounds = override_bounds)
+assert_equal(bounds["lower"], 3, "get_param_bound('logK1') 可使用 override 下界")
+assert_equal(bounds["upper"], 4, "get_param_bound('logK1') 可使用 override 上界")
+bounds <- get_param_bound("H1", override_bounds = override_bounds)
+assert_equal(bounds["lower"], -8000, "get_param_bound('H1') 可使用 override 下界")
+assert_equal(bounds["upper"], -2000, "get_param_bound('H1') 可使用 override 上界")
+
 # 测试7：get_parameter_bounds 函数（多参数）
 cat("\n[测试组] get_parameter_bounds()\n")
 
@@ -128,6 +141,16 @@ assert_equal(length(bounds$lower), 6, "下界向量长度 = 6")
 assert_equal(length(bounds$upper), 6, "上界向量长度 = 6")
 assert_equal(bounds$lower["logK1"], 0, "logK1 下界正确")
 assert_equal(bounds$upper["H2"], 5000, "H2 上界正确")
+
+bounds_override <- get_parameter_bounds(
+  c("logK1", "H1", "Offset"),
+  v_inj = 0.01,
+  override_bounds = override_bounds
+)
+assert_equal(bounds_override$lower["logK1"], 3, "get_parameter_bounds override logK1 下界")
+assert_equal(bounds_override$upper["logK1"], 4, "get_parameter_bounds override logK1 上界")
+assert_equal(bounds_override$lower["H1"], -8000, "get_parameter_bounds override H1 下界")
+assert_equal(bounds_override$upper["Offset"], 500, "get_parameter_bounds override Offset 上界")
 
 # 测试8：validate_param_value 函数
 cat("\n[测试组] validate_param_value()\n")

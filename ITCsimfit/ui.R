@@ -611,6 +611,8 @@ ui <- fluidPage(
                                                step = 100, ticks = FALSE))
                ),
              ), # End slider-scroll-container
+
+             uiOutput("fit_bounds_editor"),
              
              tags$hr(),
              h4(uiOutput("param_correction_title")),

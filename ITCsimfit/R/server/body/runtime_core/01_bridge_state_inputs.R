@@ -38,6 +38,185 @@
   sim_cache_key <- reactiveVal(NULL)
   fit_slider_force_default <- reactiveVal(FALSE)
 
+  # ============================================================================
+  # 会话级拟合参数边界（仅本次会话生效）
+  # ============================================================================
+  FIT_BOUND_PARAM_IDS <- c(
+    "logK1", "H1",
+    "logK2", "H2",
+    "logK3", "H3",
+    "logK4", "H4",
+    "logK5", "H5",
+    "logK6", "H6",
+    "Offset"
+  )
+
+  FIT_BOUND_STEPS <- c(
+    logK1 = 0.001, H1 = 100,
+    logK2 = 0.001, H2 = 100,
+    logK3 = 0.001, H3 = 100,
+    logK4 = 0.001, H4 = 100,
+    logK5 = 0.001, H5 = 100,
+    logK6 = 0.001, H6 = 100,
+    Offset = 10
+  )
+
+  build_default_fit_param_bounds <- function() {
+    out <- vector("list", length(FIT_BOUND_PARAM_IDS))
+    names(out) <- FIT_BOUND_PARAM_IDS
+    for (nm in FIT_BOUND_PARAM_IDS) {
+      b <- get_param_bound(nm)
+      out[[nm]] <- c(lower = as.numeric(b["lower"]), upper = as.numeric(b["upper"]))
+    }
+    out
+  }
+
+  fit_param_bounds <- reactiveVal(build_default_fit_param_bounds())
+
+  get_fit_bound_param_ids_for_paths <- function(paths = NULL) {
+    paths_safe <- if (is.null(paths) || length(paths) == 0) character(0) else as.character(paths)
+    ids <- c("Offset", "logK1", "H1")
+    if ("rxn_D" %in% paths_safe) ids <- c(ids, "logK2", "H2")
+    if ("rxn_T" %in% paths_safe) ids <- c(ids, "logK3", "H3")
+    if ("rxn_B" %in% paths_safe) ids <- c(ids, "logK4", "H4")
+    if ("rxn_F" %in% paths_safe) ids <- c(ids, "logK5", "H5")
+    if ("rxn_U" %in% paths_safe) ids <- c(ids, "logK6", "H6")
+    unique(ids)
+  }
+
+  get_effective_param_bound <- function(param_name, v_inj = NULL) {
+    get_param_bound(
+      param_name = param_name,
+      v_inj = v_inj,
+      override_bounds = fit_param_bounds()
+    )
+  }
+
+  get_effective_parameter_bounds <- function(param_names, v_inj = NULL) {
+    get_parameter_bounds(
+      param_names = param_names,
+      v_inj = v_inj,
+      override_bounds = fit_param_bounds()
+    )
+  }
+
+  get_fit_bound_for_ui <- function(param_name) {
+    b <- get_effective_param_bound(param_name)
+    c(lower = as.numeric(b["lower"]), upper = as.numeric(b["upper"]))
+  }
+
+  sanitize_fit_bound_pair <- function(lower_in, upper_in, old_lower, old_upper, step = 1) {
+    lower_num <- suppressWarnings(as.numeric(lower_in)[1])
+    upper_num <- suppressWarnings(as.numeric(upper_in)[1])
+    if (!is.finite(lower_num)) lower_num <- old_lower
+    if (!is.finite(upper_num)) upper_num <- old_upper
+
+    if (!is.finite(lower_num)) lower_num <- 0
+    if (!is.finite(upper_num)) upper_num <- lower_num + step
+
+    if (lower_num > upper_num) {
+      tmp <- lower_num
+      lower_num <- upper_num
+      upper_num <- tmp
+    }
+
+    min_span <- suppressWarnings(as.numeric(step)[1])
+    if (!is.finite(min_span) || min_span <= 0) min_span <- 1
+    if (abs(upper_num - lower_num) < .Machine$double.eps^0.5) {
+      upper_num <- lower_num + min_span
+    }
+
+    c(lower = lower_num, upper = upper_num)
+  }
+
+  clamp_to_bound <- function(value, bound, default) {
+    safe_numeric(
+      value,
+      default = default,
+      min = suppressWarnings(as.numeric(bound["lower"])[1]),
+      max = suppressWarnings(as.numeric(bound["upper"])[1])
+    )
+  }
+
+  get_slider_id_for_bound_param <- function(param_name) {
+    if (identical(param_name, "Offset")) "heat_offset" else param_name
+  }
+
+  get_default_value_for_bound_param <- function(param_name) {
+    if (grepl("^logK", param_name)) return(DEFAULT_PARAMS$logK)
+    if (grepl("^H[0-9]+$", param_name)) return(DEFAULT_PARAMS$H)
+    if (identical(param_name, "Offset")) return(DEFAULT_PARAMS$Offset)
+    0
+  }
+
+  apply_bound_to_slider <- function(param_name, bound) {
+    slider_id <- get_slider_id_for_bound_param(param_name)
+    current_val <- safe_input_get(slider_id)
+    default_val <- get_default_value_for_bound_param(param_name)
+    clamped_val <- clamp_to_bound(current_val, bound, default = default_val)
+    min_num <- suppressWarnings(as.numeric(bound["lower"])[1])
+    max_num <- suppressWarnings(as.numeric(bound["upper"])[1])
+    val_num <- suppressWarnings(as.numeric(clamped_val)[1])
+    if (!is.finite(min_num)) min_num <- default_val
+    if (!is.finite(max_num)) max_num <- min_num + 1
+    if (!is.finite(val_num)) val_num <- default_val
+    updateSliderInput(
+      session,
+      slider_id,
+      min = min_num,
+      max = max_num,
+      value = val_num
+    )
+    invisible(TRUE)
+  }
+
+  apply_all_fit_bounds_to_sliders <- function() {
+    bounds_now <- fit_param_bounds()
+    for (nm in FIT_BOUND_PARAM_IDS) {
+      b <- bounds_now[[nm]]
+      if (is.null(b)) next
+      apply_bound_to_slider(nm, b)
+    }
+    invisible(TRUE)
+  }
+
+  update_fit_param_bound <- function(param_name, lower_in, upper_in, update_ui_inputs = TRUE) {
+    current_bounds <- fit_param_bounds()
+    old_bound <- current_bounds[[param_name]]
+    if (is.null(old_bound)) old_bound <- get_param_bound(param_name)
+
+    step_val <- FIT_BOUND_STEPS[[param_name]]
+    if (!is.finite(step_val)) step_val <- 1
+
+    sanitized <- sanitize_fit_bound_pair(
+      lower_in = lower_in,
+      upper_in = upper_in,
+      old_lower = as.numeric(old_bound["lower"]),
+      old_upper = as.numeric(old_bound["upper"]),
+      step = step_val
+    )
+    current_bounds[[param_name]] <- sanitized
+    fit_param_bounds(current_bounds)
+
+    if (isTRUE(update_ui_inputs)) {
+      min_id <- paste0("bound_", param_name, "_min")
+      max_id <- paste0("bound_", param_name, "_max")
+      cur_min <- suppressWarnings(as.numeric(safe_input_get(min_id))[1])
+      cur_max <- suppressWarnings(as.numeric(safe_input_get(max_id))[1])
+      lower_num <- suppressWarnings(as.numeric(sanitized["lower"])[1])
+      upper_num <- suppressWarnings(as.numeric(sanitized["upper"])[1])
+      if (!is.finite(cur_min) || !isTRUE(all.equal(cur_min, lower_num, tolerance = 1e-10))) {
+        updateNumericInput(session, min_id, value = lower_num)
+      }
+      if (!is.finite(cur_max) || !isTRUE(all.equal(cur_max, upper_num, tolerance = 1e-10))) {
+        updateNumericInput(session, max_id, value = upper_num)
+      }
+    }
+
+    apply_bound_to_slider(param_name, sanitized)
+    invisible(TRUE)
+  }
+
   session_home <- tryCatch({
     h <- session$userData$itcsuite_home
     if (is.null(h) || !is.list(h)) NULL else h
@@ -208,6 +387,43 @@
     updateCheckboxInput(session, id, value = isTRUE(value))
     invisible(TRUE)
   }
+
+  # 边界编辑器输入联动：用户修改 min/max 后立即生效到滑条与会话边界
+  for (param_name in FIT_BOUND_PARAM_IDS) {
+    local({
+      nm <- param_name
+      min_id <- paste0("bound_", nm, "_min")
+      max_id <- paste0("bound_", nm, "_max")
+      observeEvent(
+        {
+          input[[min_id]]
+          input[[max_id]]
+        },
+        {
+          update_fit_param_bound(
+            param_name = nm,
+            lower_in = input[[min_id]],
+            upper_in = input[[max_id]],
+            update_ui_inputs = TRUE
+          )
+        },
+        ignoreInit = TRUE
+      )
+    })
+  }
+
+  observeEvent(input$reset_fit_bounds, {
+    default_bounds <- build_default_fit_param_bounds()
+    fit_param_bounds(default_bounds)
+
+    for (nm in FIT_BOUND_PARAM_IDS) {
+      b <- default_bounds[[nm]]
+      updateNumericInput(session, paste0("bound_", nm, "_min"), value = as.numeric(b["lower"])[1])
+      updateNumericInput(session, paste0("bound_", nm, "_max"), value = as.numeric(b["upper"])[1])
+    }
+    apply_all_fit_bounds_to_sliders()
+    showNotification(tr("fit_bounds_reset_done", lang()), type = "message", duration = 3)
+  }, ignoreInit = TRUE)
 
   reset_step2_ui_for_new_dataset <- function(default_n_inj = NULL, apply_first_injection_default = TRUE) {
     updateCheckboxGroupInput(session, "active_paths", selected = character(0))

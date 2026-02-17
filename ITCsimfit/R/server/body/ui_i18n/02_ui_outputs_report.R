@@ -100,6 +100,81 @@
   output$reset_defaults_button <- renderUI({
     actionButton("reset_defaults", tr("btn_reset_default", lang()), class = "btn-danger btn-xs")
   })
+
+  output$fit_bounds_editor <- renderUI({
+    paths <- input$active_paths
+    param_ids <- tryCatch(
+      get_fit_bound_param_ids_for_paths(paths),
+      error = function(e) c("Offset", "logK1", "H1")
+    )
+
+    get_bound_safe <- function(param_name) {
+      tryCatch(
+        isolate(get_fit_bound_for_ui(param_name)),
+        error = function(e) {
+          b <- get_param_bound(param_name)
+          c(lower = as.numeric(b["lower"]), upper = as.numeric(b["upper"]))
+        }
+      )
+    }
+
+    get_step_safe <- function(param_name) {
+      step_val <- suppressWarnings(as.numeric(FIT_BOUND_STEPS[[param_name]])[1])
+      if (is.finite(step_val) && step_val > 0) return(step_val)
+      if (grepl("^logK", param_name)) return(0.001)
+      if (grepl("^H[0-9]+$", param_name)) return(100)
+      if (identical(param_name, "Offset")) return(10)
+      1
+    }
+
+    header_row <- div(
+      style = "display:flex; gap:8px; align-items:center; margin: 6px 0 4px 0; font-size:12px; font-weight:bold;",
+      div(style = "flex: 0 0 72px;", tr("fit_bounds_param_col", lang())),
+      div(style = "flex: 1 1 120px;", tr("fit_bounds_min_col", lang())),
+      div(style = "flex: 1 1 120px;", tr("fit_bounds_max_col", lang()))
+    )
+
+    rows <- lapply(param_ids, function(param_name) {
+      bound <- get_bound_safe(param_name)
+      min_id <- paste0("bound_", param_name, "_min")
+      max_id <- paste0("bound_", param_name, "_max")
+      step_val <- get_step_safe(param_name)
+
+      min_val <- isolate({
+        v <- suppressWarnings(as.numeric(input[[min_id]])[1])
+        if (is.finite(v)) v else as.numeric(bound["lower"])
+      })
+      max_val <- isolate({
+        v <- suppressWarnings(as.numeric(input[[max_id]])[1])
+        if (is.finite(v)) v else as.numeric(bound["upper"])
+      })
+
+      div(
+        style = "display:flex; gap:8px; align-items:center; margin-bottom: 4px;",
+        div(style = "flex: 0 0 72px; font-family: monospace; font-size: 12px;", param_name),
+        div(style = "flex: 1 1 120px;", numericInput(min_id, NULL, value = min_val, step = step_val, width = "100%")),
+        div(style = "flex: 1 1 120px;", numericInput(max_id, NULL, value = max_val, step = step_val, width = "100%"))
+      )
+    })
+
+    tags$details(
+      style = "margin: 6px 0 8px 0;",
+      tags$summary(
+        style = "cursor: pointer; color: #2980b9; font-size: 12px;",
+        tr("fit_bounds_title", lang())
+      ),
+      div(
+        style = "margin-top: 6px; padding: 8px; border: 1px solid #e3e3e3; border-radius: 4px; background:#fafafa;",
+        div(style = "font-size: 12px; color: #666; margin-bottom: 4px;", tr("fit_bounds_hint", lang())),
+        header_row,
+        rows,
+        div(
+          style = "margin-top: 6px;",
+          actionButton("reset_fit_bounds", tr("fit_bounds_reset_btn", lang()), class = "btn-default btn-xs")
+        )
+      )
+    )
+  })
   
   output$param_correction_title <- renderUI({
     tr("param_correction", lang())
@@ -139,10 +214,21 @@
   
   output$heat_offset_slider <- renderUI({
     # [修复] 使用 isolate() 保持当前值，避免语言切换时重置
+    bound <- tryCatch(
+      get_effective_param_bound("Offset"),
+      error = function(e) PARAM_BOUNDS$Offset
+    )
+    lower_b <- suppressWarnings(as.numeric(bound["lower"])[1])
+    upper_b <- suppressWarnings(as.numeric(bound["upper"])[1])
+    if (!is.finite(lower_b)) lower_b <- PARAM_BOUNDS$Offset["lower"]
+    if (!is.finite(upper_b)) upper_b <- PARAM_BOUNDS$Offset["upper"]
+    if (lower_b >= upper_b) upper_b <- lower_b + 10
+
     current_value <- isolate({
       if(!is.null(input$heat_offset)) input$heat_offset else DEFAULT_PARAMS$Offset
     })
-    sliderInput("heat_offset", tr("param_heat_offset", lang()), -1500, 1500, current_value, 10, ticks=FALSE)
+    current_value <- safe_numeric(current_value, DEFAULT_PARAMS$Offset, min = lower_b, max = upper_b)
+    sliderInput("heat_offset", tr("param_heat_offset", lang()), lower_b, upper_b, current_value, 10, ticks=FALSE)
   })
 
   # Restore from Home can happen before Step 2 tab is opened once.
@@ -152,6 +238,7 @@
   outputOptions(output, "factor_H_input", suspendWhenHidden = FALSE)
   outputOptions(output, "factor_G_input", suspendWhenHidden = FALSE)
   outputOptions(output, "V_init_input", suspendWhenHidden = FALSE)
+  outputOptions(output, "fit_bounds_editor", suspendWhenHidden = FALSE)
   outputOptions(output, "heat_offset_slider", suspendWhenHidden = FALSE)
   
   # 右栏 - 实验数据
