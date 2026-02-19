@@ -75,7 +75,9 @@
         "zip"
       ],
       "icon": "build/icon.icns",
-      "category": "public.app-category.science"
+      "category": "public.app-category.science",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
     },
     "win": {
       "target": [

@@ -64,33 +64,75 @@ async function waitForBackendReady(port, timeoutMs = 30000) {
   return false;
 }
 
-async function stopChild(child) {
-  if (!child || child.killed) return;
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runTaskkill(pid) {
   await new Promise((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      resolve();
-    };
-    const timeout = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } catch (_) {
-        // Ignore kill failures.
-      }
-      finish();
-    }, 5000);
-    child.once("close", () => {
-      clearTimeout(timeout);
-      finish();
+    const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+      stdio: "ignore"
     });
+    killer.on("error", () => resolve());
+    killer.on("close", () => resolve());
+  });
+}
+
+async function stopChild(child) {
+  if (!child) return;
+  const pid = child.pid;
+
+  const waitForClose = new Promise((resolve) => {
+    child.once("close", () => resolve(true));
+  });
+
+  try {
+    child.kill("SIGTERM");
+  } catch (_) {
+    // Ignore signal failures.
+  }
+
+  let exited = await Promise.race([
+    waitForClose,
+    delay(5000).then(() => false)
+  ]);
+  if (exited) return;
+
+  if (process.platform === "win32" && Number.isInteger(pid) && pid > 0) {
+    await runTaskkill(pid);
+  } else {
     try {
-      child.kill("SIGTERM");
+      child.kill("SIGKILL");
     } catch (_) {
-      clearTimeout(timeout);
-      finish();
+      // Ignore signal failures.
     }
+  }
+
+  exited = await Promise.race([
+    waitForClose,
+    delay(5000).then(() => false)
+  ]);
+
+  if (!exited) {
+    // Avoid hanging forever if OS refuses to terminate the process tree.
+    if (child.stdout && typeof child.stdout.destroy === "function") {
+      child.stdout.destroy();
+    }
+    if (child.stderr && typeof child.stderr.destroy === "function") {
+      child.stderr.destroy();
+    }
+  }
+}
+
+async function terminateOnSignal(child, signalName) {
+  process.once(signalName, () => {
+    void stopChild(child).finally(() => {
+      try {
+        process.exit(130);
+      } catch (_) {
+        process.exit(1);
+      }
+    });
   });
 }
 
@@ -139,6 +181,9 @@ async function main() {
     env,
     stdio: ["ignore", "pipe", "pipe"]
   });
+
+  await terminateOnSignal(child, "SIGINT");
+  await terminateOnSignal(child, "SIGTERM");
 
   let resolved = false;
   let readyPort = null;

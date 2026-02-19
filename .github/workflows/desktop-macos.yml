@@ -49,7 +49,7 @@ jobs:
 
       - name: Install desktop dependencies
         working-directory: desktop
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Build bundled R runtime
         working-directory: desktop
@@ -59,14 +59,53 @@ jobs:
         working-directory: desktop
         run: npm run smoke
 
-      - name: Build macOS artifacts
+      - name: Check signing/notarization secrets
+        id: signing
+        run: |
+          if [[ -n "${{ secrets.MACOS_CERT_P12_BASE64 }}" && -n "${{ secrets.MACOS_CERT_PASSWORD }}" && -n "${{ secrets.APPLE_ID }}" && -n "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" && -n "${{ secrets.APPLE_TEAM_ID }}" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build macOS artifacts (signed + notarized)
+        if: steps.signing.outputs.enabled == 'true'
         working-directory: desktop
+        env:
+          CSC_LINK: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run dist
+
+      - name: Build macOS artifacts (unsigned fallback)
+        if: steps.signing.outputs.enabled != 'true'
+        working-directory: desktop
+        run: npm run dist -- --config.mac.identity=null
+
+      - name: Warn when artifacts are unsigned
+        if: steps.signing.outputs.enabled != 'true'
+        run: |
+          echo "::warning::macOS artifacts are unsigned/unnotarized. Downloaded app may show 'damaged' or be blocked by Gatekeeper."
+
+      - name: Generate checksums
+        working-directory: desktop
+        run: |
+          shopt -s nullglob
+          files=(dist/*.dmg dist/*.zip)
+          if (( ${#files[@]} == 0 )); then
+            echo "No macOS artifacts generated under desktop/dist"
+            exit 1
+          fi
+          shasum -a 256 "${files[@]}" > dist/SHA256SUMS.txt
 
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v4
         with:
           name: itcsuite-desktop-macos
+          compression-level: 0
           path: |
             desktop/dist/*.dmg
             desktop/dist/*.zip
+            desktop/dist/SHA256SUMS.txt

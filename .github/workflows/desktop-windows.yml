@@ -28,6 +28,7 @@ jobs:
   desktop-windows:
     name: desktop-windows
     runs-on: windows-latest
+    timeout-minutes: 180
 
     steps:
       - uses: actions/checkout@v4
@@ -50,6 +51,7 @@ jobs:
 
       - name: Backend smoke test (headless)
         working-directory: desktop
+        timeout-minutes: 10
         run: npm run smoke:backend
 
       - name: Build Windows artifacts
