@@ -231,7 +231,14 @@ function runCommand(command, args, options = {}) {
         return;
       }
       const suffix = capture && stderr ? `: ${stderr.trim()}` : "";
-      reject(new Error(`${command} ${args.join(" ")} exited with code ${code}${suffix}`));
+      const normalizedArgs = args.map((arg) => {
+        const singleLine = String(arg).replace(/\s+/g, " ").trim();
+        if (singleLine.length > 140) {
+          return `${singleLine.slice(0, 137)}...`;
+        }
+        return singleLine;
+      });
+      reject(new Error(`${command} ${normalizedArgs.join(" ")} exited with code ${code}${suffix}`));
     });
   });
 }
@@ -268,19 +275,48 @@ function resolveBundledRscript(runtimeRoot) {
   return "";
 }
 
-function buildRuntimeEnv(runtimeRoot, libDir) {
+function resolveHostRscript(rHomeDir) {
+  const candidates = [
+    path.join(rHomeDir, "bin", "x64", "Rscript.exe"),
+    path.join(rHomeDir, "bin", "Rscript.exe"),
+    path.join(rHomeDir, "bin", "Rscript"),
+    path.join(rHomeDir, "Resources", "bin", "Rscript")
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return "";
+}
+
+function buildHostREnv(rHomeDir, libDir) {
   const env = { ...process.env };
-  const pathEntries = [
-    path.join(runtimeRoot, "bin", "x64"),
-    path.join(runtimeRoot, "bin"),
-    env.PATH || ""
-  ].filter(Boolean);
+  const pathEntries = [];
+  const candidates = [
+    path.join(rHomeDir, "bin", "x64"),
+    path.join(rHomeDir, "bin")
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate) && !pathEntries.includes(candidate)) {
+      pathEntries.push(candidate);
+    }
+  }
+
+  const currentPath = env.PATH || env.Path || "";
+  if (currentPath) {
+    pathEntries.push(currentPath);
+  }
 
   env.PATH = pathEntries.join(path.delimiter);
-  env.R_HOME = runtimeRoot;
   env.R_LIBS = libDir;
   env.R_LIBS_USER = libDir;
   env.R_LIBS_SITE = libDir;
+  if (Object.prototype.hasOwnProperty.call(env, "Path")) {
+    env.Path = env.PATH;
+  }
   return env;
 }
 
@@ -462,9 +498,13 @@ async function main() {
   await fs.promises.mkdir(path.dirname(cfg.outDir), { recursive: true });
   await fs.promises.cp(rHomeDir, cfg.outDir, { recursive: true, force: true });
 
-  const rscript = resolveBundledRscript(cfg.outDir);
-  if (!rscript) {
+  const bundledRscript = resolveBundledRscript(cfg.outDir);
+  if (!bundledRscript) {
     throw new Error(`Rscript missing after copy under ${cfg.outDir}`);
+  }
+  const hostRscript = resolveHostRscript(rHomeDir);
+  if (!hostRscript) {
+    throw new Error(`Host Rscript not found under ${rHomeDir}`);
   }
 
   const libDir = path.join(cfg.outDir, "library");
@@ -483,19 +523,19 @@ async function main() {
     throw new Error("no packages provided by manifest/fallback list");
   }
 
-  const runtimeEnv = buildRuntimeEnv(cfg.outDir, libDir);
+  const hostREnv = buildHostREnv(rHomeDir, libDir);
 
-  await runCommand(rscript, ["--vanilla", "-e", INSTALL_SCRIPT], {
+  await runCommand(hostRscript, ["--vanilla", "-e", INSTALL_SCRIPT], {
     env: {
-      ...runtimeEnv,
+      ...hostREnv,
       ITCSUITE_LIB_DIR: libDir,
       ITCSUITE_PKG_CSV: requiredPkgs.join(",")
     }
   });
 
-  await runCommand(rscript, ["--vanilla", "-e", VERIFY_AND_PRUNE_SCRIPT], {
+  await runCommand(hostRscript, ["--vanilla", "-e", VERIFY_AND_PRUNE_SCRIPT], {
     env: {
-      ...runtimeEnv,
+      ...hostREnv,
       ITCSUITE_LIB_DIR: libDir,
       ITCSUITE_MANIFEST_PATH: cfg.manifestPath,
       ITCSUITE_STRICT_RUNTIME_MANIFEST: cfg.strictRuntimeManifest ? "1" : "0"
