@@ -29,11 +29,11 @@ Environment overrides:
 - `ITCSUITE_REPO_ROOT`: override repo root in dev mode.
 - `ITCSUITE_USE_BUNDLED_R=1`: force dev mode to use `resources/r-runtime`.
 
-## Build bundled R runtime (macOS)
+## Build bundled R runtime (cross-platform)
 
 ```bash
 cd /Users/guanglu/Documents/myScript/ITCSuite/desktop
-./scripts/build-r-runtime.sh
+node scripts/build-r-runtime.mjs --strict-runtime-manifest
 ```
 
 This generates `resources/r-runtime`.
@@ -46,6 +46,20 @@ npm run dist
 ```
 
 Build outputs land in `dist/`.
+
+## Package app (Windows x64, for CI runners)
+
+```bash
+cd /Users/guanglu/Documents/myScript/ITCSuite/desktop
+npm run dist:win
+```
+
+## Backend smoke test (headless, CI-friendly)
+
+```bash
+cd /Users/guanglu/Documents/myScript/ITCSuite/desktop
+npm run smoke:backend
+```
 
 ## Smoke test
 

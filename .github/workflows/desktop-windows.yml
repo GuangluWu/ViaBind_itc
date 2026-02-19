@@ -1,4 +1,4 @@
-name: ITCSuite Desktop macOS
+name: ITCSuite Desktop Windows
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ on:
       - "ITCprocessor/**"
       - "ITCsimfit/**"
       - "ITCgraph/**"
-      - ".github/workflows/desktop-macos.yml"
+      - ".github/workflows/desktop-windows.yml"
   push:
     branches:
       - main
@@ -22,12 +22,12 @@ on:
       - "ITCprocessor/**"
       - "ITCsimfit/**"
       - "ITCgraph/**"
-      - ".github/workflows/desktop-macos.yml"
+      - ".github/workflows/desktop-windows.yml"
 
 jobs:
-  desktop-macos:
-    name: desktop-macos
-    runs-on: macos-latest
+  desktop-windows:
+    name: desktop-windows
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -36,37 +36,31 @@ jobs:
         with:
           r-version: "4.3"
 
-      - name: Install R test dependencies
-        run: |
-          Rscript -e 'install.packages(c("testthat","shinytest2","shiny","rootSolve","tidyverse","DT","DEoptim","readxl","writexl","plotly","patchwork","jsonlite","later","digest","MASS","gridExtra","colourpicker"), repos="https://cloud.r-project.org")'
-
-      - name: Run existing strict test suites
-        run: Rscript tests/run_all.R --strict
-
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: Install desktop dependencies
         working-directory: desktop
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Build bundled R runtime
         working-directory: desktop
         run: node scripts/build-r-runtime.mjs --strict-runtime-manifest
 
-      - name: Desktop smoke test
+      - name: Backend smoke test (headless)
         working-directory: desktop
-        run: npm run smoke
+        run: npm run smoke:backend
 
-      - name: Build macOS artifacts
+      - name: Build Windows artifacts
         working-directory: desktop
-        run: npm run dist
+        run: npm run dist:win
 
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: itcsuite-desktop-macos
+          name: itcsuite-desktop-windows
           path: |
-            desktop/dist/*.dmg
-            desktop/dist/*.zip
+            desktop/dist/*windows-x64-setup.exe
+            desktop/dist/*windows-x64-setup.exe.blockmap
+            desktop/dist/latest*.yml

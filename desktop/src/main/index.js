@@ -111,6 +111,8 @@ class BackendController extends EventEmitter {
     }
 
     const bundledCandidates = [
+      path.join(runtimeRoot, "bin", "Rscript.exe"),
+      path.join(runtimeRoot, "bin", "x64", "Rscript.exe"),
       path.join(runtimeRoot, "bin", "Rscript"),
       path.join(runtimeRoot, "Resources", "bin", "Rscript")
     ];
@@ -139,14 +141,31 @@ class BackendController extends EventEmitter {
       env.R_LIBS = bundledLib;
       env.R_LIBS_USER = bundledLib;
       env.R_LIBS_SITE = bundledLib;
+
+      const runtimeBins = [
+        path.join(runtimeRoot, "bin", "x64"),
+        path.join(runtimeRoot, "bin"),
+        path.join(runtimeRoot, "Resources", "bin")
+      ].filter((candidate) => fs.existsSync(candidate));
+
+      if (runtimeBins.length > 0) {
+        const currentPath = env.PATH || env.Path || "";
+        const prefixedPath = runtimeBins.join(path.delimiter);
+        env.PATH = currentPath ? `${prefixedPath}${path.delimiter}${currentPath}` : prefixedPath;
+        if (Object.prototype.hasOwnProperty.call(env, "Path")) {
+          env.Path = env.PATH;
+        }
+      }
     }
 
-    // Preserve Unicode rendering (Chinese/special symbols) in R runtime.
-    if (!env.LANG || !/UTF-?8/i.test(env.LANG)) {
-      env.LANG = "en_US.UTF-8";
-    }
-    if (!env.LC_CTYPE || !/UTF-?8/i.test(env.LC_CTYPE)) {
-      env.LC_CTYPE = "en_US.UTF-8";
+    // Preserve Unicode rendering in bundled runtime on Unix-like hosts.
+    if (process.platform !== "win32") {
+      if (!env.LANG || !/UTF-?8/i.test(env.LANG)) {
+        env.LANG = "en_US.UTF-8";
+      }
+      if (!env.LC_CTYPE || !/UTF-?8/i.test(env.LC_CTYPE)) {
+        env.LC_CTYPE = "en_US.UTF-8";
+      }
     }
 
     return env;

@@ -10,8 +10,11 @@
     "preinstall": "node scripts/check-node-version.mjs",
     "dev": "electron .",
     "smoke": "node scripts/smoke-desktop.mjs",
+    "smoke:backend": "node scripts/smoke-backend.mjs",
     "pack:dir": "electron-builder --mac dir",
-    "dist": "electron-builder --mac dmg zip"
+    "dist:mac": "electron-builder --mac dmg zip",
+    "dist:win": "electron-builder --win nsis --x64",
+    "dist": "npm run dist:mac"
   },
   "devDependencies": {
     "electron": "^33.2.1",
@@ -73,6 +76,25 @@
       ],
       "icon": "build/icon.icns",
       "category": "public.app-category.science"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "${productName}-${version}-windows-${arch}-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "ViaBind"
     }
   }
 }
