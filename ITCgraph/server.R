@@ -597,20 +597,36 @@ server <- function(input, output, session) {
   }
 
   latest_step2_plot_payload <- reactiveVal(NULL)
+  step3_replay_pending <- reactiveVal(FALSE)
   bridge_step2_channel <- resolve_bridge_channel("step2_plot_payload")
   if (is.function(bridge_step2_channel)) {
     observeEvent(bridge_step2_channel(), {
       payload <- bridge_step2_channel()
       if (is.null(payload) || !is.list(payload)) return(invisible(FALSE))
       latest_step2_plot_payload(payload)
-      consume_step2_plot_payload(payload)
+
+      consumed <- isTRUE(consume_step2_plot_payload(payload))
+      if (!isTRUE(consumed)) return(invisible(FALSE))
+
+      # Guard against tab-revisit resets: only queue one replay when payload
+      # arrives while Step 3 is hidden; do not replay on routine tab switches.
+      if (is_step3_tab_selected(input$main_tabs)) {
+        step3_replay_pending(FALSE)
+      } else {
+        step3_replay_pending(TRUE)
+      }
     }, ignoreNULL = TRUE)
   }
 
   observeEvent(input$main_tabs, {
     if (!is_step3_tab_selected(input$main_tabs)) return(invisible(FALSE))
+    if (!isTRUE(step3_replay_pending())) return(invisible(FALSE))
+    on.exit(step3_replay_pending(FALSE), add = TRUE)
     payload <- latest_step2_plot_payload()
     if (is.null(payload) || !is.list(payload)) return(invisible(FALSE))
+
+    # Replay at most once for the latest off-tab payload so manual range/no-dim
+    # edits survive normal Step 3 tab revisit.
     consume_step2_plot_payload(payload, replay_only = TRUE)
   }, ignoreInit = TRUE)
   
