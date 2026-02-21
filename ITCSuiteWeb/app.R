@@ -362,9 +362,14 @@ ui <- fluidPage(
   tags$head(
     tags$title("ViaBind: Your Path, Your Model"),
     tags$style(HTML("\
-      .main-host-wrap { margin-top: 6px; }\
-      .main-host-topbar { position: relative; }\
-      .main-host-wrap .tab-content { padding-top: 8px; }\
+      :root { --itcsuite-vh: 1vh; --itcsuite-host-chrome: 140px; }\
+      html, body { height: 100%; }\
+      body > .container-fluid { height: 100%; }\
+      .main-host-wrap { margin-top: 6px; height: calc(var(--itcsuite-vh, 1vh) * 100 - 12px); min-height: 0; overflow: hidden; }\
+      .main-host-topbar { position: relative; height: 100%; display: flex; flex-direction: column; min-height: 0; }\
+      .main-host-topbar > .tabbable { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }\
+      .main-host-wrap .tab-content { padding-top: 8px; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }\
+      .main-host-wrap .tab-content > .tab-pane { min-height: 100%; }\
       .main-host-wrap .nav-tabs { padding-right: 140px; }\
       .main-host-brand { color: #4b5563; font-size: 13px; margin: 6px 0 2px; }\
       .main-host-brand a { color: inherit; text-decoration: underline; }\
@@ -394,6 +399,32 @@ ui <- fluidPage(
         var disconnectReloadKey = 'itcsuite.auto_reload_ts';
         var disconnectGraceMs = 8000;
         var disconnectReloadCooldownMs = 60000;
+        var viewportRafId = null;
+
+        function isWindowsHost() {
+          var platform = (navigator.platform || '') + ' ' + (navigator.userAgent || '');
+          return /Windows/i.test(platform);
+        }
+
+        function updateViewportCssVars() {
+          var root = document.documentElement;
+          var vh = Math.max(window.innerHeight || 0, 1) * 0.01;
+          root.style.setProperty('--itcsuite-vh', vh + 'px');
+          root.classList.toggle('itcsuite-win', isWindowsHost());
+
+          var activePane = document.querySelector('.main-host-wrap .tab-content > .tab-pane.active');
+          var paneTop = activePane ? activePane.getBoundingClientRect().top : 0;
+          var hostChrome = Math.max(96, Math.round((paneTop || 0) + 18));
+          root.style.setProperty('--itcsuite-host-chrome', hostChrome + 'px');
+        }
+
+        function scheduleViewportCssVarRefresh() {
+          if (viewportRafId) return;
+          viewportRafId = window.requestAnimationFrame(function() {
+            viewportRafId = null;
+            updateViewportCssVars();
+          });
+        }
 
         function normalizeLang(value) {
           var v = (value || '').toLowerCase();
@@ -497,6 +528,7 @@ ui <- fluidPage(
         });
 
         $(document).on('shiny:connected', function() {
+          scheduleViewportCssVarRefresh();
           Shiny.setInputValue('itcsuite_lang_init', detectInitialLang(), {priority: 'event'});
           reportDesktopCapability();
         });
@@ -511,9 +543,13 @@ ui <- fluidPage(
 
         $(document).on('shiny:reconnected', function() {
           clearDisconnectTimer();
+          scheduleViewportCssVarRefresh();
           reportDesktopCapability();
         });
 
+        $(window).on('resize', scheduleViewportCssVarRefresh);
+        $(document).on('shown.bs.tab', 'a[data-toggle=\"tab\"]', scheduleViewportCssVarRefresh);
+        setTimeout(scheduleViewportCssVarRefresh, 0);
         window.addEventListener('beforeunload', clearDisconnectTimer);
       })();
     "))

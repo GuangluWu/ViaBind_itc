@@ -830,6 +830,7 @@ function createMainWindow() {
     minHeight: 760,
     title: APP_TITLE,
     show: true,
+    autoHideMenuBar: process.platform === "win32",
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -841,6 +842,10 @@ function createMainWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+  if (process.platform === "win32") {
+    // Keep menu available via Alt while reclaiming one row of vertical space.
+    mainWindow.setMenuBarVisibility(false);
+  }
 
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
     appendMainLog("render_process_gone", {
@@ -1022,6 +1027,7 @@ function buildAppMenu() {
       submenu: [
         { role: "reload" },
         { role: "toggledevtools" },
+        { role: "togglefullscreen" },
         { role: "resetzoom" },
         { role: "zoomin" },
         { role: "zoomout" }
