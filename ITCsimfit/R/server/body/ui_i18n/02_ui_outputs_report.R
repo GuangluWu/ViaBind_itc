@@ -68,6 +68,130 @@
   
   # 模型说明翻译
   output$model_base_note <- renderUI({ tr("model_base", lang()) })
+
+  output$path_mode_switch <- renderUI({
+    current_mode <- isolate(as.character(input$path_view_mode %||% "graph")[1])
+    if (!current_mode %in% c("table", "graph")) current_mode <- "graph"
+    tags$div(
+      class = "path-mode-switch-wrap path-mode-inline",
+      tags$span(
+        class = "path-mode-inline-label",
+        paste0(tr("path_view_mode_label", lang()), ":")
+      ),
+      radioButtons(
+        "path_view_mode",
+        label = NULL,
+        choices = setNames(
+          c("table", "graph"),
+          c(tr("path_view_table", lang()), tr("path_view_graph", lang()))
+        ),
+        selected = current_mode,
+        inline = TRUE,
+        width = "auto"
+      )
+    )
+  })
+
+  output$path_graph_panel <- renderUI({
+    active_paths_raw <- if (is.null(input$active_paths)) character(0) else as.character(input$active_paths)
+    active_paths <- tryCatch(
+      normalize_active_paths_with_dependencies(active_paths_raw),
+      error = function(e) unique(active_paths_raw)
+    )
+
+    is_active <- function(path_id) path_id %in% active_paths
+
+    edge_toggle_g <- function(path_id, points, tx, ty, label) {
+      active_now <- is_active(path_id)
+      tags$g(
+        tags$polyline(
+          points = points,
+          class = paste("path-edge-line", if (active_now) "is-active" else ""),
+          `marker-end` = "url(#pathArrow)"
+        ),
+        tags$g(
+          class = paste("path-edge-toggle", if (active_now) "is-active" else ""),
+          `data-path-id` = path_id,
+          tags$rect(x = tx - 9, y = ty - 9, width = 18, height = 18),
+          tags$polyline(
+            class = "path-check-mark",
+            points = sprintf(
+              "%s,%s %s,%s %s,%s",
+              tx - 5, ty,
+              tx - 1, ty + 4,
+              tx + 6, ty - 5
+            )
+          ),
+          tags$text(
+            x = tx + 17,
+            y = ty,
+            `dominant-baseline` = "central",
+            class = "path-edge-label",
+            label
+          )
+        )
+      )
+    }
+
+    node_g <- function(label, cx, cy, base = FALSE, width = 64, height = 34) {
+      tags$g(
+        class = paste("path-node", if (isTRUE(base)) "base-node" else ""),
+        tags$rect(
+          x = cx - (width / 2),
+          y = cy - (height / 2),
+          width = width,
+          height = height
+        ),
+        tags$text(x = cx, y = cy, label)
+      )
+    }
+
+    tags$div(
+      tags$svg(
+        class = "path-graph-svg",
+        viewBox = "0 0 560 320",
+        xmlns = "http://www.w3.org/2000/svg",
+        tags$defs(
+          tags$marker(
+            id = "pathArrow",
+            markerWidth = "8",
+            markerHeight = "8",
+            refX = "7",
+            refY = "4",
+            orient = "auto",
+            markerUnits = "strokeWidth",
+            tags$path(d = "M0,0 L8,4 L0,8 z", fill = "#7f8b98")
+          )
+        ),
+
+        # Base path: H/G merge, then one vertical line to M (always on, no toggle)
+        tags$polyline(points = "130,34 430,34", class = "path-edge-line is-active"),
+        tags$polyline(points = "280,34 280,70", class = "path-edge-line is-active", `marker-end` = "url(#pathArrow)"),
+        tags$text(x = 296, y = 56, class = "path-edge-label", "Base"),
+
+        # Toggle paths (all from M, except D -> F)
+        # Keep checkbox on the vertical branch segment (same relative position as D -> F).
+        edge_toggle_g("rxn_D", "280,106 280,126 70,126 70,180", 70, 153, "+G"),
+        edge_toggle_g("rxn_T", "280,106 280,126 210,126 210,180", 210, 153, "+M"),
+        edge_toggle_g("rxn_B", "280,106 280,126 350,126 350,180", 350, 153, "+H"),
+        edge_toggle_g("rxn_U", "280,106 280,126 490,126 490,180", 490, 153, "Bend"),
+        edge_toggle_g("rxn_F", "70,216 70,268", 70, 242, "+M"),
+
+        node_g("H: cell", 130, 34, base = TRUE, width = 92, height = 30),
+        node_g("G: syr.", 430, 34, base = TRUE, width = 92, height = 30),
+        node_g("M: H\u2081G\u2081", 280, 88, base = TRUE, width = 132, height = 36),
+        node_g("D: H\u2081G\u2082", 70, 198, width = 120, height = 36),
+        node_g("T: H\u2082G\u2082", 210, 198, width = 120, height = 36),
+        node_g("B: H\u2082G\u2081", 350, 198, width = 120, height = 36),
+        node_g("U: H\u2081G\u2081", 490, 198, width = 120, height = 36),
+        node_g("F: H\u2082G\u2083", 70, 286, width = 120, height = 36)
+      ),
+      tags$div(
+        class = "path-graph-hint",
+        tr("path_graph_hint", lang())
+      )
+    )
+  })
   
   # 动态生成路径选择 checkboxGroupInput（支持翻译）
   output$active_paths_checkbox <- renderUI({
@@ -235,6 +359,8 @@
   # Keep key dynamic input outputs active while hidden so update*Input
   # calls do not get dropped on first restore.
   outputOptions(output, "active_paths_checkbox", suspendWhenHidden = FALSE)
+  outputOptions(output, "path_mode_switch", suspendWhenHidden = FALSE)
+  outputOptions(output, "path_graph_panel", suspendWhenHidden = FALSE)
   outputOptions(output, "factor_H_input", suspendWhenHidden = FALSE)
   outputOptions(output, "factor_G_input", suspendWhenHidden = FALSE)
   outputOptions(output, "V_init_input", suspendWhenHidden = FALSE)

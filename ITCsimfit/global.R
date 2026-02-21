@@ -51,6 +51,11 @@ if (!exists("handle_error", envir = .GlobalEnv)) {
   stop("Failed to load utility functions from R/utils.R. Please check the file.")
 }
 
+source("R/path_selection_helpers.R", local = FALSE)
+if (!exists("normalize_active_paths_with_dependencies", envir = .GlobalEnv)) {
+  stop("Failed to load path selection helpers from R/path_selection_helpers.R.")
+}
+
 # 3. 加载 i18n 翻译模块（需要在其他模块之前加载）
 # 使用 local = FALSE 确保函数加载到全局环境
 source("R/i18n.R", local = FALSE)

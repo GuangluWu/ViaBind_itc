@@ -327,6 +327,135 @@ ui <- fluidPage(
         padding-left: 20px; /* Checkbox offset */
         font-size: 0.85em;
       }
+
+      .simfit-root .path-mode-switch-wrap {
+        margin-right: 6px;
+      }
+
+      .simfit-root .path-mode-row {
+        margin: 0 0 6px 0;
+      }
+
+      .simfit-root .path-mode-inline {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: nowrap;
+      }
+
+      .simfit-root .path-mode-inline-label {
+        font-size: 12px;
+        color: #666;
+        white-space: nowrap;
+      }
+
+      .simfit-root .path-mode-inline .shiny-input-radiogroup {
+        margin-bottom: 0 !important;
+      }
+
+      .simfit-root .path-mode-inline .radio {
+        margin: 0;
+      }
+
+      .simfit-root .path-mode-inline .radio-inline {
+        padding-left: 18px;
+        margin-right: 10px;
+        font-size: 12px;
+      }
+
+      .simfit-root .path-table-panel {
+        margin-top: 2px;
+      }
+
+      .simfit-root .path-graph-panel {
+        margin-top: 4px;
+        border: 1px solid #d8dee6;
+        border-radius: 6px;
+        background: linear-gradient(180deg, #fbfdff 0%, #f7f9fc 100%);
+        padding: 2px 6px 4px 6px;
+      }
+
+      .simfit-root .path-graph-svg {
+        width: 100%;
+        height: auto;
+        aspect-ratio: 560 / 320;
+        display: block;
+      }
+
+      .simfit-root .path-node rect {
+        fill: #ffffff;
+        stroke: #9aa7b5;
+        stroke-width: 1.2;
+        rx: 7;
+        ry: 7;
+      }
+
+      .simfit-root .path-node text {
+        font-size: 22px;
+        fill: #2b3a42;
+        pointer-events: none;
+        text-anchor: middle;
+        dominant-baseline: central;
+      }
+
+      .simfit-root .path-node.base-node rect {
+        stroke: #2f80ed;
+        fill: #eef5ff;
+      }
+
+      .simfit-root .path-edge-line {
+        stroke: #96a1ad;
+        stroke-width: 1.6;
+        fill: none;
+      }
+
+      .simfit-root .path-edge-line.is-active {
+        stroke: #2f80ed;
+        stroke-width: 2;
+      }
+
+      .simfit-root .path-edge-label {
+        font-size: 22px;
+        fill: #4e5d6c;
+      }
+
+      .simfit-root .path-edge-toggle {
+        cursor: pointer;
+      }
+
+      .simfit-root .path-edge-toggle rect {
+        fill: #ffffff;
+        stroke: #8d99a6;
+        stroke-width: 1.3;
+        rx: 3;
+        ry: 3;
+      }
+
+      .simfit-root .path-edge-toggle .path-check-mark {
+        fill: none;
+        stroke: #2f80ed;
+        stroke-width: 2.1;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .simfit-root .path-edge-toggle:not(.is-active) .path-check-mark {
+        display: none;
+      }
+
+      .simfit-root .path-edge-toggle.is-active rect {
+        stroke: #2f80ed;
+        fill: #eef5ff;
+      }
+
+      .simfit-root .path-graph-hint {
+        font-size: 11px;
+        color: #6e7c89;
+        line-height: 1.35;
+        margin-top: 2px;
+        text-align: center;
+        white-space: pre-line;
+      }
       
       /* 统一复选框行高，更紧凑 */
       .simfit-root .checkbox { 
@@ -417,6 +546,7 @@ ui <- fluidPage(
           order: 4 !important;
           width: 100% !important;
         }
+
       }
       
     ")),
@@ -424,6 +554,21 @@ ui <- fluidPage(
       Shiny.addCustomMessageHandler('trigger-download', function(id) {
         var el = document.getElementById(id);
         if (el && typeof el.click === 'function') el.click();
+      });
+
+      document.addEventListener('click', function(e) {
+        var node = e.target;
+        while (node && node !== document) {
+          if (node.classList && node.classList.contains('path-edge-toggle') && node.dataset && node.dataset.pathId) {
+            Shiny.setInputValue('path_graph_toggle', {
+              path_id: node.dataset.pathId,
+              nonce: Date.now()
+            }, {priority: 'event'});
+            e.preventDefault();
+            return;
+          }
+          node = node.parentNode;
+        }
       });
     "))
   ),
@@ -478,33 +623,47 @@ ui <- fluidPage(
                      uiOutput("rm_exp_button")
                  )
              ),
-             
-             # [新增] 表格头
-             div(class = "model-header",
-                 div(class="col-mod", uiOutput("model_header_model")),
-                 div(class="col-par", uiOutput("model_header_param")),
-                 div(class="col-sto", uiOutput("model_header_stoich")),
-                 div(class="col-dsc", uiOutput("model_header_desc"))
-             ),
-             
-             # [UI修改] 基础反应 (rxn_M) - 静态行，匹配表格样式
-             # 移除 inline margin，使用全局 .checkbox 样式以保持一致
-             div(class = "checkbox", style = "color: gray;",
-                 tags$label(
-                   tags$input(type = "checkbox", checked = NA, disabled = NA),
-                   # [修复] 完全模拟 checkboxGroupInput 的 DOM 结构: input + span > div
-                   tags$span(
-                     div(class="model-row",
-                          span(class="col-mod", "H+G=M"),
-                          span(class="col-par", "K1 H1"),
-                          span(class="col-sto", "H\u2081G\u2081"),
-                          span(class="col-dsc", uiOutput("model_base_note"))
+
+             div(class="path-mode-row", uiOutput("path_mode_switch")),
+
+             conditionalPanel(
+               "input.path_view_mode === 'table'",
+               div(class = "path-table-panel",
+                 # [新增] 表格头
+                 div(class = "model-header",
+                     div(class="col-mod", uiOutput("model_header_model")),
+                     div(class="col-par", uiOutput("model_header_param")),
+                     div(class="col-sto", uiOutput("model_header_stoich")),
+                     div(class="col-dsc", uiOutput("model_header_desc"))
+                 ),
+
+                 # [UI修改] 基础反应 (rxn_M) - 静态行，匹配表格样式
+                 # 移除 inline margin，使用全局 .checkbox 样式以保持一致
+                 div(class = "checkbox", style = "color: gray;",
+                     tags$label(
+                       tags$input(type = "checkbox", checked = NA, disabled = NA),
+                       # [修复] 完全模拟 checkboxGroupInput 的 DOM 结构: input + span > div
+                       tags$span(
+                         div(class="model-row",
+                              span(class="col-mod", "H+G=M"),
+                              span(class="col-par", "K1 H1"),
+                              span(class="col-sto", "H\u2081G\u2081"),
+                              span(class="col-dsc", uiOutput("model_base_note"))
+                         )
+                       )
                      )
-                   )
-                 )
+                 ),
+                 br(),
+                 uiOutput("active_paths_checkbox")
+               )
              ),
-             br(),
-             uiOutput("active_paths_checkbox")
+
+             conditionalPanel(
+               "input.path_view_mode !== 'table'",
+               div(class = "path-graph-panel",
+                   uiOutput("path_graph_panel")
+               )
+             )
            ),
            wellPanel(
              div(class = "header-action-row",
@@ -614,7 +773,6 @@ ui <- fluidPage(
 
              uiOutput("fit_bounds_editor"),
              
-             tags$hr(),
              h4(uiOutput("param_correction_title")),
              # [响应式布局优化] 使用 Flexbox 替代 splitLayout，实现自动换行和自适应宽度
              div(style="display: flex; flex-wrap: wrap; gap: 5px;",

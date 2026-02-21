@@ -37,6 +37,37 @@
   sim_cache_result <- reactiveVal(NULL)
   sim_cache_key <- reactiveVal(NULL)
   fit_slider_force_default <- reactiveVal(FALSE)
+  path_selection_programmatic <- reactiveVal(FALSE)
+  path_selection_last <- reactiveVal(character(0))
+
+  normalize_active_paths_safe <- function(paths) {
+    tryCatch(
+      normalize_active_paths_with_dependencies(paths),
+      error = function(e) {
+        raw <- if (is.null(paths)) character(0) else as.character(paths)
+        valid <- c("rxn_D", "rxn_T", "rxn_B", "rxn_F", "rxn_U")
+        valid[valid %in% unique(raw)]
+      }
+    )
+  }
+
+  update_active_paths_normalized <- function(paths) {
+    normalized <- normalize_active_paths_safe(paths)
+    path_selection_last(normalized)
+    current_raw <- safe_input_get("active_paths")
+    current_raw <- if (is.null(current_raw)) character(0) else as.character(current_raw)
+    current_raw <- trimws(current_raw)
+    current_raw <- unique(current_raw[nzchar(current_raw)])
+    if (setequal(current_raw, normalized) && length(current_raw) == length(normalized)) {
+      return(invisible(FALSE))
+    }
+    path_selection_programmatic(TRUE)
+    updateCheckboxGroupInput(session, "active_paths", selected = normalized)
+    session$onFlushed(function() {
+      path_selection_programmatic(FALSE)
+    }, once = TRUE)
+    invisible(TRUE)
+  }
 
   # ============================================================================
   # 会话级拟合参数边界（仅本次会话生效）
@@ -426,7 +457,7 @@
   }, ignoreInit = TRUE)
 
   reset_step2_ui_for_new_dataset <- function(default_n_inj = NULL, apply_first_injection_default = TRUE) {
-    updateCheckboxGroupInput(session, "active_paths", selected = character(0))
+    update_active_paths_normalized(character(0))
     updateCheckboxGroupInput(session, "fit_params", selected = c("logK1", "H1"))
 
     updateSliderInput(session, "logK1", value = DEFAULT_PARAMS$logK)
@@ -480,6 +511,48 @@
     tryCatch(DT::selectRows(DT::dataTableProxy("param_table"), NULL), error = function(e) NULL)
     invisible(TRUE)
   }
+
+  observeEvent(input$path_graph_toggle, {
+    payload <- input$path_graph_toggle
+    path_id <- as.character(payload$path_id %||% "")[1]
+    if (!nzchar(path_id)) return()
+
+    current <- normalize_active_paths_safe(input$active_paths)
+    toggled <- tryCatch(
+      apply_path_graph_toggle_with_dependencies(current, path_id),
+      error = function(e) current
+    )
+    update_active_paths_normalized(toggled)
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$active_paths, {
+    raw <- if (is.null(input$active_paths)) character(0) else as.character(input$active_paths)
+
+    if (isTRUE(path_selection_programmatic())) {
+      path_selection_last(normalize_active_paths_safe(raw))
+      return()
+    }
+
+    prev <- normalize_active_paths_safe(path_selection_last())
+    adjusted <- raw
+
+    # Keep table-mode dependency behavior aligned with graph mode:
+    # selecting F auto-enables D; deselecting D auto-disables F.
+    if ("rxn_F" %in% adjusted && !"rxn_D" %in% adjusted) {
+      if ("rxn_D" %in% prev && "rxn_F" %in% prev) {
+        adjusted <- setdiff(adjusted, "rxn_F")
+      } else {
+        adjusted <- c(adjusted, "rxn_D")
+      }
+    }
+
+    normalized <- normalize_active_paths_safe(adjusted)
+    if (!identical(raw, normalized)) {
+      update_active_paths_normalized(normalized)
+    } else {
+      path_selection_last(normalized)
+    }
+  }, ignoreInit = TRUE)
   
   apply_meta_to_exp_inputs <- function(meta_df) {
     if (is.null(meta_df) || !all(c("parameter", "value") %in% colnames(meta_df))) return(invisible(FALSE))
@@ -1362,7 +1435,7 @@
 
     paths <- snapshot$active_paths
     if (is.character(paths) && length(paths) > 0) {
-      updateCheckboxGroupInput(session, "active_paths", selected = unique(paths))
+      update_active_paths_normalized(paths)
     }
     invisible(TRUE)
   }
@@ -1460,7 +1533,7 @@
       fp_has_any <- any(vapply(fp_restore, function(v) is.finite(suppressWarnings(as.numeric(v))), logical(1)))
       if (fp_has_any) {
         restore_paths <- parse_active_paths_from_fit_params(fp_map)
-        updateCheckboxGroupInput(session, "active_paths", selected = restore_paths)
+        update_active_paths_normalized(restore_paths)
 
         if (is.finite(fp_restore$logK1)) updateSliderInput(session, "logK1", value = fp_restore$logK1)
         if (is.finite(fp_restore$H1)) updateSliderInput(session, "H1", value = fp_restore$H1)
