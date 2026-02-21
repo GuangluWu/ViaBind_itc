@@ -2,3 +2,4 @@
 .Rhistory
 session.log
 error.log
+.rlib/
