@@ -111,8 +111,76 @@ extract_simfit_restore_params <- function(fp_map) {
     V_cell_mL = get_fit_param_num(fp_map, "V_cell_mL"),
     V_inj_uL = get_fit_param_num(fp_map, "V_inj_uL"),
     n_inj = get_fit_param_num(fp_map, "n_inj"),
+    FitRangeStart_Inj = get_fit_param_num(fp_map, "FitRangeStart_Inj"),
+    FitRangeEnd_Inj = get_fit_param_num(fp_map, "FitRangeEnd_Inj"),
     V_pre_uL = get_fit_param_num(fp_map, "V_pre_uL"),
     Temp_K = get_fit_param_num(fp_map, "Temp_K")
+  )
+}
+
+validate_fit_range_restore_request <- function(start, end, available_max, saved_n_inj = NA_real_) {
+  to_int1 <- function(x) {
+    v <- suppressWarnings(as.integer(round(as.numeric(x)[1])))
+    if (length(v) < 1 || !is.finite(v[1])) return(NA_integer_)
+    v[1]
+  }
+
+  st <- to_int1(start)
+  ed <- to_int1(end)
+  mx <- to_int1(available_max)
+  sn <- to_int1(saved_n_inj)
+
+  if (!is.finite(mx) || mx < 1L) {
+    return(list(
+      ok = FALSE,
+      reason = "invalid_max",
+      start = st,
+      end = ed,
+      available_max = mx,
+      saved_n_inj = sn
+    ))
+  }
+
+  if (!is.finite(st) || !is.finite(ed)) {
+    return(list(
+      ok = FALSE,
+      reason = "missing_range",
+      start = st,
+      end = ed,
+      available_max = mx,
+      saved_n_inj = sn
+    ))
+  }
+
+  if (is.finite(sn) && sn >= 1L && sn != mx) {
+    return(list(
+      ok = FALSE,
+      reason = "n_inj_mismatch",
+      start = st,
+      end = ed,
+      available_max = mx,
+      saved_n_inj = sn
+    ))
+  }
+
+  if (st < 1L || ed > mx || st > ed) {
+    return(list(
+      ok = FALSE,
+      reason = "range_out_of_bounds",
+      start = st,
+      end = ed,
+      available_max = mx,
+      saved_n_inj = sn
+    ))
+  }
+
+  list(
+    ok = TRUE,
+    reason = "ok",
+    start = st,
+    end = ed,
+    available_max = mx,
+    saved_n_inj = sn
   )
 }
 

@@ -53,12 +53,20 @@
 
   update_active_paths_normalized <- function(paths) {
     normalized <- normalize_active_paths_safe(paths)
-    path_selection_last(normalized)
     current_raw <- safe_input_get("active_paths")
     current_raw <- if (is.null(current_raw)) character(0) else as.character(current_raw)
-    current_raw <- trimws(current_raw)
-    current_raw <- unique(current_raw[nzchar(current_raw)])
-    if (setequal(current_raw, normalized) && length(current_raw) == length(normalized)) {
+    last_requested <- path_selection_last()
+    skip_update <- tryCatch(
+      isTRUE(should_skip_active_paths_update(
+        current_raw = current_raw,
+        last_requested = last_requested,
+        target = normalized
+      )),
+      error = function(e) FALSE
+    )
+
+    path_selection_last(normalized)
+    if (isTRUE(skip_update)) {
       return(invisible(FALSE))
     }
     path_selection_programmatic(TRUE)
@@ -1404,6 +1412,92 @@
     }, error = function(e) NULL)
   }
 
+  resolve_fit_data_range_max <- function(preferred_max = NA_real_) {
+    max_pref <- suppressWarnings(as.integer(round(as.numeric(preferred_max)[1])))
+    exp_df_now <- tryCatch(exp_data_processed(), error = function(e) NULL)
+    if (!is.null(exp_df_now) && is.data.frame(exp_df_now) && nrow(exp_df_now) > 0) {
+      return(as.integer(nrow(exp_df_now)))
+    }
+    if (is.finite(max_pref) && max_pref >= 1L) return(as.integer(max_pref))
+    n_inj_now <- suppressWarnings(as.integer(round(as.numeric(input$n_inj)[1])))
+    if (is.finite(n_inj_now) && n_inj_now >= 1L) return(as.integer(n_inj_now))
+    as.integer(UI_DEFAULTS$n_inj_default)
+  }
+
+  normalize_fit_data_range_value <- function(range_raw, max_inj) {
+    max_safe <- suppressWarnings(as.integer(round(as.numeric(max_inj)[1])))
+    if (!is.finite(max_safe) || max_safe < 1L) max_safe <- 1L
+    left_default <- if (max_safe >= 2L) 2L else 1L
+
+    range_num <- suppressWarnings(as.numeric(range_raw))
+    if (length(range_num) < 2 || !all(is.finite(range_num[1:2]))) {
+      return(c(left_default, max_safe))
+    }
+
+    left <- suppressWarnings(as.integer(round(range_num[1])))
+    right <- suppressWarnings(as.integer(round(range_num[2])))
+    left <- max(1L, min(max_safe, left))
+    right <- max(1L, min(max_safe, right))
+    if (left > right) return(c(left_default, max_safe))
+    c(left, right)
+  }
+
+  apply_saved_fit_data_range <- function(saved_start,
+                                         saved_end,
+                                         saved_n_inj = NA_real_,
+                                         error_key = NULL,
+                                         preferred_max = NA_real_) {
+    max_inj <- resolve_fit_data_range_max(preferred_max = preferred_max)
+    cur_range <- normalize_fit_data_range_value(isolate(input$fit_data_range), max_inj)
+
+    # Always align slider bounds first, then attempt to restore saved values.
+    updateSliderInput(session, "fit_data_range", min = 1, max = max_inj, value = cur_range, step = 1)
+    fit_slider_force_default(FALSE)
+
+    validation <- if (exists("validate_fit_range_restore_request", mode = "function", inherits = TRUE)) {
+      validate_fit_range_restore_request(
+        start = saved_start,
+        end = saved_end,
+        available_max = max_inj,
+        saved_n_inj = saved_n_inj
+      )
+    } else {
+      list(ok = FALSE, start = saved_start, end = saved_end, available_max = max_inj, saved_n_inj = saved_n_inj)
+    }
+
+    if (!isTRUE(validation$ok)) {
+      key <- as.character(error_key %||% "")[1]
+      key <- trimws(key)
+      if (nzchar(key)) {
+        fmt_num <- function(x) {
+          v <- suppressWarnings(as.integer(round(as.numeric(x)[1])))
+          if (length(v) < 1 || !is.finite(v[1])) return("NA")
+          as.character(v[1])
+        }
+        showNotification(
+          trf(
+            key, lang(),
+            fmt_num(validation$start),
+            fmt_num(validation$end),
+            fmt_num(validation$saved_n_inj),
+            fmt_num(validation$available_max)
+          ),
+          type = "error",
+          duration = 5
+        )
+      }
+      return(invisible(FALSE))
+    }
+
+    updateSliderInput(
+      session, "fit_data_range",
+      min = 1, max = as.integer(validation$available_max),
+      value = c(as.integer(validation$start), as.integer(validation$end)),
+      step = 1
+    )
+    invisible(TRUE)
+  }
+
   apply_step2_param_snapshot <- function(snapshot) {
     if (is.null(snapshot) || !is.list(snapshot)) return(invisible(FALSE))
     to_num1 <- function(x) {
@@ -1583,6 +1677,19 @@
         apply_import_first_injection_targets(
           v_pre_target = first_target$v_pre_target,
           v_init_target = first_target$v_init_target
+        )
+      }
+
+      has_saved_fit_range <- isTRUE(fp_has_any) &&
+        is.finite(suppressWarnings(as.numeric(fp_restore$FitRangeStart_Inj))) &&
+        is.finite(suppressWarnings(as.numeric(fp_restore$FitRangeEnd_Inj)))
+      if (has_saved_fit_range) {
+        apply_saved_fit_data_range(
+          saved_start = fp_restore$FitRangeStart_Inj,
+          saved_end = fp_restore$FitRangeEnd_Inj,
+          saved_n_inj = fp_restore$n_inj,
+          error_key = "import_fit_range_restore_invalid",
+          preferred_max = if (is.finite(suppressWarnings(as.numeric(fp_restore$n_inj)))) fp_restore$n_inj else inferred_n_inj
         )
       }
     }

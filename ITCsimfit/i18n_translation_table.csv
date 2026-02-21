@@ -203,6 +203,8 @@ import_params_auto_filled,已从xlsx文件自动填充实验参数,Experimental 
 import_fit_data_as_exp,未找到实验数据，已将拟合数据作为实验数据导入 (simulation sheet),No experimental data found. Imoport fit data as experimental data (simulation sheet),Message,
 import_params_from_fit_params,meta/power_corrected 中无参数，已从 fit_params 读取实验条件,Meta/power_corrected has no params. Read expt. conditions from fit_params,Message,
 import_params_no_source,未读到参数信息，已使用默认参数,No param info found. Using default parameters,Message,
+snapshot_fit_range_restore_invalid,快照中的拟合区间恢复失败：保存值 start=%s end=%s n_inj=%s 与当前 max=%s 不一致。,Snapshot fitting range restore skipped: saved start=%s end=%s n_inj=%s is incompatible with current max=%s.,Error Message,
+import_fit_range_restore_invalid,导入的拟合区间恢复失败：保存值 start=%s end=%s n_inj=%s 与当前 max=%s 不一致。,Imported fitting range restore skipped: saved start=%s end=%s n_inj=%s is incompatible with current max=%s.,Error Message,
 export_error_no_data,无法导出：模拟计算出错，暂无有效模拟数据。请检查参数后重试。,"Cannot export: Simulation calc. error, no valid simulation data. Please check params & try again.",Error Message,
 export_error_no_data_note,导出时模拟数据不可用，请检查参数后重试,"Simulation data unavailable during export, please check params & try again.",Note,
 v_pre_change_warning,检测到实验第一针体积变更。如需拟合第一针体积，请同步检查并更新 V_init。,"Experimental first injection volume changed. If fitting the 1st injection, please update V_init accordingly.",Warning,

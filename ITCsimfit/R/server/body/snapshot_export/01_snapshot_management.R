@@ -28,7 +28,7 @@
     "fH_SE", "fG_SE",
     "V_init_SE", "Offset_SE",
     "H_cell_0", "G_syringe", "V_cell", "V_inj",
-    "n_inj", "V_pre", "Temp"
+    "n_inj", "FitRangeStart", "FitRangeEnd", "V_pre", "Temp"
   )
   snapshot_rowid_col <- "row_id"
 
@@ -195,6 +195,18 @@
     H5_save    <- if("rxn_F" %in% active_paths_save) input$H5 else NA
     logK6_save <- if("rxn_U" %in% active_paths_save) input$logK6 else NA
     H6_save    <- if("rxn_U" %in% active_paths_save) input$H6 else NA
+
+    fit_range_now <- suppressWarnings(as.numeric(input$fit_data_range))
+    fit_range_start_save <- if (length(fit_range_now) >= 1 && is.finite(fit_range_now[1])) {
+      as.integer(round(fit_range_now[1]))
+    } else {
+      NA_integer_
+    }
+    fit_range_end_save <- if (length(fit_range_now) >= 2 && is.finite(fit_range_now[2])) {
+      as.integer(round(fit_range_now[2]))
+    } else {
+      NA_integer_
+    }
     
     new_row <- data.frame(
       Name = final_name, # 第一列现在是组合名称
@@ -226,7 +238,9 @@
       Offset_SE = format_se("Offset", se_values[["Offset"]]),
       # [新增] 实验条件列（放在最后）
       H_cell_0=input$H_cell_0, G_syringe=input$G_syringe, V_cell=input$V_cell, 
-      V_inj=input$V_inj, n_inj=input$n_inj, V_pre=input$V_pre, Temp=input$Temp,
+      V_inj=input$V_inj, n_inj=input$n_inj,
+      FitRangeStart=fit_range_start_save, FitRangeEnd=fit_range_end_save,
+      V_pre=input$V_pre, Temp=input$Temp,
       stringsAsFactors=FALSE
     )
 
@@ -550,6 +564,24 @@
     } else {
       # [修复] 如果温度不存在，使用常量定义的默认值
       updateNumericInput(session, "Temp", value=UI_DEFAULTS$temp_default)
+    }
+
+    # [新增] 恢复拟合区间（先更新到 1~max，再恢复 start/end；非法则告警且保持当前值）
+    fit_range_start_saved <- snap_param_value(target_p$FitRangeStart, NA_real_)
+    fit_range_end_saved <- snap_param_value(target_p$FitRangeEnd, NA_real_)
+    fit_range_n_inj_saved <- snap_param_value(target_p$n_inj, NA_real_)
+    if (
+      is.finite(fit_range_start_saved) &&
+      is.finite(fit_range_end_saved) &&
+      exists("apply_saved_fit_data_range", mode = "function", inherits = TRUE)
+    ) {
+      apply_saved_fit_data_range(
+        saved_start = fit_range_start_saved,
+        saved_end = fit_range_end_saved,
+        saved_n_inj = fit_range_n_inj_saved,
+        error_key = "snapshot_fit_range_restore_invalid",
+        preferred_max = fit_range_n_inj_saved
+      )
     }
     
     # 4. [新增] 自动解析并勾选模型 (Model)

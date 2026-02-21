@@ -23,6 +23,7 @@ testthat::test_that("build_fit_params_df keeps inactive path parameters as NA", 
     V_cell = 0.2,
     V_inj = 1.5,
     n_inj = 20,
+    fit_data_range = c(2, 18),
     V_pre = 0.4,
     Temp = 298.15
   ))
@@ -35,6 +36,9 @@ testthat::test_that("build_fit_params_df keeps inactive path parameters as NA", 
   testthat::expect_equal(df$value[df$parameter == "logK3"], NA_character_)
   testthat::expect_equal(df$value[df$parameter == "logK2"], "4")
   testthat::expect_equal(df$value[df$parameter == "RSS_method"], "unweighted")
+  testthat::expect_equal(df$value[df$parameter == "n_inj"], "20")
+  testthat::expect_equal(df$value[df$parameter == "FitRangeStart_Inj"], "2")
+  testthat::expect_equal(df$value[df$parameter == "FitRangeEnd_Inj"], "18")
 })
 
 testthat::test_that("build_integration_rev exports required columns", {

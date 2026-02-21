@@ -1,6 +1,6 @@
 {
   "name": "viabind-desktop",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "ViaBind powered by Electron + local Shiny backend",
   "main": "src/main/index.js",
   "engines": {
@@ -8,6 +8,7 @@
   },
   "scripts": {
     "preinstall": "node scripts/check-node-version.mjs",
+    "predev": "node scripts/check-local-electron.mjs",
     "dev": "electron .",
     "smoke": "node scripts/smoke-desktop.mjs",
     "smoke:backend": "node scripts/smoke-backend.mjs",
@@ -59,6 +60,13 @@
       {
         "from": "../ITCgraph",
         "to": "itcsuite/ITCgraph",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../Examples",
+        "to": "itcsuite/Examples",
         "filter": [
           "**/*"
         ]

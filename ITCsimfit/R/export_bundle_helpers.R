@@ -102,6 +102,19 @@ export_bridge_build_params_export_sheets <- function(export_df,
 }
 
 export_bridge_build_fit_params_df <- function(safe_inp, active_paths_save, rss_info) {
+  fit_range_raw <- safe_inp("fit_data_range")
+  fit_range_num <- suppressWarnings(as.numeric(fit_range_raw))
+  fit_range_start <- if (length(fit_range_num) >= 1 && is.finite(fit_range_num[1])) {
+    as.integer(round(fit_range_num[1]))
+  } else {
+    NA_integer_
+  }
+  fit_range_end <- if (length(fit_range_num) >= 2 && is.finite(fit_range_num[2])) {
+    as.integer(round(fit_range_num[2]))
+  } else {
+    NA_integer_
+  }
+
   data.frame(
     parameter = c(
       "logK1", "H1_cal_mol",
@@ -113,7 +126,8 @@ export_bridge_build_fit_params_df <- function(safe_inp, active_paths_save, rss_i
       "fH", "fG", "V_init_uL", "Offset_cal",
       "RSS", "RSS_method",
       "H_cell_0_mM", "G_syringe_mM", "V_cell_mL", "V_inj_uL",
-      "n_inj", "V_pre_uL", "Temp_K", "ActivePaths" # Step2 import uses this to restore active_paths.
+      "n_inj", "FitRangeStart_Inj", "FitRangeEnd_Inj",
+      "V_pre_uL", "Temp_K", "ActivePaths" # Step2 import uses this to restore active_paths.
     ),
     value = as.character(c(
       safe_inp("logK1"), safe_inp("H1"),
@@ -133,7 +147,8 @@ export_bridge_build_fit_params_df <- function(safe_inp, active_paths_save, rss_i
       if (is.null(rss_info$method)) "" else as.character(rss_info$method),
       safe_inp("H_cell_0"), safe_inp("G_syringe"),
       safe_inp("V_cell"), safe_inp("V_inj"),
-      safe_inp("n_inj"), safe_inp("V_pre"),
+      safe_inp("n_inj"), fit_range_start, fit_range_end,
+      safe_inp("V_pre"),
       safe_inp("Temp"),
       paste(active_paths_save, collapse = ",")
     )),

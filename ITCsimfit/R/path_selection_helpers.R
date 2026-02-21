@@ -19,6 +19,22 @@ normalize_active_paths_with_dependencies <- function(paths,
   normalized
 }
 
+same_active_paths_selection <- function(a,
+                                        b,
+                                        valid_paths = ITCSIMFIT_VALID_ACTIVE_PATHS) {
+  a_norm <- normalize_active_paths_with_dependencies(a, valid_paths = valid_paths)
+  b_norm <- normalize_active_paths_with_dependencies(b, valid_paths = valid_paths)
+  setequal(a_norm, b_norm) && length(a_norm) == length(b_norm)
+}
+
+should_skip_active_paths_update <- function(current_raw,
+                                            last_requested,
+                                            target,
+                                            valid_paths = ITCSIMFIT_VALID_ACTIVE_PATHS) {
+  same_active_paths_selection(current_raw, target, valid_paths = valid_paths) &&
+    same_active_paths_selection(last_requested, target, valid_paths = valid_paths)
+}
+
 apply_path_graph_toggle_with_dependencies <- function(current_paths,
                                                       path_id,
                                                       valid_paths = ITCSIMFIT_VALID_ACTIVE_PATHS) {

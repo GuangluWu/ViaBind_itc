@@ -30,8 +30,11 @@ testthat::test_that("meta fallback works when meta_rev missing", {
 
 testthat::test_that("fit_params parser restores active paths and thermo params", {
   fit_params <- data.frame(
-    parameter = c("ActivePaths", "logK1", "H1_cal_mol", "fH", "fG", "V_init_uL", "Offset_cal"),
-    value = c("rxn_D, rxn_T,invalid,rxn_D", "7.1", "-6200", "0.9", "1.1", "0.35", "-12"),
+    parameter = c(
+      "ActivePaths", "logK1", "H1_cal_mol", "fH", "fG", "V_init_uL", "Offset_cal",
+      "FitRangeStart_Inj", "FitRangeEnd_Inj"
+    ),
+    value = c("rxn_D, rxn_T,invalid,rxn_D", "7.1", "-6200", "0.9", "1.1", "0.35", "-12", "2", "18"),
     stringsAsFactors = FALSE
   )
   fp_map <- extract_fit_params_map(fit_params)
@@ -45,6 +48,8 @@ testthat::test_that("fit_params parser restores active paths and thermo params",
   testthat::expect_equal(restore$fG, 1.1)
   testthat::expect_equal(restore$V_init_uL, 0.35)
   testthat::expect_equal(restore$Offset_cal, -12)
+  testthat::expect_equal(restore$FitRangeStart_Inj, 2)
+  testthat::expect_equal(restore$FitRangeEnd_Inj, 18)
 })
 
 testthat::test_that("missing ActivePaths falls back to base model", {
@@ -53,8 +58,12 @@ testthat::test_that("missing ActivePaths falls back to base model", {
     value = c("6.5", "-5000"),
     stringsAsFactors = FALSE
   )
-  paths <- parse_active_paths_from_fit_params(extract_fit_params_map(fit_params))
+  fp_map <- extract_fit_params_map(fit_params)
+  restore <- extract_simfit_restore_params(fp_map)
+  paths <- parse_active_paths_from_fit_params(fp_map)
   testthat::expect_equal(paths, character(0))
+  testthat::expect_true(is.na(restore$FitRangeStart_Inj))
+  testthat::expect_true(is.na(restore$FitRangeEnd_Inj))
 })
 
 testthat::test_that("integration_rev is preferred over integration", {
@@ -154,4 +163,49 @@ testthat::test_that("resolve_first_injection_targets import falls back to meta t
   )
   testthat::expect_equal(out_default$v_pre_target, 0.3)
   testthat::expect_equal(out_default$v_init_target, 0.3)
+})
+
+testthat::test_that("validate_fit_range_restore_request accepts legal range", {
+  out <- validate_fit_range_restore_request(
+    start = 2,
+    end = 18,
+    available_max = 20,
+    saved_n_inj = 20
+  )
+  testthat::expect_true(isTRUE(out$ok))
+  testthat::expect_equal(out$reason, "ok")
+  testthat::expect_equal(out$start, 2)
+  testthat::expect_equal(out$end, 18)
+  testthat::expect_equal(out$available_max, 20)
+})
+
+testthat::test_that("validate_fit_range_restore_request rejects out-of-bounds and reversed range", {
+  out_over <- validate_fit_range_restore_request(
+    start = 2,
+    end = 25,
+    available_max = 20,
+    saved_n_inj = 20
+  )
+  testthat::expect_false(isTRUE(out_over$ok))
+  testthat::expect_equal(out_over$reason, "range_out_of_bounds")
+
+  out_rev <- validate_fit_range_restore_request(
+    start = 12,
+    end = 5,
+    available_max = 20,
+    saved_n_inj = 20
+  )
+  testthat::expect_false(isTRUE(out_rev$ok))
+  testthat::expect_equal(out_rev$reason, "range_out_of_bounds")
+})
+
+testthat::test_that("validate_fit_range_restore_request rejects n_inj semantic mismatch", {
+  out <- validate_fit_range_restore_request(
+    start = 2,
+    end = 18,
+    available_max = 20,
+    saved_n_inj = 18
+  )
+  testthat::expect_false(isTRUE(out$ok))
+  testthat::expect_equal(out$reason, "n_inj_mismatch")
 })
