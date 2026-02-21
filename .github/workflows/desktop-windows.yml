@@ -40,7 +40,7 @@ jobs:
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: itcsuite-desktop-windows
+          name: ViaBind_ITCSuite-desktop-windows
           path: |
             desktop/dist/*windows-x64-setup.exe
             desktop/dist/*windows-x64-setup.exe.blockmap

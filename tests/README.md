@@ -11,7 +11,7 @@ Rscript tests/run_all.R --strict
 This command runs all required suites:
 
 - `unit`: unit tests and legacy regression scripts
-- `smoke`: app launch + bridge smoke checks
+- `smoke`: app launch + bridge smoke checks (includes Step2 -> Step3 tab revisit range persistence E2E via `shinytest2`)
 - `golden`: deterministic integration regression against `tests/golden/expected/*.csv`
 
 `run_unit` also executes several legacy scripts in optional mode for visibility.

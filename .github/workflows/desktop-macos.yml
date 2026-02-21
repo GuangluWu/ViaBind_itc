@@ -82,7 +82,7 @@ jobs:
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: itcsuite-desktop-macos
+          name: ViaBind_ITCSuite-desktop-macos
           compression-level: 0
           path: |
             desktop/dist/*.dmg
