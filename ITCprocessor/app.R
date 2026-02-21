@@ -176,6 +176,42 @@ server <- function(input, output, session) {
   # 日志级别：运行时 warning/error；初始化阶段 error。
   # 恢复动作：保持当前 UI 状态并允许重新导入或重试导出。
   `%||%` <- function(x, y) if (is.null(x)) y else x
+  resolve_viabind_version <- function(default_version = "x.x.x") {
+    default_chr <- as.character(default_version %||% "x.x.x")[1]
+    default_chr <- trimws(default_chr)
+    if (!nzchar(default_chr)) default_chr <- "x.x.x"
+
+    candidates <- unique(c(
+      file.path(getwd(), "desktop", "package.json"),
+      file.path(getwd(), "..", "desktop", "package.json")
+    ))
+    version_pattern <- '"version"[[:space:]]*:[[:space:]]*"([^"]+)"'
+
+    for (path in candidates) {
+      if (!file.exists(path)) next
+      lines <- tryCatch(readLines(path, warn = FALSE, encoding = "UTF-8"), error = function(e) character(0))
+      if (length(lines) == 0) next
+      hit_idx <- grep(version_pattern, lines, perl = TRUE)
+      if (length(hit_idx) < 1) next
+      line <- lines[hit_idx[1]]
+      cap <- regmatches(line, regexec(version_pattern, line, perl = TRUE))[[1]]
+      if (length(cap) >= 2) {
+        ver <- trimws(as.character(cap[2]))
+        if (nzchar(ver)) return(ver)
+      }
+    }
+
+    default_chr
+  }
+  build_viabind_signature <- function(module_name, version = NULL) {
+    module_chr <- as.character(module_name %||% "")[1]
+    module_chr <- trimws(module_chr)
+    if (!nzchar(module_chr)) module_chr <- "UnknownModule"
+    version_chr <- as.character(version %||% "")[1]
+    version_chr <- trimws(version_chr)
+    if (!nzchar(version_chr)) version_chr <- resolve_viabind_version()
+    paste0("ViaBind v", version_chr, ": ", module_chr)
+  }
 
   session_bridge <- tryCatch({
     b <- session$userData$itcsuite_bridge
@@ -726,7 +762,7 @@ server <- function(input, output, session) {
     n_inj <- suppressWarnings(as.numeric(p$n_injections))
     if (!is.finite(n_inj)) n_inj <- nrow(pd$integration)
     meta_df <- data.frame(
-      parameter = c("original_itc_file", "Temp_K", "G_syringe_mM", "H_cell_0_mM", "V_pre_uL", "V_inj_uL", "n_inj", "V_cell_mL"),
+      parameter = c("original_itc_file", "Temp_K", "G_syringe_mM", "H_cell_0_mM", "V_pre_uL", "V_inj_uL", "n_inj", "V_cell_mL", "generated_by"),
       value = c(
         current_itc_name(),
         temp_K,
@@ -735,7 +771,8 @@ server <- function(input, output, session) {
         if (!is.na(input$param_V_pre_ul)) input$param_V_pre_ul else p$V_pre_ul,
         if (!is.na(input$param_V_inj_ul)) input$param_V_inj_ul else p$V_inj_ul,
         n_inj,
-        p$cell_volume_mL
+        p$cell_volume_mL,
+        build_viabind_signature("ITCprocessor")
       ),
       stringsAsFactors = FALSE
     )
@@ -1176,9 +1213,9 @@ server <- function(input, output, session) {
 
       original_itc_name <- current_itc_name()
       meta_df <- data.frame(
-        parameter = c("original_itc_file", "Temp_K", "G_syringe_mM", "H_cell_0_mM", "V_pre_uL", "V_inj_uL", "n_inj", "V_cell_mL"),
-        value = c(original_itc_name, temp_K, syringe_mM, cell_mM, V_pre, V_inj, n_inj, cell_vol),
-        unit = c("", "K", "mM", "mM", "\u00B5L", "\u00B5L", "", "mL")
+        parameter = c("original_itc_file", "Temp_K", "G_syringe_mM", "H_cell_0_mM", "V_pre_uL", "V_inj_uL", "n_inj", "V_cell_mL", "generated_by"),
+        value = c(original_itc_name, temp_K, syringe_mM, cell_mM, V_pre, V_inj, n_inj, cell_vol, build_viabind_signature("ITCprocessor")),
+        unit = c("", "K", "mM", "mM", "\u00B5L", "\u00B5L", "", "mL", "")
       )
 
       power_df <- data.frame(

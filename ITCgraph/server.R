@@ -4,6 +4,42 @@
 
 server <- function(input, output, session) {
   `%||%` <- function(x, y) if (is.null(x)) y else x
+  resolve_viabind_version <- function(default_version = "x.x.x") {
+    default_chr <- as.character(default_version %||% "x.x.x")[1]
+    default_chr <- trimws(default_chr)
+    if (!nzchar(default_chr)) default_chr <- "x.x.x"
+
+    candidates <- unique(c(
+      file.path(getwd(), "desktop", "package.json"),
+      file.path(getwd(), "..", "desktop", "package.json")
+    ))
+    version_pattern <- '"version"[[:space:]]*:[[:space:]]*"([^"]+)"'
+
+    for (path in candidates) {
+      if (!file.exists(path)) next
+      lines <- tryCatch(readLines(path, warn = FALSE, encoding = "UTF-8"), error = function(e) character(0))
+      if (length(lines) == 0) next
+      hit_idx <- grep(version_pattern, lines, perl = TRUE)
+      if (length(hit_idx) < 1) next
+      line <- lines[hit_idx[1]]
+      cap <- regmatches(line, regexec(version_pattern, line, perl = TRUE))[[1]]
+      if (length(cap) >= 2) {
+        ver <- trimws(as.character(cap[2]))
+        if (nzchar(ver)) return(ver)
+      }
+    }
+
+    default_chr
+  }
+  build_viabind_signature <- function(module_name, version = NULL) {
+    module_chr <- as.character(module_name %||% "")[1]
+    module_chr <- trimws(module_chr)
+    if (!nzchar(module_chr)) module_chr <- "UnknownModule"
+    version_chr <- as.character(version %||% "")[1]
+    version_chr <- trimws(version_chr)
+    if (!nzchar(version_chr)) version_chr <- resolve_viabind_version()
+    paste0("ViaBind v", version_chr, ": ", module_chr)
+  }
   
   # ============================================================
   # 1. Language mode (prefer host shared i18n channel)
@@ -1496,6 +1532,7 @@ server <- function(input, output, session) {
     )
     list(
       version = 2L,
+      generated_by  = build_viabind_signature("ITCgraph"),
       top_xlab       = as.character(input$top_xlab %||% graph_tr("time_min_label", lang())),
       top_ylab       = as.character(input$top_ylab %||% unit_label("top_ylab", input$energy_unit %||% "cal")),
       top_time_unit  = as.character(input$top_time_unit %||% PLOT_DEFAULTS$top_time_unit),
