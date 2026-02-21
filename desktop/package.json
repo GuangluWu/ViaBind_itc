@@ -11,9 +11,11 @@
     "dev": "electron .",
     "smoke": "node scripts/smoke-desktop.mjs",
     "smoke:backend": "node scripts/smoke-backend.mjs",
+    "ensure:r-runtime": "node scripts/ensure-r-runtime.mjs",
+    "ensure:r-runtime:check": "node scripts/ensure-r-runtime.mjs --check-only",
     "pack:dir": "electron-builder --mac dir",
-    "dist:mac": "electron-builder --mac dmg zip",
-    "dist:win": "electron-builder --win nsis --x64",
+    "dist:mac": "npm run ensure:r-runtime && electron-builder --mac dmg zip",
+    "dist:win": "npm run ensure:r-runtime && electron-builder --win nsis --x64",
     "dist": "npm run dist:mac"
   },
   "devDependencies": {

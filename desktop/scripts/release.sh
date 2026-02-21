@@ -226,6 +226,15 @@ if [[ "$SKIP_DIST" -eq 0 ]]; then
     echo "[release] Run 'npm install --include=dev' in $DESKTOP_DIR, or rerun without --skip-npm-install." >&2
     exit 1
   fi
+  echo "[release] ensure bundled runtime for packaging"
+  ENSURE_RUNTIME_CMD=(
+    node "$DESKTOP_DIR/scripts/ensure-r-runtime.mjs"
+    --runtime-root "$DESKTOP_DIR/resources/r-runtime"
+    --profile "$RUNTIME_PROFILE"
+    --manifest "$DESKTOP_DIR/resources/r-runtime-manifest.txt"
+    --strict-runtime-manifest "$STRICT_RUNTIME_MANIFEST"
+  )
+  "${ENSURE_RUNTIME_CMD[@]}"
   echo "[release] build dist artifacts"
   npm run dist
 else
