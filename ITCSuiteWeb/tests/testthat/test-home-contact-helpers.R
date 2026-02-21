@@ -87,3 +87,24 @@ testthat::test_that("home_contact_build_viabind_signature builds expected string
     "ViaBind v9.8.7"
   )
 })
+
+testthat::test_that("home_contact_read_viabind_version prefers ITCSUITE_APP_VERSION", {
+  old_env <- Sys.getenv("ITCSUITE_APP_VERSION", unset = NA_character_)
+  on.exit({
+    if (is.na(old_env)) {
+      Sys.unsetenv("ITCSUITE_APP_VERSION")
+    } else {
+      Sys.setenv(ITCSUITE_APP_VERSION = old_env)
+    }
+  }, add = TRUE)
+
+  Sys.setenv(ITCSUITE_APP_VERSION = "7.7.7")
+  testthat::expect_equal(
+    home_contact_read_viabind_version(repo_root = file.path(tempdir(), "missing"), default_version = "x.x.x"),
+    "7.7.7"
+  )
+  testthat::expect_equal(
+    home_contact_build_viabind_signature(repo_root = file.path(tempdir(), "missing"), default_version = "x.x.x"),
+    "ViaBind v7.7.7"
+  )
+})

@@ -179,3 +179,24 @@ testthat::test_that("build_params_snapshot_filename uses required format", {
   )
   testthat::expect_equal(file_name, "abc_FitParams_20260214_101112.xlsx")
 })
+
+testthat::test_that("read_viabind_version prefers ITCSUITE_APP_VERSION", {
+  old_env <- Sys.getenv("ITCSUITE_APP_VERSION", unset = NA_character_)
+  on.exit({
+    if (is.na(old_env)) {
+      Sys.unsetenv("ITCSUITE_APP_VERSION")
+    } else {
+      Sys.setenv(ITCSUITE_APP_VERSION = old_env)
+    }
+  }, add = TRUE)
+
+  Sys.setenv(ITCSUITE_APP_VERSION = "8.8.8")
+  testthat::expect_equal(
+    export_bridge_read_viabind_version(default_version = "x.x.x", cwd = file.path(tempdir(), "missing")),
+    "8.8.8"
+  )
+  testthat::expect_equal(
+    export_bridge_build_version_signature(module_name = "ITCsimfit", default_version = "x.x.x"),
+    "ViaBind v8.8.8: ITCsimfit"
+  )
+})

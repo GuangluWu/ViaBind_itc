@@ -181,6 +181,9 @@ server <- function(input, output, session) {
     default_chr <- trimws(default_chr)
     if (!nzchar(default_chr)) default_chr <- "x.x.x"
 
+    from_env <- trimws(as.character(Sys.getenv("ITCSUITE_APP_VERSION", unset = ""))[1])
+    if (nzchar(from_env)) return(from_env)
+
     candidates <- unique(c(
       file.path(getwd(), "desktop", "package.json"),
       file.path(getwd(), "..", "desktop", "package.json")

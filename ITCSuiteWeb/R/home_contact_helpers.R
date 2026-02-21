@@ -45,6 +45,10 @@ home_contact_mailto_href <- function(email = "") {
 
 home_contact_read_viabind_version <- function(repo_root = getwd(), default_version = "x.x.x") {
   default_chr <- home_contact_scalar_chr(default_version, default = "x.x.x")
+
+  from_env <- home_contact_scalar_chr(Sys.getenv("ITCSUITE_APP_VERSION", unset = ""), default = "")
+  if (nzchar(from_env)) return(from_env)
+
   root_chr <- home_contact_scalar_chr(repo_root, default = getwd())
   if (!nzchar(root_chr)) root_chr <- getwd()
 

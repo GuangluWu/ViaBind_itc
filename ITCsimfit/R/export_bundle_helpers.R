@@ -33,6 +33,9 @@ export_bridge_read_viabind_version <- function(default_version = "x.x.x", cwd = 
   default_chr <- if (length(default_chr) == 0) "x.x.x" else trimws(default_chr[1])
   if (!nzchar(default_chr)) default_chr <- "x.x.x"
 
+  from_env <- trimws(as.character(Sys.getenv("ITCSUITE_APP_VERSION", unset = ""))[1])
+  if (nzchar(from_env)) return(from_env)
+
   cwd_chr <- as.character(cwd)
   cwd_chr <- if (length(cwd_chr) == 0) getwd() else trimws(cwd_chr[1])
   if (!nzchar(cwd_chr)) cwd_chr <- getwd()
