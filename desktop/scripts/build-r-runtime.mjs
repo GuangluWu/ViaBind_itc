@@ -491,20 +491,24 @@ async function main() {
   if (!rHomeDir || !fs.existsSync(rHomeDir)) {
     throw new Error(`invalid RHOME: ${rHomeDir || "<empty>"}`);
   }
+  const rHomeRealDir = fs.realpathSync(rHomeDir);
 
   console.log(`[build-r-runtime] R_HOME=${rHomeDir}`);
+  if (rHomeRealDir !== rHomeDir) {
+    console.log(`[build-r-runtime] R_HOME(realpath)=${rHomeRealDir}`);
+  }
 
   await fs.promises.rm(cfg.outDir, { recursive: true, force: true });
   await fs.promises.mkdir(path.dirname(cfg.outDir), { recursive: true });
-  await fs.promises.cp(rHomeDir, cfg.outDir, { recursive: true, force: true });
+  await fs.promises.cp(rHomeRealDir, cfg.outDir, { recursive: true, force: true });
 
   const bundledRscript = resolveBundledRscript(cfg.outDir);
   if (!bundledRscript) {
     throw new Error(`Rscript missing after copy under ${cfg.outDir}`);
   }
-  const hostRscript = resolveHostRscript(rHomeDir);
+  const hostRscript = resolveHostRscript(rHomeRealDir);
   if (!hostRscript) {
-    throw new Error(`Host Rscript not found under ${rHomeDir}`);
+    throw new Error(`Host Rscript not found under ${rHomeRealDir}`);
   }
 
   const libDir = path.join(cfg.outDir, "library");
@@ -523,7 +527,7 @@ async function main() {
     throw new Error("no packages provided by manifest/fallback list");
   }
 
-  const hostREnv = buildHostREnv(rHomeDir, libDir);
+  const hostREnv = buildHostREnv(rHomeRealDir, libDir);
 
   await runCommand(hostRscript, ["--vanilla", "-e", INSTALL_SCRIPT], {
     env: {

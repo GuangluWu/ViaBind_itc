@@ -15,6 +15,7 @@ const APP_TITLE = `${APP_NAME}: ${APP_SLOGAN}`;
 const APP_DEVELOPER_NAME = "Guanglu Wu (吴光鹭)";
 const APP_DEVELOPER_EMAIL = "guanglu.wu@gmail.com";
 const APP_DEVELOPER_SITE = "guanglu.xyz";
+const appVersionSignature = () => `ViaBind v${app.getVersion()}`;
 const OPEN_FILE_CHANNEL = "itcsuite:open-file";
 const OPEN_FILE_PURPOSES = new Set(["step1_import", "step2_import", "step3_import"]);
 app.setName(APP_NAME);
@@ -32,6 +33,7 @@ let recoveryInProgress = false;
 let lastRecoveryAt = 0;
 let unresponsiveRecoveryTimer = null;
 let rendererMarkedUnresponsive = false;
+let openFileLastDir = "";
 
 const RECOVERY_COOLDOWN_MS = 10000;
 const UNRESPONSIVE_RECOVERY_DELAY_MS = 3000;
@@ -134,6 +136,7 @@ class BackendController extends EventEmitter {
     const env = { ...process.env };
     env.ITCSUITE_DESKTOP = "1";
     env.ITCSUITE_USER_DATA_DIR = app.getPath("userData");
+    env.ITCSUITE_APP_VERSION = app.getVersion();
 
     const bundledLib = path.join(runtimeRoot, "library");
     if (fs.existsSync(bundledLib) && (app.isPackaged || useBundledRuntimeInDev())) {
@@ -660,6 +663,40 @@ function trimScalar(value, defaultValue = "") {
   return trimmed || defaultValue;
 }
 
+function isExistingDirectory(dirPath) {
+  const candidate = trimScalar(dirPath, "");
+  if (!candidate || !fs.existsSync(candidate)) return false;
+  try {
+    return fs.statSync(candidate).isDirectory();
+  } catch (_) {
+    return false;
+  }
+}
+
+function resolveExamplesDir() {
+  const candidate = app.isPackaged
+    ? path.join(process.resourcesPath, "itcsuite", "Examples")
+    : path.resolve(__dirname, "../../../Examples");
+  if (!isExistingDirectory(candidate)) return "";
+  return path.resolve(candidate);
+}
+
+function resolveOpenFileDefaultPath() {
+  const rememberedDir = trimScalar(openFileLastDir, "");
+  if (isExistingDirectory(rememberedDir)) {
+    return path.resolve(rememberedDir);
+  }
+  return resolveExamplesDir();
+}
+
+function rememberOpenFileDir(selectedFilePath) {
+  const selected = trimScalar(selectedFilePath, "");
+  if (!selected) return;
+  const dirPath = path.dirname(path.resolve(selected));
+  if (!isExistingDirectory(dirPath)) return;
+  openFileLastDir = dirPath;
+}
+
 function sanitizeOpenFileExtensions(extensions) {
   if (!Array.isArray(extensions)) return [];
   const cleaned = [];
@@ -734,11 +771,17 @@ function registerIpcHandlers() {
     }
 
     try {
-      const dialogResult = await dialog.showOpenDialog(mainWindow, {
+      const dialogOptions = {
         title: payload.title,
         properties: ["openFile"],
         filters: payload.filters
-      });
+      };
+      const defaultPath = resolveOpenFileDefaultPath();
+      if (defaultPath) {
+        dialogOptions.defaultPath = defaultPath;
+      }
+
+      const dialogResult = await dialog.showOpenDialog(mainWindow, dialogOptions);
 
       if (dialogResult.canceled) {
         return makeOpenFileResult(payload, { canceled: true });
@@ -749,11 +792,13 @@ function registerIpcHandlers() {
       if (!resolvedPath) {
         return makeOpenFileResult(payload, { error: "No file selected." });
       }
+      const absolutePath = path.resolve(resolvedPath);
+      rememberOpenFileDir(absolutePath);
 
       return makeOpenFileResult(payload, {
         canceled: false,
-        file_path: path.resolve(resolvedPath),
-        file_name: path.basename(resolvedPath)
+        file_path: absolutePath,
+        file_name: path.basename(absolutePath)
       });
     } catch (error) {
       const message = error && error.message ? error.message : "Failed to open file dialog.";
@@ -830,6 +875,7 @@ function createMainWindow() {
     minHeight: 760,
     title: APP_TITLE,
     show: true,
+    autoHideMenuBar: process.platform === "win32",
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -841,6 +887,10 @@ function createMainWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+  if (process.platform === "win32") {
+    // Keep menu available via Alt while reclaiming one row of vertical space.
+    mainWindow.setMenuBarVisibility(false);
+  }
 
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
     appendMainLog("render_process_gone", {
@@ -984,7 +1034,7 @@ function buildAppMenu() {
               type: "info",
               title: `About ${APP_NAME}`,
               message: `${APP_NAME} Desktop`,
-              detail: `${APP_SLOGAN}\n\nDeveloper: ${APP_DEVELOPER_NAME}\nEmail: ${APP_DEVELOPER_EMAIL}\nWebsite: ${APP_DEVELOPER_SITE}\n\nElectron shell with local Shiny backend.`
+              detail: `${APP_SLOGAN}\n\nDeveloper: ${APP_DEVELOPER_NAME}\nEmail: ${APP_DEVELOPER_EMAIL}\nWebsite: ${APP_DEVELOPER_SITE}\nVersion: ${appVersionSignature()}\n\nElectron shell with local Shiny backend.`
             });
           }
         },
@@ -1022,6 +1072,7 @@ function buildAppMenu() {
       submenu: [
         { role: "reload" },
         { role: "toggledevtools" },
+        { role: "togglefullscreen" },
         { role: "resetzoom" },
         { role: "zoomin" },
         { role: "zoomout" }

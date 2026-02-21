@@ -21,6 +21,7 @@ source("global.R")
 # 加载核心函数模块
 source("R/plotting.R")
 source("R/bridge_plot_helpers.R")
+source("R/export_metadata.R")
 source("R/i18n.R")
 source("R/guide_annotations.R")
 
@@ -29,6 +30,9 @@ if (!exists("load_guide_annotations", mode = "function")) {
 }
 if (!exists("graph_tr", mode = "function")) {
   stop("Failed to load i18n module from R/i18n.R", call. = FALSE)
+}
+if (!exists("graph_meta_resolve_pdf_metadata", mode = "function")) {
+  stop("Failed to load export metadata module from R/export_metadata.R", call. = FALSE)
 }
 
 # [COMMENT_STD][ERROR_SEMANTICS]

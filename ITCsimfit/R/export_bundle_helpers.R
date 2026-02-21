@@ -28,6 +28,79 @@ export_bridge_build_params_snapshot_filename <- function(base_name = NULL, fallb
   paste0(clean_base, "_FitParams_", format(now, "%Y%m%d_%H%M%S"), ".xlsx")
 }
 
+export_bridge_read_viabind_version <- function(default_version = "x.x.x", cwd = getwd()) {
+  default_chr <- as.character(default_version)
+  default_chr <- if (length(default_chr) == 0) "x.x.x" else trimws(default_chr[1])
+  if (!nzchar(default_chr)) default_chr <- "x.x.x"
+
+  from_env <- trimws(as.character(Sys.getenv("ITCSUITE_APP_VERSION", unset = ""))[1])
+  if (nzchar(from_env)) return(from_env)
+
+  cwd_chr <- as.character(cwd)
+  cwd_chr <- if (length(cwd_chr) == 0) getwd() else trimws(cwd_chr[1])
+  if (!nzchar(cwd_chr)) cwd_chr <- getwd()
+
+  candidates <- unique(c(
+    file.path(cwd_chr, "desktop", "package.json"),
+    file.path(cwd_chr, "..", "desktop", "package.json")
+  ))
+
+  version_pattern <- '"version"[[:space:]]*:[[:space:]]*"([^"]+)"'
+  for (path in candidates) {
+    if (!file.exists(path)) next
+    lines <- tryCatch(readLines(path, warn = FALSE, encoding = "UTF-8"), error = function(e) character(0))
+    if (length(lines) == 0) next
+    hit_idx <- grep(version_pattern, lines, perl = TRUE)
+    if (length(hit_idx) < 1) next
+    line <- lines[hit_idx[1]]
+    cap <- regmatches(line, regexec(version_pattern, line, perl = TRUE))[[1]]
+    if (length(cap) >= 2) {
+      ver <- trimws(as.character(cap[2]))
+      if (nzchar(ver)) return(ver)
+    }
+  }
+
+  default_chr
+}
+
+export_bridge_build_version_signature <- function(module_name, version = NULL, default_version = "x.x.x") {
+  module_chr <- as.character(module_name)
+  module_chr <- if (length(module_chr) == 0) "" else trimws(module_chr[1])
+  if (!nzchar(module_chr)) module_chr <- "UnknownModule"
+  resolved_version <- as.character(version)
+  resolved_version <- if (length(resolved_version) == 0) "" else trimws(resolved_version[1])
+  if (!nzchar(resolved_version)) {
+    resolved_version <- export_bridge_read_viabind_version(default_version = default_version)
+  }
+  paste0("ViaBind v", resolved_version, ": ", module_chr)
+}
+
+export_bridge_build_meta_signature_df <- function(module_name, version = NULL, default_version = "x.x.x") {
+  data.frame(
+    parameter = "generated_by",
+    value = export_bridge_build_version_signature(
+      module_name = module_name,
+      version = version,
+      default_version = default_version
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+export_bridge_build_params_export_sheets <- function(export_df,
+                                                     module_name = "ITCsimfit",
+                                                     version = NULL,
+                                                     default_version = "x.x.x") {
+  list(
+    snapshots = as.data.frame(export_df, stringsAsFactors = FALSE),
+    meta = export_bridge_build_meta_signature_df(
+      module_name = module_name,
+      version = version,
+      default_version = default_version
+    )
+  )
+}
+
 export_bridge_build_fit_params_df <- function(safe_inp, active_paths_save, rss_info) {
   data.frame(
     parameter = c(
@@ -105,21 +178,63 @@ export_bridge_build_integration_rev <- function(exp_df) {
 
 export_bridge_build_meta_rev <- function(meta_cached, meta_updates) {
   if (!is.null(meta_cached) && is.data.frame(meta_cached) && all(c("parameter", "value") %in% colnames(meta_cached))) {
-    meta_rev <- meta_cached
+    meta_rev <- as.data.frame(meta_cached, stringsAsFactors = FALSE)
   } else {
     meta_rev <- data.frame(parameter = character(0), value = character(0), stringsAsFactors = FALSE)
   }
 
-  for (nm in names(meta_updates)) {
-    raw_val <- meta_updates[[nm]]
-    val_chr <- if (is.null(raw_val) || is.na(raw_val)) NA_character_ else as.character(raw_val)
-    if (nm %in% meta_rev$parameter) {
-      meta_rev$value[meta_rev$parameter == nm] <- val_chr
+  normalize_meta_update <- function(entry) {
+    to_chr_or_na <- function(x) {
+      if (is.null(x) || length(x) == 0) return(NA_character_)
+      val <- tryCatch(as.character(x[[1]]), error = function(e) {
+        tryCatch(as.character(x[1]), error = function(e2) NA_character_)
+      })
+      if (length(val) == 0) return(NA_character_)
+      val <- val[1]
+      if (is.na(val)) return(NA_character_)
+      val
+    }
+
+    if (is.list(entry) && !is.data.frame(entry)) {
+      raw_value <- if ("value" %in% names(entry)) entry[["value"]] else entry[[1]]
+      raw_unit <- if ("unit" %in% names(entry)) entry[["unit"]] else NA_character_
     } else {
-      meta_rev <- rbind(meta_rev, data.frame(parameter = nm, value = val_chr, stringsAsFactors = FALSE))
+      raw_value <- entry
+      raw_unit <- NA_character_
+    }
+
+    value_chr <- to_chr_or_na(raw_value)
+    unit_chr <- to_chr_or_na(raw_unit)
+
+    list(value = value_chr, unit = unit_chr)
+  }
+
+  append_meta_row <- function(df, parameter, value, unit = NA_character_) {
+    col_names <- names(df)
+    row_vals <- as.list(rep(NA_character_, length(col_names)))
+    names(row_vals) <- col_names
+    if ("parameter" %in% col_names) row_vals$parameter <- parameter
+    if ("value" %in% col_names) row_vals$value <- value
+    if ("unit" %in% col_names) row_vals$unit <- if (is.na(unit)) "" else as.character(unit)[1]
+    out <- rbind(df, as.data.frame(row_vals, stringsAsFactors = FALSE, check.names = FALSE))
+    rownames(out) <- NULL
+    out
+  }
+
+  for (nm in names(meta_updates)) {
+    update_item <- normalize_meta_update(meta_updates[[nm]])
+    if (nm %in% meta_rev$parameter) {
+      idx <- which(meta_rev$parameter == nm)
+      meta_rev$value[idx] <- update_item$value
+      if ("unit" %in% names(meta_rev) && !is.na(update_item$unit)) {
+        meta_rev$unit[idx] <- update_item$unit
+      }
+    } else {
+      meta_rev <- append_meta_row(meta_rev, parameter = nm, value = update_item$value, unit = update_item$unit)
     }
   }
 
+  rownames(meta_rev) <- NULL
   meta_rev
 }
 

@@ -5,7 +5,7 @@
 - Avoid mass-formatting legacy files in Phase 2.
 
 ## Active Lint Rules
-Configured in `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/.lintr`.
+Configured in `ITCsimfit/.lintr`.
 
 - `line_length_linter(120)`
 - `assignment_linter` (`<-` and `=` in named arguments)

@@ -85,6 +85,39 @@ testthat::test_that("build_meta_rev updates existing keys and appends new keys",
   testthat::expect_equal(out$value[out$parameter == "G_syringe_mM"], "600")
 })
 
+testthat::test_that("build_meta_rev keeps unit column stable when appending generated_by", {
+  meta_cached <- data.frame(
+    parameter = c("Temp_K", "H_cell_0_mM"),
+    value = c("300", "20"),
+    unit = c("K", "mM"),
+    stringsAsFactors = FALSE
+  )
+  out <- export_bridge_build_meta_rev(
+    meta_cached,
+    list(
+      generated_by = list(value = "ViaBind v9.9.9: ITCsimfit", unit = "")
+    )
+  )
+  testthat::expect_equal(names(out), c("parameter", "value", "unit"))
+  testthat::expect_equal(out$unit[out$parameter == "Temp_K"], "K")
+  testthat::expect_equal(out$unit[out$parameter == "generated_by"], "")
+  testthat::expect_equal(out$value[out$parameter == "generated_by"], "ViaBind v9.9.9: ITCsimfit")
+})
+
+testthat::test_that("build_params_export_sheets keeps snapshots before meta", {
+  snapshots <- data.frame(logK1 = 6, H1_cal_mol = -5000, stringsAsFactors = FALSE)
+  sheets <- export_bridge_build_params_export_sheets(
+    export_df = snapshots,
+    module_name = "ITCsimfit",
+    version = "1.2.3"
+  )
+  testthat::expect_equal(names(sheets), c("snapshots", "meta"))
+  testthat::expect_equal(sheets$snapshots, snapshots)
+  testthat::expect_true(all(c("parameter", "value") %in% names(sheets$meta)))
+  testthat::expect_equal(sheets$meta$parameter[1], "generated_by")
+  testthat::expect_equal(sheets$meta$value[1], "ViaBind v1.2.3: ITCsimfit")
+})
+
 testthat::test_that("order_sheets keeps expected order and report at end", {
   sheets <- list(
     fit_params = data.frame(a = 1),
@@ -145,4 +178,25 @@ testthat::test_that("build_params_snapshot_filename uses required format", {
     now = now
   )
   testthat::expect_equal(file_name, "abc_FitParams_20260214_101112.xlsx")
+})
+
+testthat::test_that("read_viabind_version prefers ITCSUITE_APP_VERSION", {
+  old_env <- Sys.getenv("ITCSUITE_APP_VERSION", unset = NA_character_)
+  on.exit({
+    if (is.na(old_env)) {
+      Sys.unsetenv("ITCSUITE_APP_VERSION")
+    } else {
+      Sys.setenv(ITCSUITE_APP_VERSION = old_env)
+    }
+  }, add = TRUE)
+
+  Sys.setenv(ITCSUITE_APP_VERSION = "8.8.8")
+  testthat::expect_equal(
+    export_bridge_read_viabind_version(default_version = "x.x.x", cwd = file.path(tempdir(), "missing")),
+    "8.8.8"
+  )
+  testthat::expect_equal(
+    export_bridge_build_version_signature(module_name = "ITCsimfit", default_version = "x.x.x"),
+    "ViaBind v8.8.8: ITCsimfit"
+  )
 })

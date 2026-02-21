@@ -10,6 +10,14 @@ strict_mode <- parse_strict_flag(args)
 setwd(normalizePath(file.path(script_dir, ".."), winslash = "/", mustWork = TRUE))
 repo_root <- detect_repo_root()
 setwd(repo_root)
+
+# Prefer repo-local library when available (e.g., .r-lib/testthat).
+project_lib <- normalizePath(file.path(repo_root, ".r-lib"), winslash = "/", mustWork = FALSE)
+if (dir.exists(project_lib)) {
+  .libPaths(unique(c(project_lib, .libPaths())))
+  Sys.setenv(R_LIBS_USER = project_lib)
+}
+
 Sys.setenv(ITCSUITE_REPO_ROOT = repo_root)
 on.exit(Sys.unsetenv("ITCSUITE_REPO_ROOT"), add = TRUE)
 
@@ -81,6 +89,12 @@ results[["ITCgraph comment standard minimal"]] <- run_testthat_file(
   label = "ITCgraph/test-commenting-standard-minimal.R"
 )
 required_keys <- c(required_keys, "ITCgraph comment standard minimal")
+
+results[["ITCgraph export pdf metadata"]] <- run_testthat_file(
+  file.path(repo_root, "ITCgraph", "tests", "testthat", "test-export-pdf-metadata.R"),
+  label = "ITCgraph/test-export-pdf-metadata.R"
+)
+required_keys <- c(required_keys, "ITCgraph export pdf metadata")
 
 results[["ITCprocessor guide annotation schema"]] <- run_testthat_file(
   file.path(repo_root, "ITCprocessor", "tests", "testthat", "test-guide-annotations-schema.R"),

@@ -17,6 +17,7 @@ source("R/guide_annotations.R")
 source("R/home_recent_helpers.R")
 source("R/home_recent_store.R")
 source("R/home_desktop_helpers.R")
+source("R/home_contact_helpers.R")
 
 if (!exists("load_guide_annotations", mode = "function")) {
   fail_fast("Startup check failed: guide annotation loader is unavailable.")
@@ -29,6 +30,9 @@ if (!exists("home_recent_store_load", mode = "function")) {
 }
 if (!exists("home_desktop_normalize_open_file_result", mode = "function")) {
   fail_fast("Startup check failed: home desktop helper is unavailable.")
+}
+if (!exists("home_contact_resolve_qr_src", mode = "function")) {
+  fail_fast("Startup check failed: home contact helper is unavailable.")
 }
 
 detect_repo_root <- function() {
@@ -253,6 +257,17 @@ host_tr <- function(key, lang) {
       home_recent_path_label = "Path",
       home_recent_path_missing = "Path unavailable (file not found).",
       home_unknown_name = "Unnamed Import",
+      home_contact_title = "Contact Developer",
+      home_contact_dev_name_label = "Developer",
+      home_contact_email_label = "Email",
+      home_contact_website_label = "Website",
+      home_contact_version_label = "Version",
+      home_contact_donate_title = "Support ViaBind",
+      home_contact_donate_link_label = "Buy Me a Coffee",
+      home_contact_donate_note_line1 = "If this tool has made your work a little easier, you are welcome to support its continued development.",
+      home_contact_donate_note_line2 = "All features will always remain freely available.",
+      home_contact_donate_note_line3 = "",
+      home_contact_qr_missing = "Donation QR code is not available yet.",
       close = "Close"
     ),
     zh = list(
@@ -293,6 +308,17 @@ host_tr <- function(key, lang) {
       home_recent_path_label = "路径",
       home_recent_path_missing = "路径不可用（文件不存在）。",
       home_unknown_name = "未命名导入",
+      home_contact_title = "联系开发者",
+      home_contact_dev_name_label = "开发者",
+      home_contact_email_label = "邮箱",
+      home_contact_website_label = "网址",
+      home_contact_version_label = "版本",
+      home_contact_donate_title = "支持 ViaBind",
+      home_contact_donate_link_label = "Buy Me a Coffee",
+      home_contact_donate_note_line1 = "功能永久免费。",
+      home_contact_donate_note_line2 = "用得顺手？欢迎支持。",
+      home_contact_donate_note_line3 = "我们负责把它做得更好。",
+      home_contact_qr_missing = "捐赠二维码暂不可用。",
       close = "关闭"
     )
   )
@@ -345,6 +371,13 @@ home_detect_export_type <- function(file_name = NULL, fallback = "xlsx") {
 
 repo_root <- detect_repo_root()
 home_icon_src <- resolve_home_icon_src(repo_root)
+home_contact_assets_dir <- file.path(repo_root, "ITCSuiteWeb", "www", "assets")
+home_contact_profile <- list(
+  name = "Guanglu Wu (吴光鹭)",
+  email = "guanglu.wu@gmail.com",
+  website = "https://guanglu.xyz"
+)
+home_contact_bmc_url <- home_contact_validate_https_url("https://buymeacoffee.com/guanglu")
 processor_legacy <- load_legacy_app(file.path(repo_root, "ITCprocessor"), "ITCprocessor")
 simfit_legacy <- load_legacy_app(
   file.path(repo_root, "ITCsimfit"),
@@ -362,9 +395,14 @@ ui <- fluidPage(
   tags$head(
     tags$title("ViaBind: Your Path, Your Model"),
     tags$style(HTML("\
-      .main-host-wrap { margin-top: 6px; }\
-      .main-host-topbar { position: relative; }\
-      .main-host-wrap .tab-content { padding-top: 8px; }\
+      :root { --itcsuite-vh: 1vh; --itcsuite-host-chrome: 140px; --home-contact-qr-max-h: 132px; }\
+      html, body { height: 100%; }\
+      body > .container-fluid { height: 100%; }\
+      .main-host-wrap { margin-top: 6px; height: calc(var(--itcsuite-vh, 1vh) * 100 - 12px); min-height: 0; overflow: hidden; }\
+      .main-host-topbar { position: relative; height: 100%; display: flex; flex-direction: column; min-height: 0; }\
+      .main-host-topbar > .tabbable { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }\
+      .main-host-wrap .tab-content { padding-top: 8px; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }\
+      .main-host-wrap .tab-content > .tab-pane { min-height: 100%; }\
       .main-host-wrap .nav-tabs { padding-right: 140px; }\
       .main-host-brand { color: #4b5563; font-size: 13px; margin: 6px 0 2px; }\
       .main-host-brand a { color: inherit; text-decoration: underline; }\
@@ -387,6 +425,21 @@ ui <- fluidPage(
       .home-recent-path { margin-top: 4px; font-size: 11px; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }\
       .home-recent-path-missing { color: #b91c1c; font-weight: 600; }\
       .home-empty-note { color: #6b7280; font-size: 13px; }\
+      .home-contact-panel { margin-top: 14px; padding: 12px; border: 1px solid #d8e2ef; border-radius: 8px; background: #ffffff; }\
+      .home-contact-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 0.9fr) auto; gap: 10px 8px; align-items: start; }\
+      .home-contact-col-title { margin: 0 0 8px; font-size: 15px; font-weight: 600; color: #111827; }\
+      .home-contact-lines p { margin: 0 0 6px; color: #1f2937; }\
+      .home-contact-lines p:last-child { margin-bottom: 0; }\
+      .home-contact-donate-note { margin: 2px 0 6px; color: #374151; }\
+      .home-contact-col-dev { justify-self: start; text-align: left; }\
+      .home-contact-col-donate { justify-self: end; text-align: left; max-width: 360px; }\
+      .home-contact-col-qr { justify-self: end; text-align: left; align-self: start; }\
+      .home-contact-link { word-break: break-all; }\
+      .home-contact-qr-wrap { margin-top: 0; }\
+      .home-contact-qr { display: block; width: auto; height: auto; max-height: var(--home-contact-qr-max-h, 132px); max-width: 156px; object-fit: contain; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; padding: 4px; }\
+      .home-contact-qr-missing { font-size: 12px; color: #6b7280; max-width: 220px; }\
+      @media (max-width: 1100px) { .home-contact-grid { grid-template-columns: 1fr 1fr; } .home-contact-col-donate, .home-contact-col-qr { justify-self: end; } .home-contact-col-qr { grid-column: 2; } }\
+      @media (max-width: 900px) { .home-contact-grid { grid-template-columns: 1fr; } .home-contact-col-donate, .home-contact-col-qr { justify-self: start; max-width: none; } .home-contact-col-qr { grid-column: auto; } }\
     ")),
     tags$script(HTML("
       (function() {
@@ -394,6 +447,43 @@ ui <- fluidPage(
         var disconnectReloadKey = 'itcsuite.auto_reload_ts';
         var disconnectGraceMs = 8000;
         var disconnectReloadCooldownMs = 60000;
+        var viewportRafId = null;
+
+        function isWindowsHost() {
+          var platform = (navigator.platform || '') + ' ' + (navigator.userAgent || '');
+          return /Windows/i.test(platform);
+        }
+
+        function updateViewportCssVars() {
+          var root = document.documentElement;
+          var vh = Math.max(window.innerHeight || 0, 1) * 0.01;
+          root.style.setProperty('--itcsuite-vh', vh + 'px');
+          root.classList.toggle('itcsuite-win', isWindowsHost());
+
+          var activePane = document.querySelector('.main-host-wrap .tab-content > .tab-pane.active');
+          var paneTop = activePane ? activePane.getBoundingClientRect().top : 0;
+          var hostChrome = Math.max(96, Math.round((paneTop || 0) + 18));
+          root.style.setProperty('--itcsuite-host-chrome', hostChrome + 'px');
+
+          // Keep QR visually close to donate content by capping image height to donate column height.
+          root.style.setProperty('--home-contact-qr-max-h', '132px');
+          var donateCol = document.querySelector('.home-contact-col-donate');
+          if (donateCol) {
+            var donateHeight = Math.round((donateCol.getBoundingClientRect() || {}).height || 0);
+            if (Number.isFinite(donateHeight) && donateHeight > 0) {
+              var qrMax = Math.max(82, Math.min(150, donateHeight - 6));
+              root.style.setProperty('--home-contact-qr-max-h', qrMax + 'px');
+            }
+          }
+        }
+
+        function scheduleViewportCssVarRefresh() {
+          if (viewportRafId) return;
+          viewportRafId = window.requestAnimationFrame(function() {
+            viewportRafId = null;
+            updateViewportCssVars();
+          });
+        }
 
         function normalizeLang(value) {
           var v = (value || '').toLowerCase();
@@ -497,6 +587,7 @@ ui <- fluidPage(
         });
 
         $(document).on('shiny:connected', function() {
+          scheduleViewportCssVarRefresh();
           Shiny.setInputValue('itcsuite_lang_init', detectInitialLang(), {priority: 'event'});
           reportDesktopCapability();
         });
@@ -511,9 +602,18 @@ ui <- fluidPage(
 
         $(document).on('shiny:reconnected', function() {
           clearDisconnectTimer();
+          scheduleViewportCssVarRefresh();
           reportDesktopCapability();
         });
 
+        $(window).on('resize', scheduleViewportCssVarRefresh);
+        $(document).on('shown.bs.tab', 'a[data-toggle=\"tab\"]', scheduleViewportCssVarRefresh);
+        $(document).on('shiny:value', function(event) {
+          if (event && event.name === 'home_panel_ui') {
+            scheduleViewportCssVarRefresh();
+          }
+        });
+        setTimeout(scheduleViewportCssVarRefresh, 0);
         window.addEventListener('beforeunload', clearDisconnectTimer);
       })();
     "))
@@ -976,6 +1076,20 @@ server <- function(input, output, session) {
     }
   )
 
+  session$userData$itcsuite_app_meta <- list(
+    get_app_version = function() {
+      version_chr <- home_desktop_scalar_chr(Sys.getenv("ITCSUITE_APP_VERSION", unset = ""), default = "")
+      if (nzchar(version_chr)) version_chr else "0.0.0-dev"
+    },
+    get_developer_profile = function() {
+      list(
+        name = home_contact_scalar_chr(home_contact_profile$name, default = ""),
+        email = home_contact_scalar_chr(home_contact_profile$email, default = ""),
+        website = home_contact_scalar_chr(home_contact_profile$website, default = "")
+      )
+    }
+  )
+
   session$userData$itcsuite_desktop <- list(
     enabled = function() {
       desktop_enabled()
@@ -1149,6 +1263,49 @@ server <- function(input, output, session) {
     if (is.character(home_icon_src) && nzchar(home_icon_src)) {
       home_icon_tag <- tags$img(class = "home-title-icon", src = home_icon_src, alt = "ViaBind")
     }
+    home_contact_email <- home_contact_scalar_chr(home_contact_profile$email, default = "")
+    home_contact_email_href <- home_contact_mailto_href(home_contact_email)
+    home_contact_site <- home_contact_scalar_chr(home_contact_profile$website, default = "")
+    home_contact_version <- home_contact_build_viabind_signature(repo_root = repo_root)
+    home_contact_qr <- home_contact_resolve_qr_src(
+      lang = l,
+      assets_dir = home_contact_assets_dir,
+      resource_prefix = "/assets"
+    )
+    home_contact_qr_node <- if (isTRUE(home_contact_qr$exists) && nzchar(home_contact_qr$src)) {
+      tags$img(
+        class = "home-contact-qr",
+        src = home_contact_qr$src,
+        alt = host_tr("home_contact_donate_link_label", l)
+      )
+    } else {
+      div(class = "home-contact-qr-missing", host_tr("home_contact_qr_missing", l))
+    }
+    home_contact_donate_note_lines <- c(
+      host_tr("home_contact_donate_note_line1", l),
+      host_tr("home_contact_donate_note_line2", l),
+      host_tr("home_contact_donate_note_line3", l)
+    )
+    home_contact_donate_note_lines <- home_contact_donate_note_lines[
+      nzchar(trimws(home_contact_donate_note_lines))
+    ]
+    home_contact_donate_note <- tagList(lapply(home_contact_donate_note_lines, function(txt) {
+      tags$p(class = "home-contact-donate-note", txt)
+    }))
+    home_contact_donate_link <- NULL
+    if (identical(l, "en") && nzchar(home_contact_bmc_url)) {
+      home_contact_donate_link <- tags$a(
+        href = home_contact_bmc_url,
+        target = "_blank",
+        rel = "noopener noreferrer",
+        class = "home-contact-link",
+        host_tr("home_contact_donate_link_label", l)
+      )
+    }
+    home_contact_donate_line <- NULL
+    if (!is.null(home_contact_donate_link)) {
+      home_contact_donate_line <- tags$p(home_contact_donate_link)
+    }
 
     div(
       class = "home-tab-wrap",
@@ -1165,7 +1322,57 @@ server <- function(input, output, session) {
           actionButton("home_start_step1", host_tr("home_start_step1", l), class = "btn btn-primary")
         ),
         tags$h4(host_tr("home_recent_title", l)),
-        build_recent_table(import_recs, host_tr("home_recent_empty", l))
+        build_recent_table(import_recs, host_tr("home_recent_empty", l)),
+        div(
+          class = "home-contact-panel",
+          div(
+            class = "home-contact-grid",
+            div(
+              class = "home-contact-lines home-contact-col home-contact-col-dev",
+              tags$h5(class = "home-contact-col-title", host_tr("home_contact_title", l)),
+              tags$p(
+                tags$strong(paste0(host_tr("home_contact_dev_name_label", l), ": ")),
+                home_contact_profile$name
+              ),
+              tags$p(
+                tags$strong(paste0(host_tr("home_contact_email_label", l), ": ")),
+                if (nzchar(home_contact_email_href)) {
+                  tags$a(
+                    href = home_contact_email_href,
+                    class = "home-contact-link",
+                    home_contact_email
+                  )
+                } else {
+                  home_contact_email
+                }
+              ),
+              tags$p(
+                tags$strong(paste0(host_tr("home_contact_website_label", l), ": ")),
+                tags$a(
+                  href = home_contact_site,
+                  target = "_blank",
+                  rel = "noopener noreferrer",
+                  class = "home-contact-link",
+                  home_contact_site
+                )
+              ),
+              tags$p(
+                tags$strong(paste0(host_tr("home_contact_version_label", l), ": ")),
+                home_contact_version
+              )
+            ),
+            div(
+              class = "home-contact-lines home-contact-col home-contact-col-donate",
+              tags$h5(class = "home-contact-col-title", host_tr("home_contact_donate_title", l)),
+              home_contact_donate_note,
+              home_contact_donate_line
+            ),
+            div(
+              class = "home-contact-qr-wrap home-contact-col home-contact-col-qr",
+              home_contact_qr_node
+            )
+          )
+        )
       )
     )
   })

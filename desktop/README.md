@@ -2,15 +2,15 @@
 
 Electron shell for ViaBind using a local Shiny backend.
 
-## Prerequisites (dev)
+## Prerequisites (dev/build)
 
 - Node.js 24.x LTS (recommended). Node 20.x/22.x/24.x are supported. Node 25 is not supported.
-- R 4.3+ with required packages (or bundled runtime for packaged builds)
+- R 4.3+ on build machines (used to prepare bundled runtime). End users do not need local R.
 
 ## Local development
 
 ```bash
-cd /Users/guanglu/Documents/myScript/ITCSuite/desktop
+cd desktop
 npm install
 npm run dev
 ```
@@ -32,38 +32,50 @@ Environment overrides:
 ## Build bundled R runtime (cross-platform)
 
 ```bash
-cd /Users/guanglu/Documents/myScript/ITCSuite/desktop
+cd desktop
 node scripts/build-r-runtime.mjs --strict-runtime-manifest
 ```
 
 This generates `resources/r-runtime`.
 
+`npm run dist` and `npm run dist:win` will auto-run runtime validation/build, so this manual step is optional.
+
+For CI strict gate (validate only, no auto-build), run:
+
+```bash
+cd desktop
+npm run ensure:r-runtime:check
+```
+
 ## Package app (macOS)
 
 ```bash
-cd /Users/guanglu/Documents/myScript/ITCSuite/desktop
+cd desktop
 npm run dist
 ```
 
+`npm run dist` ensures `resources/r-runtime` is present and valid before packaging.
 Build outputs land in `dist/`.
 
 ## Package app (Windows x64, for CI runners)
 
 ```bash
-cd /Users/guanglu/Documents/myScript/ITCSuite/desktop
+cd desktop
 npm run dist:win
 ```
+
+`npm run dist:win` also ensures `resources/r-runtime` before packaging.
 
 ## Backend smoke test (headless, CI-friendly)
 
 ```bash
-cd /Users/guanglu/Documents/myScript/ITCSuite/desktop
+cd desktop
 npm run smoke:backend
 ```
 
 ## Smoke test
 
 ```bash
-cd /Users/guanglu/Documents/myScript/ITCSuite/desktop
+cd desktop
 npm run smoke
 ```

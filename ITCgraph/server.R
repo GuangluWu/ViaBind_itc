@@ -4,6 +4,24 @@
 
 server <- function(input, output, session) {
   `%||%` <- function(x, y) if (is.null(x)) y else x
+  resolve_viabind_version <- function(default_version = "0.0.0-dev") {
+    graph_meta_resolve_app_version(session = session, fallback = default_version)
+  }
+
+  build_viabind_signature <- function(module_name, version = NULL) {
+    version_chr <- graph_meta_scalar_chr(version, default = resolve_viabind_version())
+    graph_meta_build_signature(module_name = module_name, version = version_chr)
+  }
+
+  resolve_pdf_export_metadata <- function() {
+    graph_meta_resolve_pdf_metadata(
+      session = session,
+      module_name = "ITCgraph",
+      fallback_version = "0.0.0-dev",
+      fallback_profile = list(name = "", email = "", website = ""),
+      fallback_author = "ViaBind"
+    )
+  }
   
   # ============================================================
   # 1. Language mode (prefer host shared i18n channel)
@@ -597,20 +615,36 @@ server <- function(input, output, session) {
   }
 
   latest_step2_plot_payload <- reactiveVal(NULL)
+  step3_replay_pending <- reactiveVal(FALSE)
   bridge_step2_channel <- resolve_bridge_channel("step2_plot_payload")
   if (is.function(bridge_step2_channel)) {
     observeEvent(bridge_step2_channel(), {
       payload <- bridge_step2_channel()
       if (is.null(payload) || !is.list(payload)) return(invisible(FALSE))
       latest_step2_plot_payload(payload)
-      consume_step2_plot_payload(payload)
+
+      consumed <- isTRUE(consume_step2_plot_payload(payload))
+      if (!isTRUE(consumed)) return(invisible(FALSE))
+
+      # Guard against tab-revisit resets: only queue one replay when payload
+      # arrives while Step 3 is hidden; do not replay on routine tab switches.
+      if (is_step3_tab_selected(input$main_tabs)) {
+        step3_replay_pending(FALSE)
+      } else {
+        step3_replay_pending(TRUE)
+      }
     }, ignoreNULL = TRUE)
   }
 
   observeEvent(input$main_tabs, {
     if (!is_step3_tab_selected(input$main_tabs)) return(invisible(FALSE))
+    if (!isTRUE(step3_replay_pending())) return(invisible(FALSE))
+    on.exit(step3_replay_pending(FALSE), add = TRUE)
     payload <- latest_step2_plot_payload()
     if (is.null(payload) || !is.list(payload)) return(invisible(FALSE))
+
+    # Replay at most once for the latest off-tab payload so manual range/no-dim
+    # edits survive normal Step 3 tab revisit.
     consume_step2_plot_payload(payload, replay_only = TRUE)
   }, ignoreInit = TRUE)
   
@@ -1416,10 +1450,18 @@ server <- function(input, output, session) {
         showNotification(graph_tr("no_data_warning", lang()), type = "warning")
         return()
       }
+      pdf_meta <- tryCatch(
+        resolve_pdf_export_metadata(),
+        error = function(e) list(
+          title = build_viabind_signature("ITCgraph", version = resolve_viabind_version("0.0.0-dev"))
+        )
+      )
+      pdf_title <- graph_meta_scalar_chr(pdf_meta$title, default = build_viabind_signature("ITCgraph"))
       ggsave(file, plot = fig, device = "pdf",
              width = input$export_width %||% PLOT_DEFAULTS$export_width,
              height = input$export_height %||% PLOT_DEFAULTS$export_height,
-             units = "in", dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi)
+             units = "in", dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi,
+             title = pdf_title)
       record_step3_recent_export(file, "pdf")
     }
   )
@@ -1480,6 +1522,7 @@ server <- function(input, output, session) {
     )
     list(
       version = 2L,
+      generated_by  = build_viabind_signature("ITCgraph"),
       top_xlab       = as.character(input$top_xlab %||% graph_tr("time_min_label", lang())),
       top_ylab       = as.character(input$top_ylab %||% unit_label("top_ylab", input$energy_unit %||% "cal")),
       top_time_unit  = as.character(input$top_time_unit %||% PLOT_DEFAULTS$top_time_unit),

@@ -3,35 +3,35 @@
 ## Layered Structure
 
 1. `Entrypoint`:
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/app.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/server.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/ui.R`
+- `ITCsimfit/app.R`
+- `ITCsimfit/server.R`
+- `ITCsimfit/ui.R`
 
 2. `Infrastructure`:
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/infrastructure/logging.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/infrastructure/errors.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/utils.R`
+- `ITCsimfit/R/infrastructure/logging.R`
+- `ITCsimfit/R/infrastructure/errors.R`
+- `ITCsimfit/R/utils.R`
 
 3. `Domain / Simulation`:
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/core_logic.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/fitting.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/weighting.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/error_analysis.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/visualization.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/bridge_step1_import.R`
+- `ITCsimfit/R/core_logic.R`
+- `ITCsimfit/R/fitting.R`
+- `ITCsimfit/R/weighting.R`
+- `ITCsimfit/R/error_analysis.R`
+- `ITCsimfit/R/visualization.R`
+- `ITCsimfit/R/bridge_step1_import.R`
 
 4. `Server Runtime`:
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/server/server_main.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/server/body/01_ui_i18n.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/server/body/02_runtime_core.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/server/body/03_snapshot_export.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/server/body/ui_i18n/01_bridge_i18n_setup.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/server/body/ui_i18n/02_ui_outputs_report.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/server/body/runtime_core/01_bridge_state_inputs.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/server/body/runtime_core/02_simulation_fitting.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/server/body/runtime_core/03_plots_diagnostics.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/server/body/snapshot_export/01_snapshot_management.R`
-- `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit/R/server/body/snapshot_export/02_export_bridge.R`
+- `ITCsimfit/R/server/server_main.R`
+- `ITCsimfit/R/server/body/01_ui_i18n.R`
+- `ITCsimfit/R/server/body/02_runtime_core.R`
+- `ITCsimfit/R/server/body/03_snapshot_export.R`
+- `ITCsimfit/R/server/body/ui_i18n/01_bridge_i18n_setup.R`
+- `ITCsimfit/R/server/body/ui_i18n/02_ui_outputs_report.R`
+- `ITCsimfit/R/server/body/runtime_core/01_bridge_state_inputs.R`
+- `ITCsimfit/R/server/body/runtime_core/02_simulation_fitting.R`
+- `ITCsimfit/R/server/body/runtime_core/03_plots_diagnostics.R`
+- `ITCsimfit/R/server/body/snapshot_export/01_snapshot_management.R`
+- `ITCsimfit/R/server/body/snapshot_export/02_export_bridge.R`
 
 ## Dependency Direction
 Allowed only in one direction:
