@@ -70,8 +70,8 @@
   output$model_base_note <- renderUI({ tr("model_base", lang()) })
 
   output$path_mode_switch <- renderUI({
-    current_mode <- isolate(as.character(input$path_view_mode %||% "graph")[1])
-    if (!current_mode %in% c("table", "graph")) current_mode <- "graph"
+    current_mode <- isolate(as.character(input$path_view_mode %||% "table")[1])
+    if (!current_mode %in% c("table", "graph")) current_mode <- "table"
     tags$div(
       class = "path-mode-switch-wrap path-mode-inline",
       tags$span(

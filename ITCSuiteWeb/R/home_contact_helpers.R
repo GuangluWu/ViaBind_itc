@@ -43,6 +43,42 @@ home_contact_mailto_href <- function(email = "") {
   paste0("mailto:", clean)
 }
 
+home_contact_read_viabind_version <- function(repo_root = getwd(), default_version = "x.x.x") {
+  default_chr <- home_contact_scalar_chr(default_version, default = "x.x.x")
+  root_chr <- home_contact_scalar_chr(repo_root, default = getwd())
+  if (!nzchar(root_chr)) root_chr <- getwd()
+
+  candidates <- unique(c(
+    file.path(root_chr, "desktop", "package.json"),
+    file.path(root_chr, "..", "desktop", "package.json")
+  ))
+  version_pattern <- '"version"[[:space:]]*:[[:space:]]*"([^"]+)"'
+
+  for (path in candidates) {
+    if (!file.exists(path)) next
+    lines <- tryCatch(readLines(path, warn = FALSE, encoding = "UTF-8"), error = function(e) character(0))
+    if (length(lines) == 0) next
+    hit_idx <- grep(version_pattern, lines, perl = TRUE)
+    if (length(hit_idx) < 1) next
+    line <- lines[hit_idx[1]]
+    cap <- regmatches(line, regexec(version_pattern, line, perl = TRUE))[[1]]
+    if (length(cap) >= 2) {
+      ver <- home_contact_scalar_chr(cap[2], default = "")
+      if (nzchar(ver)) return(ver)
+    }
+  }
+
+  default_chr
+}
+
+home_contact_build_viabind_signature <- function(repo_root = getwd(), default_version = "x.x.x") {
+  version <- home_contact_read_viabind_version(
+    repo_root = repo_root,
+    default_version = default_version
+  )
+  paste0("ViaBind v", version)
+}
+
 home_contact_resolve_qr_src <- function(
   lang = "en",
   assets_dir = file.path(getwd(), "www", "assets"),

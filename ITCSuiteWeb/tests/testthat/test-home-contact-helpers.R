@@ -54,3 +54,36 @@ testthat::test_that("home_contact_validate_https_url accepts only https URLs", {
   testthat::expect_equal(home_contact_validate_https_url("javascript:alert(1)"), "")
   testthat::expect_equal(home_contact_validate_https_url(""), "")
 })
+
+testthat::test_that("home_contact_read_viabind_version reads desktop package.json and falls back", {
+  sandbox <- file.path(tempdir(), paste0("home_contact_ver_", as.integer(Sys.time())))
+  dir.create(file.path(sandbox, "desktop"), recursive = TRUE, showWarnings = FALSE)
+  writeLines(
+    c("{", '  "name": "viabind-desktop",', '  "version": "1.2.3"', "}"),
+    con = file.path(sandbox, "desktop", "package.json"),
+    useBytes = TRUE
+  )
+
+  testthat::expect_equal(
+    home_contact_read_viabind_version(repo_root = sandbox, default_version = "x.x.x"),
+    "1.2.3"
+  )
+  testthat::expect_equal(
+    home_contact_read_viabind_version(repo_root = file.path(sandbox, "missing"), default_version = "x.x.x"),
+    "x.x.x"
+  )
+})
+
+testthat::test_that("home_contact_build_viabind_signature builds expected string", {
+  sandbox <- file.path(tempdir(), paste0("home_contact_sig_", as.integer(Sys.time())))
+  dir.create(file.path(sandbox, "desktop"), recursive = TRUE, showWarnings = FALSE)
+  writeLines(
+    c("{", '  "version": "9.8.7"', "}"),
+    con = file.path(sandbox, "desktop", "package.json"),
+    useBytes = TRUE
+  )
+  testthat::expect_equal(
+    home_contact_build_viabind_signature(repo_root = sandbox, default_version = "x.x.x"),
+    "ViaBind v9.8.7"
+  )
+})

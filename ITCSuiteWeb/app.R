@@ -261,6 +261,7 @@ host_tr <- function(key, lang) {
       home_contact_dev_name_label = "Developer",
       home_contact_email_label = "Email",
       home_contact_website_label = "Website",
+      home_contact_version_label = "Version",
       home_contact_donate_title = "Support ViaBind",
       home_contact_donate_link_label = "Buy Me a Coffee",
       home_contact_donate_note_line1 = "If this tool has made your work a little easier, you are welcome to support its continued development.",
@@ -311,6 +312,7 @@ host_tr <- function(key, lang) {
       home_contact_dev_name_label = "开发者",
       home_contact_email_label = "邮箱",
       home_contact_website_label = "网址",
+      home_contact_version_label = "版本",
       home_contact_donate_title = "支持 ViaBind",
       home_contact_donate_link_label = "Buy Me a Coffee",
       home_contact_donate_note_line1 = "功能永久免费。",
@@ -1074,6 +1076,20 @@ server <- function(input, output, session) {
     }
   )
 
+  session$userData$itcsuite_app_meta <- list(
+    get_app_version = function() {
+      version_chr <- home_desktop_scalar_chr(Sys.getenv("ITCSUITE_APP_VERSION", unset = ""), default = "")
+      if (nzchar(version_chr)) version_chr else "0.0.0-dev"
+    },
+    get_developer_profile = function() {
+      list(
+        name = home_contact_scalar_chr(home_contact_profile$name, default = ""),
+        email = home_contact_scalar_chr(home_contact_profile$email, default = ""),
+        website = home_contact_scalar_chr(home_contact_profile$website, default = "")
+      )
+    }
+  )
+
   session$userData$itcsuite_desktop <- list(
     enabled = function() {
       desktop_enabled()
@@ -1250,6 +1266,7 @@ server <- function(input, output, session) {
     home_contact_email <- home_contact_scalar_chr(home_contact_profile$email, default = "")
     home_contact_email_href <- home_contact_mailto_href(home_contact_email)
     home_contact_site <- home_contact_scalar_chr(home_contact_profile$website, default = "")
+    home_contact_version <- home_contact_build_viabind_signature(repo_root = repo_root)
     home_contact_qr <- home_contact_resolve_qr_src(
       lang = l,
       assets_dir = home_contact_assets_dir,
@@ -1338,6 +1355,10 @@ server <- function(input, output, session) {
                   class = "home-contact-link",
                   home_contact_site
                 )
+              ),
+              tags$p(
+                tags$strong(paste0(host_tr("home_contact_version_label", l), ": ")),
+                home_contact_version
               )
             ),
             div(

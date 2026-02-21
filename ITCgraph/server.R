@@ -4,41 +4,23 @@
 
 server <- function(input, output, session) {
   `%||%` <- function(x, y) if (is.null(x)) y else x
-  resolve_viabind_version <- function(default_version = "x.x.x") {
-    default_chr <- as.character(default_version %||% "x.x.x")[1]
-    default_chr <- trimws(default_chr)
-    if (!nzchar(default_chr)) default_chr <- "x.x.x"
-
-    candidates <- unique(c(
-      file.path(getwd(), "desktop", "package.json"),
-      file.path(getwd(), "..", "desktop", "package.json")
-    ))
-    version_pattern <- '"version"[[:space:]]*:[[:space:]]*"([^"]+)"'
-
-    for (path in candidates) {
-      if (!file.exists(path)) next
-      lines <- tryCatch(readLines(path, warn = FALSE, encoding = "UTF-8"), error = function(e) character(0))
-      if (length(lines) == 0) next
-      hit_idx <- grep(version_pattern, lines, perl = TRUE)
-      if (length(hit_idx) < 1) next
-      line <- lines[hit_idx[1]]
-      cap <- regmatches(line, regexec(version_pattern, line, perl = TRUE))[[1]]
-      if (length(cap) >= 2) {
-        ver <- trimws(as.character(cap[2]))
-        if (nzchar(ver)) return(ver)
-      }
-    }
-
-    default_chr
+  resolve_viabind_version <- function(default_version = "0.0.0-dev") {
+    graph_meta_resolve_app_version(session = session, fallback = default_version)
   }
+
   build_viabind_signature <- function(module_name, version = NULL) {
-    module_chr <- as.character(module_name %||% "")[1]
-    module_chr <- trimws(module_chr)
-    if (!nzchar(module_chr)) module_chr <- "UnknownModule"
-    version_chr <- as.character(version %||% "")[1]
-    version_chr <- trimws(version_chr)
-    if (!nzchar(version_chr)) version_chr <- resolve_viabind_version()
-    paste0("ViaBind v", version_chr, ": ", module_chr)
+    version_chr <- graph_meta_scalar_chr(version, default = resolve_viabind_version())
+    graph_meta_build_signature(module_name = module_name, version = version_chr)
+  }
+
+  resolve_pdf_export_metadata <- function() {
+    graph_meta_resolve_pdf_metadata(
+      session = session,
+      module_name = "ITCgraph",
+      fallback_version = "0.0.0-dev",
+      fallback_profile = list(name = "", email = "", website = ""),
+      fallback_author = "ViaBind"
+    )
   }
   
   # ============================================================
@@ -1468,10 +1450,18 @@ server <- function(input, output, session) {
         showNotification(graph_tr("no_data_warning", lang()), type = "warning")
         return()
       }
+      pdf_meta <- tryCatch(
+        resolve_pdf_export_metadata(),
+        error = function(e) list(
+          title = build_viabind_signature("ITCgraph", version = resolve_viabind_version("0.0.0-dev"))
+        )
+      )
+      pdf_title <- graph_meta_scalar_chr(pdf_meta$title, default = build_viabind_signature("ITCgraph"))
       ggsave(file, plot = fig, device = "pdf",
              width = input$export_width %||% PLOT_DEFAULTS$export_width,
              height = input$export_height %||% PLOT_DEFAULTS$export_height,
-             units = "in", dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi)
+             units = "in", dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi,
+             title = pdf_title)
       record_step3_recent_export(file, "pdf")
     }
   )

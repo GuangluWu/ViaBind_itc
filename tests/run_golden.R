@@ -11,6 +11,13 @@ setwd(normalizePath(file.path(script_dir, ".."), winslash = "/", mustWork = TRUE
 repo_root <- detect_repo_root()
 setwd(repo_root)
 
+# Prefer repo-local library when available.
+project_lib <- normalizePath(file.path(repo_root, ".r-lib"), winslash = "/", mustWork = FALSE)
+if (dir.exists(project_lib)) {
+  .libPaths(unique(c(project_lib, .libPaths())))
+  Sys.setenv(R_LIBS_USER = project_lib)
+}
+
 cat(sprintf("Running golden regression (strict=%s)\n", tolower(as.character(strict_mode))))
 
 rscript_bin <- file.path(R.home("bin"), "Rscript")

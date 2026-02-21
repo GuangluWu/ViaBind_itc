@@ -15,6 +15,7 @@ const APP_TITLE = `${APP_NAME}: ${APP_SLOGAN}`;
 const APP_DEVELOPER_NAME = "Guanglu Wu (吴光鹭)";
 const APP_DEVELOPER_EMAIL = "guanglu.wu@gmail.com";
 const APP_DEVELOPER_SITE = "guanglu.xyz";
+const appVersionSignature = () => `ViaBind v${app.getVersion()}`;
 const OPEN_FILE_CHANNEL = "itcsuite:open-file";
 const OPEN_FILE_PURPOSES = new Set(["step1_import", "step2_import", "step3_import"]);
 app.setName(APP_NAME);
@@ -134,6 +135,7 @@ class BackendController extends EventEmitter {
     const env = { ...process.env };
     env.ITCSUITE_DESKTOP = "1";
     env.ITCSUITE_USER_DATA_DIR = app.getPath("userData");
+    env.ITCSUITE_APP_VERSION = app.getVersion();
 
     const bundledLib = path.join(runtimeRoot, "library");
     if (fs.existsSync(bundledLib) && (app.isPackaged || useBundledRuntimeInDev())) {
@@ -989,7 +991,7 @@ function buildAppMenu() {
               type: "info",
               title: `About ${APP_NAME}`,
               message: `${APP_NAME} Desktop`,
-              detail: `${APP_SLOGAN}\n\nDeveloper: ${APP_DEVELOPER_NAME}\nEmail: ${APP_DEVELOPER_EMAIL}\nWebsite: ${APP_DEVELOPER_SITE}\n\nElectron shell with local Shiny backend.`
+              detail: `${APP_SLOGAN}\n\nDeveloper: ${APP_DEVELOPER_NAME}\nEmail: ${APP_DEVELOPER_EMAIL}\nWebsite: ${APP_DEVELOPER_SITE}\nVersion: ${appVersionSignature()}\n\nElectron shell with local Shiny backend.`
             });
           }
         },
