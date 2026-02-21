@@ -33,6 +33,7 @@ let recoveryInProgress = false;
 let lastRecoveryAt = 0;
 let unresponsiveRecoveryTimer = null;
 let rendererMarkedUnresponsive = false;
+let openFileLastDir = "";
 
 const RECOVERY_COOLDOWN_MS = 10000;
 const UNRESPONSIVE_RECOVERY_DELAY_MS = 3000;
@@ -662,6 +663,40 @@ function trimScalar(value, defaultValue = "") {
   return trimmed || defaultValue;
 }
 
+function isExistingDirectory(dirPath) {
+  const candidate = trimScalar(dirPath, "");
+  if (!candidate || !fs.existsSync(candidate)) return false;
+  try {
+    return fs.statSync(candidate).isDirectory();
+  } catch (_) {
+    return false;
+  }
+}
+
+function resolveExamplesDir() {
+  const candidate = app.isPackaged
+    ? path.join(process.resourcesPath, "itcsuite", "Examples")
+    : path.resolve(__dirname, "../../../Examples");
+  if (!isExistingDirectory(candidate)) return "";
+  return path.resolve(candidate);
+}
+
+function resolveOpenFileDefaultPath() {
+  const rememberedDir = trimScalar(openFileLastDir, "");
+  if (isExistingDirectory(rememberedDir)) {
+    return path.resolve(rememberedDir);
+  }
+  return resolveExamplesDir();
+}
+
+function rememberOpenFileDir(selectedFilePath) {
+  const selected = trimScalar(selectedFilePath, "");
+  if (!selected) return;
+  const dirPath = path.dirname(path.resolve(selected));
+  if (!isExistingDirectory(dirPath)) return;
+  openFileLastDir = dirPath;
+}
+
 function sanitizeOpenFileExtensions(extensions) {
   if (!Array.isArray(extensions)) return [];
   const cleaned = [];
@@ -736,11 +771,17 @@ function registerIpcHandlers() {
     }
 
     try {
-      const dialogResult = await dialog.showOpenDialog(mainWindow, {
+      const dialogOptions = {
         title: payload.title,
         properties: ["openFile"],
         filters: payload.filters
-      });
+      };
+      const defaultPath = resolveOpenFileDefaultPath();
+      if (defaultPath) {
+        dialogOptions.defaultPath = defaultPath;
+      }
+
+      const dialogResult = await dialog.showOpenDialog(mainWindow, dialogOptions);
 
       if (dialogResult.canceled) {
         return makeOpenFileResult(payload, { canceled: true });
@@ -751,11 +792,13 @@ function registerIpcHandlers() {
       if (!resolvedPath) {
         return makeOpenFileResult(payload, { error: "No file selected." });
       }
+      const absolutePath = path.resolve(resolvedPath);
+      rememberOpenFileDir(absolutePath);
 
       return makeOpenFileResult(payload, {
         canceled: false,
-        file_path: path.resolve(resolvedPath),
-        file_name: path.basename(resolvedPath)
+        file_path: absolutePath,
+        file_name: path.basename(absolutePath)
       });
     } catch (error) {
       const message = error && error.message ? error.message : "Failed to open file dialog.";
