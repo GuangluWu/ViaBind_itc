@@ -2,27 +2,6 @@ name: ITCSuite Desktop Windows
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - "desktop/**"
-      - "ITCSuiteWeb/scripts/launch_shiny.R"
-      - "ITCSuiteWeb/**"
-      - "ITCprocessor/**"
-      - "ITCsimfit/**"
-      - "ITCgraph/**"
-      - ".github/workflows/desktop-windows.yml"
-  push:
-    branches:
-      - main
-      - master
-    paths:
-      - "desktop/**"
-      - "ITCSuiteWeb/scripts/launch_shiny.R"
-      - "ITCSuiteWeb/**"
-      - "ITCprocessor/**"
-      - "ITCsimfit/**"
-      - "ITCgraph/**"
-      - ".github/workflows/desktop-windows.yml"
 
 jobs:
   desktop-windows:
