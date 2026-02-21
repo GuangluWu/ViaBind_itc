@@ -22,7 +22,7 @@ Improve maintainability of ITCsimfit code while preserving behavior and outputs.
 - Lint/style commands are documented and runnable.
 
 ## Baseline Verification Commands
-Run from `/Users/guanglu/Documents/myScript/ITCSuite/ITCsimfit`:
+Run from `ITCsimfit`:
 
 ```bash
 Rscript tests/test_core_logic.R

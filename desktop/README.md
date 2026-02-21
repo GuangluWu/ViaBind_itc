@@ -10,7 +10,7 @@ Electron shell for ViaBind using a local Shiny backend.
 ## Local development
 
 ```bash
-cd /Users/guanglu/Documents/myScript/ITCSuite/desktop
+cd desktop
 npm install
 npm run dev
 ```
@@ -32,7 +32,7 @@ Environment overrides:
 ## Build bundled R runtime (cross-platform)
 
 ```bash
-cd /Users/guanglu/Documents/myScript/ITCSuite/desktop
+cd desktop
 node scripts/build-r-runtime.mjs --strict-runtime-manifest
 ```
 
@@ -41,7 +41,7 @@ This generates `resources/r-runtime`.
 ## Package app (macOS)
 
 ```bash
-cd /Users/guanglu/Documents/myScript/ITCSuite/desktop
+cd desktop
 npm run dist
 ```
 
@@ -50,20 +50,20 @@ Build outputs land in `dist/`.
 ## Package app (Windows x64, for CI runners)
 
 ```bash
-cd /Users/guanglu/Documents/myScript/ITCSuite/desktop
+cd desktop
 npm run dist:win
 ```
 
 ## Backend smoke test (headless, CI-friendly)
 
 ```bash
-cd /Users/guanglu/Documents/myScript/ITCSuite/desktop
+cd desktop
 npm run smoke:backend
 ```
 
 ## Smoke test
 
 ```bash
-cd /Users/guanglu/Documents/myScript/ITCSuite/desktop
+cd desktop
 npm run smoke
 ```
