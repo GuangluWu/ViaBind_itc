@@ -417,6 +417,10 @@ ui <- fluidPage(
         stroke-linejoin: round;
       }
 
+      .simfit-root .path-node.path-node-toggle {
+        cursor: pointer;
+      }
+
       .simfit-root .path-node.is-inactive rect {
         fill: var(--path-c-inactive-fill);
         stroke: var(--path-c-inactive-stroke);
@@ -651,7 +655,12 @@ ui <- fluidPage(
       document.addEventListener('click', function(e) {
         var node = e.target;
         while (node && node !== document) {
-          if (node.classList && node.classList.contains('path-edge-toggle') && node.dataset && node.dataset.pathId) {
+          if (
+            node.classList &&
+            node.dataset &&
+            node.dataset.pathId &&
+            (node.classList.contains('path-edge-toggle') || node.classList.contains('path-node-toggle'))
+          ) {
             Shiny.setInputValue('path_graph_toggle', {
               path_id: node.dataset.pathId,
               nonce: Date.now()

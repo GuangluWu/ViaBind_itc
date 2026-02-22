@@ -155,6 +155,8 @@
     node_g <- function(label, cx, cy, path_id = "base", active = TRUE, width = 64, height = 46) {
       path_cls <- path_class(path_id)
       state_cls <- state_class(active)
+      path_id_chr <- as.character(path_id)[1]
+      toggleable_node <- path_id_chr %in% c("rxn_D", "rxn_T", "rxn_B", "rxn_F", "rxn_U")
       fit_text <- nchar(label, type = "width") >= 8
       text_attrs <- list(
         x = cx,
@@ -171,8 +173,10 @@
           "path-node",
           path_cls,
           state_cls,
-          if (identical(path_cls, "path-base")) "base-node" else ""
+          if (identical(path_cls, "path-base")) "base-node" else "",
+          if (isTRUE(toggleable_node)) "path-node-toggle" else ""
         ),
+        `data-path-id` = if (isTRUE(toggleable_node)) path_id_chr else NULL,
         tags$rect(
           x = cx - (width / 2),
           y = cy - (height / 2),
