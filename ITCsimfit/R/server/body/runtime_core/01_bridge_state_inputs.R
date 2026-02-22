@@ -37,6 +37,7 @@
   sim_cache_result <- reactiveVal(NULL)
   sim_cache_key <- reactiveVal(NULL)
   fit_slider_force_default <- reactiveVal(FALSE)
+  fit_slider_pending_restore <- reactiveVal(NULL)
   path_selection_programmatic <- reactiveVal(FALSE)
   path_selection_last <- reactiveVal(character(0))
 
@@ -507,6 +508,7 @@
       step = 1
     )
     fit_slider_force_default(TRUE)
+    fit_slider_pending_restore(NULL)
 
     values$error_analysis <- NULL
     values$error_analysis_info <- NULL
@@ -1233,6 +1235,7 @@
     values$imported_xlsx_base_name <- NULL
     values$imported_xlsx_filename <- NULL
     values$exp_data_disabled <- TRUE
+    fit_slider_pending_restore(NULL)
     showNotification(tr("exp_data_removed_sim_only", lang()), type = "message", duration = 3)
   }, ignoreInit = TRUE)
   
@@ -1446,7 +1449,8 @@
                                          saved_end,
                                          saved_n_inj = NA_real_,
                                          error_key = NULL,
-                                         preferred_max = NA_real_) {
+                                         preferred_max = NA_real_,
+                                         defer_until_data_ready = FALSE) {
     max_inj <- resolve_fit_data_range_max(preferred_max = preferred_max)
     cur_range <- normalize_fit_data_range_value(isolate(input$fit_data_range), max_inj)
 
@@ -1466,6 +1470,7 @@
     }
 
     if (!isTRUE(validation$ok)) {
+      fit_slider_pending_restore(NULL)
       key <- as.character(error_key %||% "")[1]
       key <- trimws(key)
       if (nzchar(key)) {
@@ -1489,10 +1494,17 @@
       return(invisible(FALSE))
     }
 
+    target_range <- c(as.integer(validation$start), as.integer(validation$end))
+    if (isTRUE(defer_until_data_ready)) {
+      fit_slider_pending_restore(target_range)
+    } else {
+      fit_slider_pending_restore(NULL)
+    }
+
     updateSliderInput(
       session, "fit_data_range",
       min = 1, max = as.integer(validation$available_max),
-      value = c(as.integer(validation$start), as.integer(validation$end)),
+      value = target_range,
       step = 1
     )
     invisible(TRUE)
@@ -1689,7 +1701,8 @@
           saved_end = fp_restore$FitRangeEnd_Inj,
           saved_n_inj = fp_restore$n_inj,
           error_key = "import_fit_range_restore_invalid",
-          preferred_max = if (is.finite(suppressWarnings(as.numeric(fp_restore$n_inj)))) fp_restore$n_inj else inferred_n_inj
+          preferred_max = if (is.finite(suppressWarnings(as.numeric(fp_restore$n_inj)))) fp_restore$n_inj else inferred_n_inj,
+          defer_until_data_ready = TRUE
         )
       }
     }
@@ -1838,12 +1851,18 @@
     max_inj <- nrow(df)
     left_default <- if (max_inj >= 2L) 2L else 1L
     force_default <- isTRUE(fit_slider_force_default())
+    pending <- isolate(fit_slider_pending_restore())
+    pending_num <- suppressWarnings(as.numeric(pending))
+    has_pending <- length(pending_num) >= 2 && all(is.finite(pending_num[1:2]))
     cur <- isolate(input$fit_data_range)
     has_valid_cur <- !is.null(cur) &&
       length(cur) == 2 &&
       all(is.finite(cur))
 
-    if (force_default) {
+    if (has_pending) {
+      pending_range <- normalize_fit_data_range_value(pending_num, max_inj)
+      new_value <- c(as.integer(pending_range[1]), as.integer(pending_range[2]))
+    } else if (force_default) {
       new_value <- c(left_default, max_inj)
     } else if (has_valid_cur) {
       left <- as.integer(round(cur[1]))
@@ -1860,6 +1879,7 @@
     }
 
     updateSliderInput(session, "fit_data_range", min = 1, max = max_inj, value = new_value, step = 1)
+    if (has_pending) fit_slider_pending_restore(NULL)
     if (force_default) fit_slider_force_default(FALSE)
   })
   
@@ -1869,9 +1889,15 @@
       if (!is.null(input$n_inj) && is.numeric(input$n_inj) && input$n_inj > 0) {
         n <- as.integer(input$n_inj)
         force_default <- isTRUE(fit_slider_force_default())
+        pending <- isolate(fit_slider_pending_restore())
+        pending_num <- suppressWarnings(as.numeric(pending))
+        has_pending <- length(pending_num) >= 2 && all(is.finite(pending_num[1:2]))
         cur <- isolate(input$fit_data_range)
         # 若当前范围仍在新 [1, n] 内则保留，否则设为全范围
-        new_value <- if (force_default) {
+        new_value <- if (has_pending) {
+          pending_range <- normalize_fit_data_range_value(pending_num, n)
+          c(as.integer(pending_range[1]), as.integer(pending_range[2]))
+        } else if (force_default) {
           c(if (n >= 2L) 2L else 1L, n)
         } else if (!is.null(cur) && length(cur) == 2 && cur[1] >= 1 && cur[2] <= n && cur[1] <= cur[2]) {
           c(as.integer(cur[1]), as.integer(cur[2]))
@@ -1879,8 +1905,24 @@
           c(if (n >= 2L) 2L else 1L, n)
         }
         updateSliderInput(session, "fit_data_range", min = 1, max = n, value = new_value, step = 1)
+        if (has_pending) fit_slider_pending_restore(NULL)
         if (force_default) fit_slider_force_default(FALSE)
       }
     }
   })
+
+  observeEvent(input$fit_data_range, {
+    pending <- isolate(fit_slider_pending_restore())
+    pending_num <- suppressWarnings(as.numeric(pending))
+    if (length(pending_num) < 2 || !all(is.finite(pending_num[1:2]))) return()
+
+    cur_num <- suppressWarnings(as.numeric(input$fit_data_range))
+    if (length(cur_num) < 2 || !all(is.finite(cur_num[1:2]))) return()
+
+    cur_int <- as.integer(round(cur_num[1:2]))
+    pending_int <- as.integer(round(pending_num[1:2]))
+    if (identical(cur_int, pending_int)) {
+      fit_slider_pending_restore(NULL)
+    }
+  }, ignoreInit = TRUE)
   

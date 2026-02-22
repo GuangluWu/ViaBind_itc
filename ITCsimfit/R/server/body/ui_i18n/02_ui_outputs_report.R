@@ -101,16 +101,35 @@
 
     is_active <- function(path_id) path_id %in% active_paths
 
+    path_class <- function(path_id) {
+      switch(
+        as.character(path_id)[1],
+        "base" = "path-base",
+        "rxn_D" = "path-rxn-d",
+        "rxn_T" = "path-rxn-t",
+        "rxn_B" = "path-rxn-b",
+        "rxn_F" = "path-rxn-f",
+        "rxn_U" = "path-rxn-u",
+        "path-base"
+      )
+    }
+
+    state_class <- function(active_now) {
+      if (isTRUE(active_now)) "is-active" else "is-inactive"
+    }
+
     edge_toggle_g <- function(path_id, points, tx, ty, label) {
       active_now <- is_active(path_id)
+      path_cls <- path_class(path_id)
+      state_cls <- state_class(active_now)
       tags$g(
         tags$polyline(
           points = points,
-          class = paste("path-edge-line", if (active_now) "is-active" else ""),
+          class = paste("path-edge-line", path_cls, state_cls),
           `marker-end` = "url(#pathArrow)"
         ),
         tags$g(
-          class = paste("path-edge-toggle", if (active_now) "is-active" else ""),
+          class = paste("path-edge-toggle", path_cls, state_cls),
           `data-path-id` = path_id,
           tags$rect(x = tx - 9, y = ty - 9, width = 18, height = 18),
           tags$polyline(
@@ -126,30 +145,48 @@
             x = tx + 17,
             y = ty,
             `dominant-baseline` = "central",
-            class = "path-edge-label",
+            class = paste("path-edge-label", path_cls, state_cls),
             label
           )
         )
       )
     }
 
-    node_g <- function(label, cx, cy, base = FALSE, width = 64, height = 34) {
+    node_g <- function(label, cx, cy, path_id = "base", active = TRUE, width = 64, height = 46) {
+      path_cls <- path_class(path_id)
+      state_cls <- state_class(active)
+      fit_text <- nchar(label, type = "width") >= 8
+      text_attrs <- list(
+        x = cx,
+        y = cy
+      )
+      if (isTRUE(fit_text)) {
+        text_attrs$textLength <- max(width - 10, 1)
+        # Avoid glyph squeezing. Only adjust spacing when label is long.
+        text_attrs$lengthAdjust <- "spacing"
+      }
+      text_node <- do.call(tags$text, c(text_attrs, list(label)))
       tags$g(
-        class = paste("path-node", if (isTRUE(base)) "base-node" else ""),
+        class = paste(
+          "path-node",
+          path_cls,
+          state_cls,
+          if (identical(path_cls, "path-base")) "base-node" else ""
+        ),
         tags$rect(
           x = cx - (width / 2),
           y = cy - (height / 2),
           width = width,
           height = height
         ),
-        tags$text(x = cx, y = cy, label)
+        text_node
       )
     }
 
     tags$div(
       tags$svg(
         class = "path-graph-svg",
-        viewBox = "0 0 560 320",
+        viewBox = "0 0 560 450",
         xmlns = "http://www.w3.org/2000/svg",
         tags$defs(
           tags$marker(
@@ -165,26 +202,26 @@
         ),
 
         # Base path: H/G merge, then one vertical line to M (always on, no toggle)
-        tags$polyline(points = "130,34 430,34", class = "path-edge-line is-active"),
-        tags$polyline(points = "280,34 280,70", class = "path-edge-line is-active", `marker-end` = "url(#pathArrow)"),
-        tags$text(x = 296, y = 56, class = "path-edge-label", "Base"),
+        tags$polyline(points = "130,48 430,48", class = "path-edge-line path-base is-active"),
+        tags$polyline(points = "280,48 280,100", class = "path-edge-line path-base is-active", `marker-end` = "url(#pathArrow)"),
+        tags$text(x = 296, y = 82, class = "path-edge-label path-base is-active", "Base"),
 
         # Toggle paths (all from M, except D -> F)
         # Keep checkbox on the vertical branch segment (same relative position as D -> F).
-        edge_toggle_g("rxn_D", "280,106 280,126 70,126 70,180", 70, 153, "+G"),
-        edge_toggle_g("rxn_T", "280,106 280,126 210,126 210,180", 210, 153, "+M"),
-        edge_toggle_g("rxn_B", "280,106 280,126 350,126 350,180", 350, 153, "+H"),
-        edge_toggle_g("rxn_U", "280,106 280,126 490,126 490,180", 490, 153, "Bend"),
-        edge_toggle_g("rxn_F", "70,216 70,268", 70, 242, "+M"),
+        edge_toggle_g("rxn_D", "280,156 280,188 70,188 70,258", 70, 224, "+G"),
+        edge_toggle_g("rxn_T", "280,156 280,188 210,188 210,258", 210, 224, "+M"),
+        edge_toggle_g("rxn_B", "280,156 280,188 350,188 350,258", 350, 224, "+H"),
+        edge_toggle_g("rxn_U", "280,156 280,188 490,188 490,258", 490, 224, "Bend"),
+        edge_toggle_g("rxn_F", "70,310 70,378", 70, 344, "+M"),
 
-        node_g("H: cell", 130, 34, base = TRUE, width = 92, height = 30),
-        node_g("G: syr.", 430, 34, base = TRUE, width = 92, height = 30),
-        node_g("M: H\u2081G\u2081", 280, 88, base = TRUE, width = 132, height = 36),
-        node_g("D: H\u2081G\u2082", 70, 198, width = 120, height = 36),
-        node_g("T: H\u2082G\u2082", 210, 198, width = 120, height = 36),
-        node_g("B: H\u2082G\u2081", 350, 198, width = 120, height = 36),
-        node_g("U: H\u2081G\u2081", 490, 198, width = 120, height = 36),
-        node_g("F: H\u2082G\u2083", 70, 286, width = 120, height = 36)
+        node_g("H: cell", 130, 48, path_id = "base", active = TRUE, width = 102, height = 42),
+        node_g("G: syr.", 430, 48, path_id = "base", active = TRUE, width = 102, height = 42),
+        node_g("M: H\u2081G\u2081", 280, 128, path_id = "base", active = TRUE, width = 150, height = 56),
+        node_g("D: H\u2081G\u2082", 70, 284, path_id = "rxn_D", active = is_active("rxn_D"), width = 132, height = 52),
+        node_g("T: H\u2082G\u2082", 210, 284, path_id = "rxn_T", active = is_active("rxn_T"), width = 132, height = 52),
+        node_g("B: H\u2082G\u2081", 350, 284, path_id = "rxn_B", active = is_active("rxn_B"), width = 132, height = 52),
+        node_g("U: H\u2081G\u2081", 490, 284, path_id = "rxn_U", active = is_active("rxn_U"), width = 132, height = 52),
+        node_g("F: H\u2082G\u2083", 70, 404, path_id = "rxn_F", active = is_active("rxn_F"), width = 132, height = 52)
       ),
       tags$div(
         class = "path-graph-hint",

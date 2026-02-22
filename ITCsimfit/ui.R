@@ -60,6 +60,19 @@ ui <- fluidPage(
         --c-info-bg:    #d1ecf1; --c-info-text: #0c5460; --c-info-border: #bee5eb;
         /* 淡紫色 (全局搜索/primary)，与其它淡色按钮统一 */
         --c-primary-bg: #e8dcf5; --c-primary-text: #4a2c7a; --c-primary-border: #d4c4eb;
+
+        /* Step 2 路径图/变量区统一配色 */
+        --path-c-base: #3498db;
+        --path-c-rxn-d: #e67e22;
+        --path-c-rxn-t: #9b59b6;
+        --path-c-rxn-b: #f1c40f;
+        --path-c-rxn-f: #1abc9c;
+        --path-c-rxn-u: #e74c3c;
+        --path-c-inactive-stroke: #b8c2cc;
+        --path-c-inactive-fill: #f3f6f9;
+        --path-c-text: #2b3a42;
+        --path-c-text-muted: #6f7e8d;
+        --path-c-rxn-b-ink: #8a6a00;
       }
       
       /* 通用按钮类 (覆盖 Bootstrap) */
@@ -373,85 +386,164 @@ ui <- fluidPage(
         border-radius: 6px;
         background: linear-gradient(180deg, #fbfdff 0%, #f7f9fc 100%);
         padding: 2px 6px 4px 6px;
+        overflow: hidden;
       }
 
       .simfit-root .path-graph-svg {
         width: 100%;
         height: auto;
-        aspect-ratio: 560 / 320;
+        aspect-ratio: 560 / 450;
         display: block;
+        overflow: hidden;
       }
 
       .simfit-root .path-node rect {
-        fill: #ffffff;
-        stroke: #9aa7b5;
-        stroke-width: 1.2;
+        stroke-width: 1.3;
         rx: 7;
         ry: 7;
+        transition: fill 0.15s ease, stroke 0.15s ease, stroke-width 0.15s ease;
       }
 
       .simfit-root .path-node text {
-        font-size: 22px;
-        fill: #2b3a42;
+        font-size: 24px;
+        fill: var(--path-c-text);
         pointer-events: none;
         text-anchor: middle;
         dominant-baseline: central;
+        font-weight: 600;
+        paint-order: stroke fill;
+        stroke: rgba(255,255,255,0.92);
+        stroke-width: 0.6;
+        stroke-linejoin: round;
       }
 
-      .simfit-root .path-node.base-node rect {
-        stroke: #2f80ed;
-        fill: #eef5ff;
+      .simfit-root .path-node.is-inactive rect {
+        fill: var(--path-c-inactive-fill);
+        stroke: var(--path-c-inactive-stroke);
+      }
+
+      .simfit-root .path-node.path-base.is-active rect {
+        fill: #eaf4ff;
+        stroke: var(--path-c-base);
+      }
+
+      .simfit-root .path-node.path-rxn-d.is-active rect {
+        fill: #fff3e8;
+        stroke: var(--path-c-rxn-d);
+      }
+
+      .simfit-root .path-node.path-rxn-t.is-active rect {
+        fill: #f5edfb;
+        stroke: var(--path-c-rxn-t);
+      }
+
+      .simfit-root .path-node.path-rxn-b.is-active rect {
+        fill: #fff8da;
+        stroke: var(--path-c-rxn-b-ink);
+      }
+
+      .simfit-root .path-node.path-rxn-f.is-active rect {
+        fill: #e8fbf7;
+        stroke: var(--path-c-rxn-f);
+      }
+
+      .simfit-root .path-node.path-rxn-u.is-active rect {
+        fill: #fdecea;
+        stroke: var(--path-c-rxn-u);
+      }
+
+      .simfit-root .path-node.path-rxn-b.is-active text {
+        fill: var(--path-c-rxn-b-ink);
       }
 
       .simfit-root .path-edge-line {
-        stroke: #96a1ad;
-        stroke-width: 1.6;
         fill: none;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        transition: stroke 0.15s ease, stroke-width 0.15s ease;
+      }
+
+      .simfit-root .path-edge-line.is-inactive {
+        stroke: var(--path-c-inactive-stroke);
+        stroke-width: 1.3;
       }
 
       .simfit-root .path-edge-line.is-active {
-        stroke: #2f80ed;
-        stroke-width: 2;
+        stroke-width: 2.4;
       }
 
+      .simfit-root .path-edge-line.path-base.is-active { stroke: var(--path-c-base); }
+      .simfit-root .path-edge-line.path-rxn-d.is-active { stroke: var(--path-c-rxn-d); }
+      .simfit-root .path-edge-line.path-rxn-t.is-active { stroke: var(--path-c-rxn-t); }
+      .simfit-root .path-edge-line.path-rxn-b.is-active { stroke: var(--path-c-rxn-b-ink); }
+      .simfit-root .path-edge-line.path-rxn-f.is-active { stroke: var(--path-c-rxn-f); }
+      .simfit-root .path-edge-line.path-rxn-u.is-active { stroke: var(--path-c-rxn-u); }
+
       .simfit-root .path-edge-label {
-        font-size: 22px;
-        fill: #4e5d6c;
+        font-size: 20px;
+        font-weight: 600;
+        fill: var(--path-c-text-muted);
+        paint-order: stroke fill;
+        stroke: rgba(255,255,255,0.92);
+        stroke-width: 1;
+        stroke-linejoin: round;
       }
+
+      .simfit-root .path-edge-label.path-base.is-active { fill: var(--path-c-base); }
+      .simfit-root .path-edge-label.path-rxn-d.is-active { fill: var(--path-c-rxn-d); }
+      .simfit-root .path-edge-label.path-rxn-t.is-active { fill: var(--path-c-rxn-t); }
+      .simfit-root .path-edge-label.path-rxn-b.is-active { fill: var(--path-c-rxn-b-ink); }
+      .simfit-root .path-edge-label.path-rxn-f.is-active { fill: var(--path-c-rxn-f); }
+      .simfit-root .path-edge-label.path-rxn-u.is-active { fill: var(--path-c-rxn-u); }
 
       .simfit-root .path-edge-toggle {
         cursor: pointer;
       }
 
       .simfit-root .path-edge-toggle rect {
-        fill: #ffffff;
-        stroke: #8d99a6;
-        stroke-width: 1.3;
+        transition: fill 0.15s ease, stroke 0.15s ease;
         rx: 3;
         ry: 3;
       }
 
+      .simfit-root .path-edge-toggle.is-inactive rect {
+        fill: var(--path-c-inactive-fill);
+        stroke: var(--path-c-inactive-stroke);
+        stroke-width: 1.2;
+      }
+
+      .simfit-root .path-edge-toggle.is-active rect {
+        fill: #ffffff;
+        stroke-width: 1.5;
+      }
+
+      .simfit-root .path-edge-toggle.path-rxn-d.is-active rect { stroke: var(--path-c-rxn-d); }
+      .simfit-root .path-edge-toggle.path-rxn-t.is-active rect { stroke: var(--path-c-rxn-t); }
+      .simfit-root .path-edge-toggle.path-rxn-b.is-active rect { stroke: var(--path-c-rxn-b-ink); }
+      .simfit-root .path-edge-toggle.path-rxn-f.is-active rect { stroke: var(--path-c-rxn-f); }
+      .simfit-root .path-edge-toggle.path-rxn-u.is-active rect { stroke: var(--path-c-rxn-u); }
+
       .simfit-root .path-edge-toggle .path-check-mark {
         fill: none;
-        stroke: #2f80ed;
         stroke-width: 2.1;
         stroke-linecap: round;
         stroke-linejoin: round;
       }
 
-      .simfit-root .path-edge-toggle:not(.is-active) .path-check-mark {
+      .simfit-root .path-edge-toggle.is-inactive .path-check-mark {
         display: none;
       }
 
-      .simfit-root .path-edge-toggle.is-active rect {
-        stroke: #2f80ed;
-        fill: #eef5ff;
-      }
+      .simfit-root .path-edge-toggle.path-rxn-d.is-active .path-check-mark { stroke: var(--path-c-rxn-d); }
+      .simfit-root .path-edge-toggle.path-rxn-t.is-active .path-check-mark { stroke: var(--path-c-rxn-t); }
+      .simfit-root .path-edge-toggle.path-rxn-b.is-active .path-check-mark { stroke: var(--path-c-rxn-b-ink); }
+      .simfit-root .path-edge-toggle.path-rxn-f.is-active .path-check-mark { stroke: var(--path-c-rxn-f); }
+      .simfit-root .path-edge-toggle.path-rxn-u.is-active .path-check-mark { stroke: var(--path-c-rxn-u); }
 
       .simfit-root .path-graph-hint {
         font-size: 11px;
-        color: #6e7c89;
-        line-height: 1.35;
+        color: var(--path-c-text-muted);
+        line-height: 1.4;
         margin-top: 2px;
         text-align: center;
         white-space: pre-line;
@@ -676,7 +768,7 @@ ui <- fluidPage(
              div(class = "slider-scroll-container",
                  
                 # --- 基础反应 M (始终显示) ---
-                div(class="param-group", style="border-left-color: #3498db;",
+                div(class="param-group", style="border-left-color: var(--path-c-base);",
                     strong(uiOutput("param_base_title", inline = TRUE)),
                     sliderInput("logK1", "logK1", 
                                min = PARAM_BOUNDS$logK["lower"], 
@@ -692,7 +784,7 @@ ui <- fluidPage(
                  
                 # --- Dimer (D) ---
                 conditionalPanel("input.active_paths.includes('rxn_D')",
-                                 div(class="param-group", style="border-left-color: #e67e22;",
+                                 div(class="param-group", style="border-left-color: var(--path-c-rxn-d);",
                                      strong(uiOutput("param_stepwise_title", inline = TRUE)),
                                      sliderInput("logK2", "logK2", 
                                                 min = PARAM_BOUNDS$logK["lower"], 
@@ -708,7 +800,7 @@ ui <- fluidPage(
                  
                 # --- Trimer (T) ---
                 conditionalPanel("input.active_paths.includes('rxn_T')",
-                                 div(class="param-group", style="border-left-color: #9b59b6;",
+                                 div(class="param-group", style="border-left-color: var(--path-c-rxn-t);",
                                      strong(uiOutput("param_dimer_title", inline = TRUE)),
                                      sliderInput("logK3", "logK3", 
                                                 min = PARAM_BOUNDS$logK["lower"], 
@@ -724,7 +816,7 @@ ui <- fluidPage(
                  
                 # --- Host Bind (B) ---
                 conditionalPanel("input.active_paths.includes('rxn_B')",
-                                 div(class="param-group", style="border-left-color: #f1c40f;",
+                                 div(class="param-group", style="border-left-color: var(--path-c-rxn-b);",
                                      strong(uiOutput("param_reverse_title", inline = TRUE)),
                                      sliderInput("logK4", "logK4", 
                                                 min = PARAM_BOUNDS$logK["lower"], 
@@ -740,7 +832,7 @@ ui <- fluidPage(
                  
                # --- T+G (F) ---
                conditionalPanel("input.active_paths.includes('rxn_F')",
-                                div(class="param-group", style="border-left-color: #1abc9c;",
+                                div(class="param-group", style="border-left-color: var(--path-c-rxn-f);",
                                     strong(uiOutput("param_oligomer_title", inline = TRUE)),
                                     sliderInput("logK5", "logK5", 
                                                min = PARAM_BOUNDS$logK["lower"], 
@@ -756,7 +848,7 @@ ui <- fluidPage(
                 
                # --- Bending (U) ---
                conditionalPanel("input.active_paths.includes('rxn_U')",
-                                div(class="param-group", style="border-left-color: #e74c3c;",
+                                div(class="param-group", style="border-left-color: var(--path-c-rxn-u);",
                                     strong(uiOutput("param_bending_title", inline = TRUE)),
                                     sliderInput("logK6", "logK6", 
                                                min = PARAM_BOUNDS$logK["lower"], 
