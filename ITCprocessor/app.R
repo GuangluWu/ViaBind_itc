@@ -112,9 +112,10 @@ ui <- fluidPage(
       sliderInput("offset", tr("anchor_offset"), min = 0, max = 10, value = 5, step = 1),
       sliderInput("duration", tr("anchor_width"), min = 5, max = 60, value = 20, step = 5),
       sliderInput("spar", tr("spline_spar"), min = 0, max = 1, value = 0.1, step = 0.01),
+      uiOutput("ui_baseline_integration_notes"),
       hr(style = "margin: 8px 0;"),
       uiOutput("ui_integration_settings"),
-      numericInput("int_start_offset", tr("start_offset"), value = 0, step = 1),
+      numericInput("int_start_offset", tr("start_offset"), value = -3, step = 1),
       checkboxInput("limit_integration", tr("limit_integration"), value = TRUE),
       conditionalPanel(
         condition = "input.limit_integration == true",
@@ -364,6 +365,26 @@ server <- function(input, output, session) {
     )
   })
   output$ui_integration_settings <- renderUI({ h4(tr("integration_settings", lang())) })
+  output$ui_baseline_integration_notes <- renderUI({
+    tags$details(
+      style = "margin: 0 0 8px 0;",
+      tags$summary(
+        style = "cursor: pointer; color: #2980b9; font-size: 0.95em;",
+        tr("param_notes_title", lang())
+      ),
+      div(
+        style = "margin-top: 8px; padding: 8px; background-color: #f0f8ff; border-left: 3px solid #2980b9; font-size: 0.9em; line-height: 1.6;",
+        tags$p(tr("param_notes_spline", lang()), style = "margin: 0 0 6px 0;"),
+        tags$p(tr("param_notes_assumption", lang()), style = "margin: 0 0 6px 0;"),
+        tags$p(tr("param_notes_window", lang()), style = "margin: 0 0 6px 0;"),
+        tags$p(tr("param_notes_auto", lang()), style = "margin: 0 0 6px 0;"),
+        tags$p(tr("param_notes_check", lang()), style = "margin: 0 0 6px 0;"),
+        tags$p(tr("param_notes_integration", lang()), style = "margin: 0 0 6px 0;"),
+        tags$p(tr("param_notes_start", lang()), style = "margin: 0 0 6px 0;"),
+        tags$p(tr("param_notes_end", lang()), style = "margin: 0;")
+      )
+    )
+  })
   output$ui_expt_params <- renderUI({ h4(tr("expt_params", lang())) })
   output$ui_param_n_inj <- renderText({ tr("n_inj", lang()) })
   output$ui_param_interval <- renderText({ tr("interval_s", lang()) })
