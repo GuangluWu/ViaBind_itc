@@ -159,13 +159,43 @@ NOTIFICATION_DURATION <- list(
 # 文件和路径常量
 # ==============================================================================
 
+resolve_itcsuite_data_dir <- function() {
+  from_env <- trimws(as.character(Sys.getenv("ITCSUITE_USER_DATA_DIR", unset = ""))[1])
+  if (nzchar(from_env)) {
+    return(tryCatch(normalizePath(from_env, winslash = "/", mustWork = FALSE), error = function(e) from_env))
+  }
+  tryCatch(
+    normalizePath(tools::R_user_dir("itcsuite", which = "data"), winslash = "/", mustWork = FALSE),
+    error = function(e) tools::R_user_dir("itcsuite", which = "data")
+  )
+}
+
+resolve_itcsuite_logs_dir <- function() {
+  candidates <- unique(c(
+    file.path(resolve_itcsuite_data_dir(), "logs"),
+    file.path(tempdir(), "itcsuite", "logs"),
+    file.path(getwd(), "logs")
+  ))
+  for (cand in candidates) {
+    ok <- tryCatch({
+      dir.create(cand, recursive = TRUE, showWarnings = FALSE)
+      dir.exists(cand)
+    }, error = function(e) FALSE)
+    if (isTRUE(ok)) return(cand)
+  }
+  file.path(getwd(), "logs")
+}
+
 # 文件路径
-FILE_PATHS <- list(
-  i18n_table = "i18n_translation_table.csv",
-  guide_annotations = file.path("config", "guide_annotations.v1.csv"),
-  error_log = "error.log",
-  session_log = "session.log"
-)
+FILE_PATHS <- local({
+  logs_dir <- resolve_itcsuite_logs_dir()
+  list(
+    i18n_table = "i18n_translation_table.csv",
+    guide_annotations = file.path("config", "guide_annotations.v1.csv"),
+    error_log = file.path(logs_dir, "error.log"),
+    session_log = file.path(logs_dir, "session.log")
+  )
+})
 
 # ==============================================================================
 # 引导注释配置常量（Phase 4）

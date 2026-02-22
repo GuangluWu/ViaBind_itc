@@ -36,6 +36,22 @@
       fname
     },
     content = function(file) {
+      op_id <- telemetry_start(
+        event = "step2.export",
+        payload = list(action = "export_params_snapshot", format = "xlsx")
+      )
+      op_finished <- FALSE
+      finish_export <- function(outcome = "ok", payload = list(), err = NULL, level = NULL) {
+        if (isTRUE(op_finished)) return(invisible(NULL))
+        op_finished <<- TRUE
+        telemetry_finish(op_id, outcome = outcome, payload = payload, err = err, level = level)
+      }
+      on.exit({
+        if (!isTRUE(op_finished)) {
+          finish_export(outcome = "error", payload = list(reason = "unexpected_exit"), level = "ERROR")
+        }
+      }, add = TRUE)
+
       export_df <- as.data.frame(values$param_list)
       checked_ids <- as.character(values$param_checked_ids %||% character(0))
       if (!is.null(export_df) && nrow(export_df) > 0 && "row_id" %in% colnames(export_df)) {
@@ -48,7 +64,10 @@
       if ("row_id" %in% colnames(export_df)) {
         export_df$row_id <- NULL
       }
-      if (length(checked_ids) == 0) return(invisible(NULL))
+      if (length(checked_ids) == 0) {
+        finish_export(outcome = "error", payload = list(reason = "none_selected"), level = "WARN")
+        return(invisible(NULL))
+      }
       # 重命名实验条件列，加单位后缀（内部名 → 文件名）
       col_rename <- c(
         "H_cell_0" = "H_cell_0_mM", "G_syringe" = "G_syringe_mM",
@@ -77,7 +96,13 @@
       if (nzchar(import_raw) && !startsWith(import_raw, "bridge://")) {
         source_import_path <- normalize_step2_export_path(import_raw)
       }
-      if (!nzchar(source_import_path)) return(invisible(NULL))
+      if (!nzchar(source_import_path)) {
+        finish_export(
+          outcome = "ok",
+          payload = list(target_file = file, source_path_linked = FALSE, checked = length(checked_ids))
+        )
+        return(invisible(NULL))
+      }
       home_add_recent_export(
         list(
           display_name = export_name,
@@ -88,6 +113,14 @@
           source_path = source_import_path,
           artifact_path = export_path,
           source_path_kind = "import"
+        )
+      )
+      finish_export(
+        outcome = "ok",
+        payload = list(
+          target_file = file,
+          source_path = source_import_path,
+          checked = length(checked_ids)
         )
       )
     }
@@ -227,8 +260,15 @@
   }
 
   publish_step2_plot_payload <- function(sim = NULL) {
+    op_id <- telemetry_start(
+      event = "step2.bridge",
+      payload = list(action = "send_to_step3")
+    )
     bundle <- build_fit_export_bundle(sim = sim)
-    if (is.null(bundle)) return(invisible(FALSE))
+    if (is.null(bundle)) {
+      telemetry_finish(op_id, outcome = "error", payload = list(reason = "bundle_null"), level = "ERROR")
+      return(invisible(FALSE))
+    }
     src_info <- resolve_step2_plot_source()
     source_path <- resolve_step2_plot_source_path()
     token <- next_bridge_token()
@@ -245,6 +285,16 @@
       fit_params = bundle$fit_params %||% data.frame(),
       simulation = bundle$simulation %||% data.frame()
     ))
+    telemetry_finish(
+      op_id,
+      outcome = "ok",
+      payload = list(
+        token = token,
+        source = src_info$source %||% "bridge",
+        source_label = src_info$source_label %||% "",
+        sheet_count = length(bundle$sheets %||% list())
+      )
+    )
     invisible(TRUE)
   }
   
@@ -254,9 +304,19 @@
     sim <- tryCatch(sim_results(), error = function(e) NULL)
     ok <- isTRUE(publish_step2_plot_payload(sim = sim))
     if (!ok) {
+      telemetry_log(
+        event = "step2.bridge",
+        level = "WARN",
+        payload = list(action = "send_to_step3", outcome = "error")
+      )
       showNotification(tr("no_data_step3", lang()), type = "warning", duration = 3)
       return()
     }
+    telemetry_log(
+      event = "step2.bridge",
+      level = "INFO",
+      payload = list(action = "send_to_step3", outcome = "ok")
+    )
     tryCatch({
       updateTabsetPanel(session, "main_tabs", selected = "step3")
     }, error = function(e) NULL)
@@ -273,8 +333,25 @@
       fname
     },
     content = function(file) {
+      op_id <- telemetry_start(
+        event = "step2.export",
+        payload = list(action = "export_fitted_bundle", format = "xlsx")
+      )
+      op_finished <- FALSE
+      finish_export <- function(outcome = "ok", payload = list(), err = NULL, level = NULL) {
+        if (isTRUE(op_finished)) return(invisible(NULL))
+        op_finished <<- TRUE
+        telemetry_finish(op_id, outcome = outcome, payload = payload, err = err, level = level)
+      }
+      on.exit({
+        if (!isTRUE(op_finished)) {
+          finish_export(outcome = "error", payload = list(reason = "unexpected_exit"), level = "ERROR")
+        }
+      }, add = TRUE)
+
       bundle <- build_fit_export_bundle()
       if (is.null(bundle)) {
+        finish_export(outcome = "error", payload = list(reason = "bundle_null"), level = "ERROR")
         showNotification(tr("export_error_no_data", lang()), type = "error", duration = 5)
         writexl::write_xlsx(list(error = data.frame(Note = tr("export_error_no_data_note", lang()))), path = file)
         return()
@@ -294,6 +371,13 @@
           source_path = export_path,
           artifact_path = export_path,
           source_path_kind = "artifact"
+        )
+      )
+      finish_export(
+        outcome = "ok",
+        payload = list(
+          target_file = file,
+          sheet_count = length(bundle$sheets %||% list())
         )
       )
     }

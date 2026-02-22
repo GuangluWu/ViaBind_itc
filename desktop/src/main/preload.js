@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const OPEN_FILE_CHANNEL = "itcsuite:open-file";
+const EXPORT_DIAGNOSTICS_CHANNEL = "itcsuite:export-diagnostics";
 
 function trimScalar(value, defaultValue = "") {
   const out = typeof value === "string" ? value : String(value ?? "");
@@ -42,6 +43,16 @@ function sanitizePayload(payload) {
   };
 }
 
+function sanitizeDiagnosticsPayload(payload) {
+  const raw = payload && typeof payload === "object" ? payload : {};
+  const privacyMode = trimScalar(raw.privacy_mode, "default_redacted");
+  return {
+    request_id: trimScalar(raw.request_id, ""),
+    privacy_mode: privacyMode,
+    reason: trimScalar(raw.reason, "")
+  };
+}
+
 contextBridge.exposeInMainWorld("itcsuiteDesktop", {
   openFile: async (payload = {}) => {
     const normalized = sanitizePayload(payload);
@@ -54,6 +65,19 @@ contextBridge.exposeInMainWorld("itcsuiteDesktop", {
         file_path: "",
         file_name: "",
         error: "Invalid response from desktop open file handler."
+      };
+    }
+    return response;
+  },
+  exportDiagnostics: async (payload = {}) => {
+    const normalized = sanitizeDiagnosticsPayload(payload);
+    const response = await ipcRenderer.invoke(EXPORT_DIAGNOSTICS_CHANNEL, normalized);
+    if (!response || typeof response !== "object") {
+      return {
+        request_id: normalized.request_id,
+        ok: false,
+        file_path: "",
+        error: "Invalid response from diagnostics export handler."
       };
     }
     return response;

@@ -39,6 +39,66 @@
     if (is.null(d) || !is.list(d)) NULL else d
   }, error = function(e) NULL)
 
+  session_telemetry <- tryCatch({
+    t <- session$userData$itcsuite_telemetry
+    if (is.null(t) || !is.list(t)) NULL else t
+  }, error = function(e) NULL)
+
+  telemetry_lang_safe <- function() {
+    out <- tryCatch(lang(), error = function(e) "en")
+    if (identical(out, "zh")) "zh" else "en"
+  }
+
+  telemetry_log <- function(event, level = "INFO", payload = list(), err = NULL, op_id = NULL) {
+    fn <- if (!is.null(session_telemetry)) session_telemetry$log_event else NULL
+    if (!is.function(fn)) return(invisible(NULL))
+    tryCatch(
+      fn(
+        event = event,
+        level = level,
+        module = "step2",
+        payload = payload,
+        err = err,
+        op_id = op_id,
+        lang = telemetry_lang_safe()
+      ),
+      error = function(e) invisible(NULL)
+    )
+  }
+
+  telemetry_start <- function(event, payload = list()) {
+    fn <- if (!is.null(session_telemetry)) session_telemetry$start_op else NULL
+    if (!is.function(fn)) return("")
+    tryCatch(
+      fn(event = event, module = "step2", payload = payload, lang = telemetry_lang_safe()),
+      error = function(e) ""
+    )
+  }
+
+  telemetry_finish <- function(op_id, outcome = "ok", payload = list(), err = NULL, level = NULL) {
+    fn <- if (!is.null(session_telemetry)) session_telemetry$finish_op else NULL
+    if (!is.function(fn)) return(invisible(NULL))
+    tryCatch(
+      fn(
+        op_id = op_id,
+        outcome = outcome,
+        payload = payload,
+        err = err,
+        level = level,
+        lang = telemetry_lang_safe()
+      ),
+      error = function(e) invisible(NULL)
+    )
+    if (!identical(outcome, "ok")) {
+      telemetry_log(
+        event = "error.runtime",
+        level = "ERROR",
+        payload = list(op_id = op_id, outcome = outcome, context = "step2"),
+        err = err
+      )
+    }
+  }
+
   desktop_open_file_enabled <- function() {
     fn <- if (!is.null(session_desktop)) session_desktop$enabled else NULL
     if (!is.function(fn)) return(FALSE)

@@ -19,6 +19,12 @@ home_desktop_capability_open_file <- function(capability) {
   FALSE
 }
 
+home_desktop_capability_export_diagnostics <- function(capability) {
+  if (is.null(capability)) return(FALSE)
+  if (is.list(capability)) return(isTRUE(capability$export_diagnostics))
+  FALSE
+}
+
 home_desktop_sanitize_filters <- function(
   filters,
   fallback_name = "Data Files",
@@ -96,6 +102,16 @@ home_desktop_normalize_open_file_result <- function(result) {
     canceled = isTRUE(src$canceled),
     file_path = home_desktop_scalar_chr(src$file_path, default = ""),
     file_name = home_desktop_scalar_chr(src$file_name, default = ""),
+    error = home_desktop_scalar_chr(src$error, default = "")
+  )
+}
+
+home_desktop_normalize_export_diagnostics_result <- function(result) {
+  src <- if (is.list(result)) result else list()
+  list(
+    request_id = home_desktop_scalar_chr(src$request_id, default = ""),
+    ok = isTRUE(src$ok),
+    file_path = home_desktop_scalar_chr(src$file_path, default = ""),
     error = home_desktop_scalar_chr(src$error, default = "")
   )
 }

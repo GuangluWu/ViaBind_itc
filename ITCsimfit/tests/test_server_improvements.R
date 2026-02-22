@@ -5,9 +5,39 @@
 
 cat("测试 server.R 改进...\n\n")
 
+resolve_repo_root <- function() {
+  env_root <- Sys.getenv("ITCSUITE_REPO_ROOT", unset = "")
+  if (nzchar(env_root)) {
+    p <- normalizePath(env_root, winslash = "/", mustWork = FALSE)
+    if (dir.exists(file.path(p, "ITCsimfit")) && dir.exists(file.path(p, "tests"))) {
+      return(normalizePath(p, winslash = "/", mustWork = TRUE))
+    }
+  }
+
+  cur <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
+  for (i in 0:8) {
+    if (dir.exists(file.path(cur, "ITCsimfit")) && dir.exists(file.path(cur, "tests"))) {
+      return(normalizePath(cur, winslash = "/", mustWork = TRUE))
+    }
+    parent <- dirname(cur)
+    if (identical(parent, cur)) break
+    cur <- parent
+  }
+  stop("Cannot resolve repository root.")
+}
+
+repo_root <- resolve_repo_root()
+itcsimfit_dir <- file.path(repo_root, "ITCsimfit")
+
 # 加载必要的模块
-source("R/constants.R")
-source("R/utils.R")
+source(file.path(itcsimfit_dir, "R", "constants.R"))
+source(file.path(itcsimfit_dir, "R", "utils.R"))
+
+session_log_path <- if (exists("FILE_PATHS") && is.list(FILE_PATHS) && !is.null(FILE_PATHS$session_log)) {
+  as.character(FILE_PATHS$session_log)[1]
+} else {
+  file.path(itcsimfit_dir, "session.log")
+}
 
 # 测试计数器
 tests_passed <- 0
@@ -209,8 +239,8 @@ assert_true(is.null(result_null), "safe_execute 错误时默认返回 NULL")
 cat("\n[测试] 日志记录\n")
 
 # 清理旧日志（如果存在）
-if(file.exists("session.log")) {
-  file.remove("session.log")
+if(file.exists(session_log_path)) {
+  file.remove(session_log_path)
 }
 
 # 记录一些信息
@@ -218,11 +248,11 @@ log_info("测试信息1", context = "测试")
 log_info("测试信息2", context = "测试")
 
 # 检查日志文件是否创建
-assert_true(file.exists("session.log"), "session.log 文件已创建")
+assert_true(file.exists(session_log_path), "session.log 文件已创建")
 
 # 读取并验证日志内容
-if(file.exists("session.log")) {
-  log_content <- readLines("session.log")
+if(file.exists(session_log_path)) {
+  log_content <- readLines(session_log_path)
   assert_true(length(log_content) >= 2, "至少有2条日志记录")
   assert_true(any(grepl("测试信息1", log_content)), "日志包含测试信息1")
   assert_true(any(grepl("测试信息2", log_content)), "日志包含测试信息2")
@@ -249,8 +279,8 @@ if(tests_failed == 0) {
 cat(paste(rep("=", 70), collapse = ""), "\n")
 
 # 清理测试日志
-if(file.exists("session.log")) {
-  file.remove("session.log")
+if(file.exists(session_log_path)) {
+  file.remove(session_log_path)
 }
 
 # 返回测试结果

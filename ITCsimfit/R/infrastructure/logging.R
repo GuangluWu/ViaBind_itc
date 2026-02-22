@@ -6,12 +6,37 @@
 #'
 #' @param level Log level.
 #' @return File path string.
+resolve_runtime_logs_dir <- function() {
+  from_env <- trimws(as.character(Sys.getenv("ITCSUITE_USER_DATA_DIR", unset = ""))[1])
+  base_dir <- from_env
+  if (!nzchar(base_dir)) {
+    base_dir <- tryCatch(
+      tools::R_user_dir("itcsuite", which = "data"),
+      error = function(e) getwd()
+    )
+  }
+  candidates <- unique(c(
+    tryCatch(normalizePath(file.path(base_dir, "logs"), winslash = "/", mustWork = FALSE), error = function(e) file.path(base_dir, "logs")),
+    file.path(tempdir(), "itcsuite", "logs"),
+    file.path(getwd(), "logs")
+  ))
+  for (cand in candidates) {
+    ok <- tryCatch({
+      dir.create(cand, recursive = TRUE, showWarnings = FALSE)
+      dir.exists(cand)
+    }, error = function(e) FALSE)
+    if (isTRUE(ok)) return(cand)
+  }
+  file.path(getwd(), "logs")
+}
+
 resolve_log_file <- function(level = "INFO") {
   level_norm <- toupper(as.character(level)[1])
   has_paths <- exists("FILE_PATHS", envir = .GlobalEnv)
 
   if (!has_paths) {
-    return(if (level_norm %in% c("WARN", "ERROR")) "error.log" else "session.log")
+    logs_dir <- resolve_runtime_logs_dir()
+    return(if (level_norm %in% c("WARN", "ERROR")) file.path(logs_dir, "error.log") else file.path(logs_dir, "session.log"))
   }
 
   if (level_norm %in% c("WARN", "ERROR")) {
@@ -68,6 +93,15 @@ itc_log <- function(level = "INFO",
     }
 
     tryCatch({
+      ok_dir <- tryCatch({
+        dir.create(dirname(target_file), recursive = TRUE, showWarnings = FALSE)
+        dir.exists(dirname(target_file))
+      }, error = function(e) FALSE)
+      if (!isTRUE(ok_dir)) {
+        fallback_file <- file.path(tempdir(), "itcsuite", "logs", basename(target_file))
+        dir.create(dirname(fallback_file), recursive = TRUE, showWarnings = FALSE)
+        target_file <- fallback_file
+      }
       cat(paste0(entry, "\n"), file = target_file, append = TRUE)
     }, error = function(e) {
       warning("Failed to append log entry: ", e$message, call. = FALSE)

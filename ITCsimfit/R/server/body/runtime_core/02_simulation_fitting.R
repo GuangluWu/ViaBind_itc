@@ -190,6 +190,29 @@
     if(is.null(lang_val) || length(lang_val) == 0 || !lang_val %in% c("zh", "en")) {
       lang_val <- "en"
     }
+    algo_name <- if (isTRUE(use_DE)) "DE" else "L-BFGS-B"
+    fit_op_id <- telemetry_start(
+      event = "step2.fit",
+      payload = list(
+        stage = "run",
+        algorithm = algo_name,
+        max_iters = max_iters,
+        weighted = isTRUE(use_weighted),
+        robust = isTRUE(use_robust)
+      )
+    )
+    fit_op_finished <- FALSE
+    finish_fit <- function(outcome = "ok", payload = list(), err = NULL, level = NULL) {
+      if (isTRUE(fit_op_finished)) return(invisible(NULL))
+      fit_op_finished <<- TRUE
+      telemetry_finish(
+        fit_op_id,
+        outcome = outcome,
+        payload = c(list(algorithm = algo_name), payload),
+        err = err,
+        level = level
+      )
+    }
     par_vec <- unlist(p_curr[params_to_opt])
     fit_fixed_p <- fixed_p
     
@@ -267,15 +290,18 @@
     
     # 检查1: 模拟是否成功
     if(is.list(sim_res_check) && !is.null(sim_res_check$error_msg)) {
+      finish_fit(outcome = "error", payload = list(reason = "sim_cannot_start"), level = "ERROR")
       return(list(error = paste(tr("fit_error_cannot_start", lang_val), sim_res_check$error_msg)))
     }
     if(is.null(sim_res_check)) {
+      finish_fit(outcome = "error", payload = list(reason = "sim_null"), level = "ERROR")
       return(list(error = tr("fit_error_sim_null", lang_val)))
     }
     
     # 检查2: 模拟结果是否有效
     if(any(!is.finite(sim_res_check$dQ_App))) {
       n_inf <- sum(!is.finite(sim_res_check$dQ_App))
+      finish_fit(outcome = "error", payload = list(reason = "invalid_values", invalid_count = n_inf), level = "ERROR")
       return(list(error = trf("fit_error_invalid_values", lang_val, count = n_inf)))
     }
     
@@ -284,6 +310,11 @@
     valid_idx_check <- range_lim[1]:range_lim[2]
     valid_idx_check <- valid_idx_check[valid_idx_check <= max_idx_check]
     if(length(valid_idx_check) == 0) {
+      finish_fit(
+        outcome = "error",
+        payload = list(reason = "invalid_range", range_start = range_lim[1], range_end = range_lim[2]),
+        level = "ERROR"
+      )
       return(list(error = trf("fit_error_invalid_range", lang_val, 
                               sim_count = nrow(sim_res_check), 
                               exp_count = nrow(exp_df),
@@ -298,9 +329,11 @@
       tryCatch({
         actual_rss <- sum((sim_res_check$dQ_App[valid_idx_check] - exp_df$Heat_Raw[valid_idx_check])^2)
         if(is.finite(actual_rss)) {
+          finish_fit(outcome = "error", payload = list(reason = "rss_too_large", rss = actual_rss), level = "ERROR")
           return(list(error = trf("fit_error_rss_too_large", lang_val, rss = formatC(actual_rss, format="e", digits=2))))
         }
       }, error = function(e) {})
+      finish_fit(outcome = "error", payload = list(reason = "no_match"), level = "ERROR")
       return(list(error = tr("fit_error_no_match", lang_val)))
     }
     
@@ -332,6 +365,7 @@
           lang_val = lang_val,
           show_to_user = FALSE
         )
+        finish_fit(outcome = "error", payload = list(reason = "deoptim_missing"), level = "ERROR")
         return(list(error = tr("fit_error_deoptim_required", lang_val)))
       }
       
@@ -377,6 +411,7 @@
       # 检查优化是否成功
       if(is.null(out)) {
         log_warning("DE优化失败", context = "perform_fitting_sync")
+        finish_fit(outcome = "error", payload = list(reason = "de_failed"), level = "ERROR")
         return(list(error = tr("fit_error_process", lang_val)))
       }
       
@@ -436,6 +471,7 @@
     }
     
     if(is.null(res)) {
+      finish_fit(outcome = "error", payload = list(reason = "optimizer_null"), level = "ERROR")
       return(list(error = tr("fit_error_process", lang_val)))
     }
     
@@ -452,6 +488,17 @@
       range_lim = range_lim,
       exp_df = exp_df,
       enable_error_analysis = enable_error_analysis
+    )
+
+    fit_value <- suppressWarnings(as.numeric(res$value)[1])
+    fit_conv <- suppressWarnings(as.integer(res$convergence)[1])
+    finish_fit(
+      outcome = "ok",
+      payload = list(
+        value = if (is.finite(fit_value)) fit_value else NULL,
+        convergence = if (is.finite(fit_conv)) fit_conv else NULL,
+        params_count = length(par_vec)
+      )
     )
     
     return(result)

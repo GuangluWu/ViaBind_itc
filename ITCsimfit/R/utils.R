@@ -22,6 +22,14 @@ if (!exists("itc_log_info", mode = "function")) {
     message(entry)
     if (isTRUE(log_to_file)) {
       log_file <- if (exists("FILE_PATHS")) FILE_PATHS$session_log else "session.log"
+      ok_dir <- tryCatch({
+        dir.create(dirname(log_file), recursive = TRUE, showWarnings = FALSE)
+        dir.exists(dirname(log_file))
+      }, error = function(e) FALSE)
+      if (!isTRUE(ok_dir)) {
+        log_file <- file.path(tempdir(), "itcsuite", "logs", "session.log")
+        try(dir.create(dirname(log_file), recursive = TRUE, showWarnings = FALSE), silent = TRUE)
+      }
       cat(paste0(entry, "\n"), file = log_file, append = TRUE)
     }
     invisible(entry)
@@ -36,6 +44,14 @@ if (!exists("itc_log_warn", mode = "function")) {
     warning(entry, call. = FALSE)
     if (isTRUE(log_to_file)) {
       log_file <- if (exists("FILE_PATHS")) FILE_PATHS$error_log else "error.log"
+      ok_dir <- tryCatch({
+        dir.create(dirname(log_file), recursive = TRUE, showWarnings = FALSE)
+        dir.exists(dirname(log_file))
+      }, error = function(e) FALSE)
+      if (!isTRUE(ok_dir)) {
+        log_file <- file.path(tempdir(), "itcsuite", "logs", "error.log")
+        try(dir.create(dirname(log_file), recursive = TRUE, showWarnings = FALSE), silent = TRUE)
+      }
       cat(paste0(entry, "\n"), file = log_file, append = TRUE)
     }
     invisible(entry)
@@ -50,6 +66,14 @@ if (!exists("itc_log_error", mode = "function")) {
     warning(entry, call. = FALSE)
     if (isTRUE(log_to_file)) {
       log_file <- if (exists("FILE_PATHS")) FILE_PATHS$error_log else "error.log"
+      ok_dir <- tryCatch({
+        dir.create(dirname(log_file), recursive = TRUE, showWarnings = FALSE)
+        dir.exists(dirname(log_file))
+      }, error = function(e) FALSE)
+      if (!isTRUE(ok_dir)) {
+        log_file <- file.path(tempdir(), "itcsuite", "logs", "error.log")
+        try(dir.create(dirname(log_file), recursive = TRUE, showWarnings = FALSE), silent = TRUE)
+      }
       cat(paste0(entry, "\n"), file = log_file, append = TRUE)
     }
     invisible(entry)

@@ -96,6 +96,66 @@ server <- function(input, output, session) {
     if (is.null(d) || !is.list(d)) NULL else d
   }, error = function(e) NULL)
 
+  session_telemetry <- tryCatch({
+    t <- session$userData$itcsuite_telemetry
+    if (is.null(t) || !is.list(t)) NULL else t
+  }, error = function(e) NULL)
+
+  telemetry_lang_safe <- function() {
+    out <- tryCatch(lang(), error = function(e) "en")
+    if (identical(out, "zh")) "zh" else "en"
+  }
+
+  telemetry_log <- function(event, level = "INFO", payload = list(), err = NULL, op_id = NULL) {
+    fn <- if (!is.null(session_telemetry)) session_telemetry$log_event else NULL
+    if (!is.function(fn)) return(invisible(NULL))
+    tryCatch(
+      fn(
+        event = event,
+        level = level,
+        module = "step3",
+        payload = payload,
+        err = err,
+        op_id = op_id,
+        lang = telemetry_lang_safe()
+      ),
+      error = function(e) invisible(NULL)
+    )
+  }
+
+  telemetry_start <- function(event, payload = list()) {
+    fn <- if (!is.null(session_telemetry)) session_telemetry$start_op else NULL
+    if (!is.function(fn)) return("")
+    tryCatch(
+      fn(event = event, module = "step3", payload = payload, lang = telemetry_lang_safe()),
+      error = function(e) ""
+    )
+  }
+
+  telemetry_finish <- function(op_id, outcome = "ok", payload = list(), err = NULL, level = NULL) {
+    fn <- if (!is.null(session_telemetry)) session_telemetry$finish_op else NULL
+    if (!is.function(fn)) return(invisible(NULL))
+    tryCatch(
+      fn(
+        op_id = op_id,
+        outcome = outcome,
+        payload = payload,
+        err = err,
+        level = level,
+        lang = telemetry_lang_safe()
+      ),
+      error = function(e) invisible(NULL)
+    )
+    if (!identical(outcome, "ok")) {
+      telemetry_log(
+        event = "error.runtime",
+        level = "ERROR",
+        payload = list(op_id = op_id, outcome = outcome, context = "step3"),
+        err = err
+      )
+    }
+  }
+
   desktop_open_file_enabled <- function() {
     fn <- if (!is.null(session_desktop)) session_desktop$enabled else NULL
     if (!is.function(fn)) return(FALSE)
@@ -1095,11 +1155,26 @@ server <- function(input, output, session) {
   # 4. 数据导入
   # ============================================================
   import_step3_xlsx <- function(filepath, display_name = "data.xlsx", notify_messages = TRUE) {
+    op_id <- telemetry_start(
+      event = "step3.import",
+      payload = list(action = "import_xlsx")
+    )
+    op_finished <- FALSE
+    finish_import <- function(outcome = "ok", payload = list(), err = NULL, level = NULL) {
+      if (isTRUE(op_finished)) return(invisible(NULL))
+      op_finished <<- TRUE
+      telemetry_finish(op_id, outcome = outcome, payload = payload, err = err, level = level)
+    }
+
     path_norm <- normalize_step3_path(filepath)
-    if (!nzchar(path_norm) || !file.exists(path_norm)) return(FALSE)
+    if (!nzchar(path_norm) || !file.exists(path_norm)) {
+      finish_import(outcome = "error", payload = list(reason = "path_missing", file_path = path_norm), level = "ERROR")
+      return(FALSE)
+    }
     name_norm <- normalize_step3_file_name(display_name, default = basename(path_norm))
     sheets <- read_step3_xlsx_sheets(path_norm)
     if (is.null(sheets) || !is.list(sheets) || length(sheets) < 1) {
+      finish_import(outcome = "error", payload = list(reason = "invalid_workbook", file_name = name_norm), level = "ERROR")
       showNotification(paste0(graph_tr("import_failed_prefix", lang()), "Invalid or empty workbook."), type = "error", duration = 8)
       return(FALSE)
     }
@@ -1113,12 +1188,27 @@ server <- function(input, output, session) {
         notify_messages = isTRUE(notify_messages)
       ))
       if (!isTRUE(ok)) {
+        finish_import(outcome = "error", payload = list(reason = "apply_failed", file_name = name_norm), level = "ERROR")
         showNotification(graph_tr("no_data_warning", lang()), type = "warning", duration = 4)
         return(FALSE)
       }
       record_step3_recent_import(name_norm, source_path = path_norm)
+      finish_import(
+        outcome = "ok",
+        payload = list(
+          file_name = name_norm,
+          file_path = path_norm,
+          sheet_count = length(sheets)
+        )
+      )
       TRUE
     }, error = function(e) {
+      finish_import(
+        outcome = "error",
+        payload = list(reason = "exception", file_name = name_norm, file_path = path_norm),
+        err = e,
+        level = "ERROR"
+      )
       showNotification(paste0(graph_tr("import_failed_prefix", lang()), e$message), type = "error", duration = 8)
       FALSE
     })
@@ -1445,8 +1535,13 @@ server <- function(input, output, session) {
       fname
     },
     content = function(file) {
+      op_id <- telemetry_start(
+        event = "step3.export",
+        payload = list(action = "export_pdf", format = "pdf")
+      )
       fig <- current_figure()
       if (is.null(fig)) {
+        telemetry_finish(op_id, outcome = "error", payload = list(reason = "no_figure"), level = "WARN")
         showNotification(graph_tr("no_data_warning", lang()), type = "warning")
         return()
       }
@@ -1457,12 +1552,29 @@ server <- function(input, output, session) {
         )
       )
       pdf_title <- graph_meta_scalar_chr(pdf_meta$title, default = build_viabind_signature("ITCgraph"))
-      ggsave(file, plot = fig, device = "pdf",
-             width = input$export_width %||% PLOT_DEFAULTS$export_width,
-             height = input$export_height %||% PLOT_DEFAULTS$export_height,
-             units = "in", dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi,
-             title = pdf_title)
-      record_step3_recent_export(file, "pdf")
+      tryCatch({
+        ggsave(file, plot = fig, device = "pdf",
+               width = input$export_width %||% PLOT_DEFAULTS$export_width,
+               height = input$export_height %||% PLOT_DEFAULTS$export_height,
+               units = "in", dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi,
+               title = pdf_title)
+        record_step3_recent_export(file, "pdf")
+      }, error = function(e) {
+        telemetry_finish(op_id, outcome = "error", payload = list(reason = "ggsave_failed", format = "pdf"), err = e, level = "ERROR")
+        showNotification(paste0(graph_tr("settings_import_failed_prefix", lang()), e$message), type = "error", duration = 8)
+        return(invisible(NULL))
+      })
+      telemetry_finish(
+        op_id,
+        outcome = "ok",
+        payload = list(
+          format = "pdf",
+          file_path = file,
+          width = input$export_width %||% PLOT_DEFAULTS$export_width,
+          height = input$export_height %||% PLOT_DEFAULTS$export_height,
+          dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi
+        )
+      )
     }
   )
   
@@ -1474,17 +1586,39 @@ server <- function(input, output, session) {
       fname
     },
     content = function(file) {
+      op_id <- telemetry_start(
+        event = "step3.export",
+        payload = list(action = "export_png", format = "png")
+      )
       fig <- current_figure()
       if (is.null(fig)) {
+        telemetry_finish(op_id, outcome = "error", payload = list(reason = "no_figure"), level = "WARN")
         showNotification(graph_tr("no_data_warning", lang()), type = "warning")
         return()
       }
-      ggsave(file, plot = fig, device = "png",
-             width = input$export_width %||% PLOT_DEFAULTS$export_width,
-             height = input$export_height %||% PLOT_DEFAULTS$export_height,
-             units = "in", dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi,
-             bg = "white")
-      record_step3_recent_export(file, "png")
+      tryCatch({
+        ggsave(file, plot = fig, device = "png",
+               width = input$export_width %||% PLOT_DEFAULTS$export_width,
+               height = input$export_height %||% PLOT_DEFAULTS$export_height,
+               units = "in", dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi,
+               bg = "white")
+        record_step3_recent_export(file, "png")
+      }, error = function(e) {
+        telemetry_finish(op_id, outcome = "error", payload = list(reason = "ggsave_failed", format = "png"), err = e, level = "ERROR")
+        showNotification(paste0(graph_tr("settings_import_failed_prefix", lang()), e$message), type = "error", duration = 8)
+        return(invisible(NULL))
+      })
+      telemetry_finish(
+        op_id,
+        outcome = "ok",
+        payload = list(
+          format = "png",
+          file_path = file,
+          width = input$export_width %||% PLOT_DEFAULTS$export_width,
+          height = input$export_height %||% PLOT_DEFAULTS$export_height,
+          dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi
+        )
+      )
     }
   )
   
@@ -1496,17 +1630,39 @@ server <- function(input, output, session) {
       fname
     },
     content = function(file) {
+      op_id <- telemetry_start(
+        event = "step3.export",
+        payload = list(action = "export_tiff", format = "tiff")
+      )
       fig <- current_figure()
       if (is.null(fig)) {
+        telemetry_finish(op_id, outcome = "error", payload = list(reason = "no_figure"), level = "WARN")
         showNotification(graph_tr("no_data_warning", lang()), type = "warning")
         return()
       }
-      ggsave(file, plot = fig, device = "tiff",
-             width = input$export_width %||% PLOT_DEFAULTS$export_width,
-             height = input$export_height %||% PLOT_DEFAULTS$export_height,
-             units = "in", dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi,
-             compression = "lzw", bg = "white")
-      record_step3_recent_export(file, "tiff")
+      tryCatch({
+        ggsave(file, plot = fig, device = "tiff",
+               width = input$export_width %||% PLOT_DEFAULTS$export_width,
+               height = input$export_height %||% PLOT_DEFAULTS$export_height,
+               units = "in", dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi,
+               compression = "lzw", bg = "white")
+        record_step3_recent_export(file, "tiff")
+      }, error = function(e) {
+        telemetry_finish(op_id, outcome = "error", payload = list(reason = "ggsave_failed", format = "tiff"), err = e, level = "ERROR")
+        showNotification(paste0(graph_tr("settings_import_failed_prefix", lang()), e$message), type = "error", duration = 8)
+        return(invisible(NULL))
+      })
+      telemetry_finish(
+        op_id,
+        outcome = "ok",
+        payload = list(
+          format = "tiff",
+          file_path = file,
+          width = input$export_width %||% PLOT_DEFAULTS$export_width,
+          height = input$export_height %||% PLOT_DEFAULTS$export_height,
+          dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi
+        )
+      )
     }
   )
   

@@ -5,8 +5,33 @@
 
 # 加载必要的模块
 cat("加载测试环境...\n")
-source("R/constants.R")
-source("R/utils.R")
+
+resolve_repo_root <- function() {
+  env_root <- Sys.getenv("ITCSUITE_REPO_ROOT", unset = "")
+  if (nzchar(env_root)) {
+    p <- normalizePath(env_root, winslash = "/", mustWork = FALSE)
+    if (dir.exists(file.path(p, "ITCsimfit")) && dir.exists(file.path(p, "tests"))) {
+      return(normalizePath(p, winslash = "/", mustWork = TRUE))
+    }
+  }
+
+  cur <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
+  for (i in 0:8) {
+    if (dir.exists(file.path(cur, "ITCsimfit")) && dir.exists(file.path(cur, "tests"))) {
+      return(normalizePath(cur, winslash = "/", mustWork = TRUE))
+    }
+    parent <- dirname(cur)
+    if (identical(parent, cur)) break
+    cur <- parent
+  }
+  stop("Cannot resolve repository root.")
+}
+
+repo_root <- resolve_repo_root()
+itcsimfit_dir <- file.path(repo_root, "ITCsimfit")
+
+source(file.path(itcsimfit_dir, "R", "constants.R"))
+source(file.path(itcsimfit_dir, "R", "utils.R"))
 
 # 测试计数器
 tests_passed <- 0

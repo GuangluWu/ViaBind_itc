@@ -271,6 +271,15 @@ npm run smoke
 - 必填字段是否缺失（如 `created_at`, `token`, `source`）
 - 校验器：`ITCSuiteWeb/R/bridge_contract.R`
 
+### 9.5 用户反馈日志与诊断包
+
+先检查：
+
+- Electron 菜单中是否出现 `Export Diagnostics Package...`（desktop runtime）
+- 诊断包是否包含：`manifest.json`, `main.log`, `backend.log`, `launch_shiny.log`, `app-events.log`, `error.log`, `session.log`
+- 日志目录：`ITCSUITE_USER_DATA_DIR/logs`（无该环境变量时回退 `tools::R_user_dir("itcsuite", "data")/logs`）
+- 主进程 IPC：`desktop/src/main/index.js` 中 `itcsuite:export-diagnostics`
+
 ---
 
 ## 10. 开发提交检查清单（PR Checklist）

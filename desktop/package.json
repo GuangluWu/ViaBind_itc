@@ -12,6 +12,7 @@
     "dev": "electron .",
     "smoke": "node scripts/smoke-desktop.mjs",
     "smoke:backend": "node scripts/smoke-backend.mjs",
+    "test:main": "node tests/diagnostics.test.mjs",
     "ensure:r-runtime": "node scripts/ensure-r-runtime.mjs",
     "ensure:r-runtime:check": "node scripts/ensure-r-runtime.mjs --check-only",
     "pack:dir": "electron-builder --mac dir",

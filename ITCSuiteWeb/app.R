@@ -18,6 +18,7 @@ source("R/home_recent_helpers.R")
 source("R/home_recent_store.R")
 source("R/home_desktop_helpers.R")
 source("R/home_contact_helpers.R")
+source("R/telemetry.R")
 
 if (!exists("load_guide_annotations", mode = "function")) {
   fail_fast("Startup check failed: guide annotation loader is unavailable.")
@@ -33,6 +34,9 @@ if (!exists("home_desktop_normalize_open_file_result", mode = "function")) {
 }
 if (!exists("home_contact_resolve_qr_src", mode = "function")) {
   fail_fast("Startup check failed: home contact helper is unavailable.")
+}
+if (!exists("telemetry_create_session", mode = "function")) {
+  fail_fast("Startup check failed: telemetry helper is unavailable.")
 }
 
 detect_repo_root <- function() {
@@ -169,7 +173,7 @@ load_legacy_app <- function(app_dir, label, required_symbols = character(0)) {
   list(ui = ui_obj, server = server_fun, env = env, label = label)
 }
 
-bridge_bus_server <- function(id) {
+bridge_bus_server <- function(id, on_reject = NULL) {
   # [COMMENT_STD][IO_CONTRACT]
   # 输入来源：moduleServer session 生命周期内的桥接读写调用。
   # 字段/类型：step1_payload/step2_plot_payload 为 list 载荷，内部含 schema_version/token 等字段。
@@ -177,8 +181,18 @@ bridge_bus_server <- function(id) {
   # 空值策略：validator 拒绝无效 payload；显式传入 NULL 时清空 channel。
   # 输出保证：返回包含两个 channel function 的 list，供步骤间共享。
   moduleServer(id, function(input, output, session) {
-    step1_payload <- make_bridge_channel(sanitize_step1_payload, "step1_payload")
-    step2_plot_payload <- make_bridge_channel(sanitize_step2_plot_payload, "step2_plot_payload")
+    step1_payload <- make_bridge_channel(
+      sanitize_step1_payload,
+      "step1_payload",
+      reject_explainer = explain_step1_payload_rejection,
+      on_reject = on_reject
+    )
+    step2_plot_payload <- make_bridge_channel(
+      sanitize_step2_plot_payload,
+      "step2_plot_payload",
+      reject_explainer = explain_step2_plot_payload_rejection,
+      on_reject = on_reject
+    )
     list(
       step1_payload = step1_payload,
       step2_plot_payload = step2_plot_payload
@@ -257,6 +271,15 @@ host_tr <- function(key, lang) {
       home_recent_path_label = "Path",
       home_recent_path_missing = "Path unavailable (file not found).",
       home_unknown_name = "Unnamed Import",
+      home_export_diagnostics = "Export Diagnostics",
+      home_export_diagnostics_unavailable = "Diagnostics export is unavailable in this runtime.",
+      home_export_diagnostics_success = "Diagnostics package created: %s",
+      home_export_diagnostics_failed = "Diagnostics export failed: %s",
+      home_issue_template_title = "Issue Report Template",
+      home_issue_template_desc = "Copy this template into your email or issue tracker, then attach the diagnostics zip.",
+      home_copy_template = "Copy Template",
+      home_copy_template_ok = "Issue template copied to clipboard.",
+      home_copy_template_failed = "Failed to copy issue template.",
       home_contact_title = "Contact Developer",
       home_contact_dev_name_label = "Developer",
       home_contact_email_label = "Email",
@@ -308,6 +331,15 @@ host_tr <- function(key, lang) {
       home_recent_path_label = "路径",
       home_recent_path_missing = "路径不可用（文件不存在）。",
       home_unknown_name = "未命名导入",
+      home_export_diagnostics = "导出诊断包",
+      home_export_diagnostics_unavailable = "当前运行环境不支持导出诊断包。",
+      home_export_diagnostics_success = "诊断包已生成：%s",
+      home_export_diagnostics_failed = "诊断包导出失败：%s",
+      home_issue_template_title = "问题反馈模板",
+      home_issue_template_desc = "复制后粘贴到邮件或 issue，并附上诊断包。",
+      home_copy_template = "复制模板",
+      home_copy_template_ok = "反馈模板已复制到剪贴板。",
+      home_copy_template_failed = "复制反馈模板失败。",
       home_contact_title = "联系开发者",
       home_contact_dev_name_label = "开发者",
       home_contact_email_label = "邮箱",
@@ -533,11 +565,19 @@ ui <- fluidPage(
           return !!(window.itcsuiteDesktop && typeof window.itcsuiteDesktop.openFile === 'function');
         }
 
+        function desktopExportDiagnosticsSupported() {
+          return !!(window.itcsuiteDesktop && typeof window.itcsuiteDesktop.exportDiagnostics === 'function');
+        }
+
         function reportDesktopCapability() {
           if (!(window.Shiny && typeof window.Shiny.setInputValue === 'function')) return;
           window.Shiny.setInputValue(
             'itcsuite_desktop_capability',
-            { open_file: desktopOpenFileSupported(), ts: Date.now() },
+            {
+              open_file: desktopOpenFileSupported(),
+              export_diagnostics: desktopExportDiagnosticsSupported(),
+              ts: Date.now()
+            },
             { priority: 'event' }
           );
         }
@@ -583,6 +623,63 @@ ui <- fluidPage(
           } catch (e) {
             fallback.error = (e && e.message) ? e.message : 'Desktop open file failed.';
             Shiny.setInputValue('itcsuite_desktop_open_file_result', fallback, { priority: 'event' });
+          }
+        });
+
+        Shiny.addCustomMessageHandler('itcsuite_export_diagnostics', async function(msg) {
+          var payload = msg || {};
+          var fallback = {
+            request_id: (payload.request_id || '').toString(),
+            ok: false,
+            file_path: '',
+            error: 'Desktop diagnostics export API unavailable.'
+          };
+
+          if (!desktopExportDiagnosticsSupported()) {
+            Shiny.setInputValue('itcsuite_desktop_export_diagnostics_result', fallback, { priority: 'event' });
+            return;
+          }
+
+          try {
+            var result = await window.itcsuiteDesktop.exportDiagnostics(payload);
+            if (!result || typeof result !== 'object') {
+              Shiny.setInputValue('itcsuite_desktop_export_diagnostics_result', fallback, { priority: 'event' });
+              return;
+            }
+            Shiny.setInputValue('itcsuite_desktop_export_diagnostics_result', result, { priority: 'event' });
+          } catch (e) {
+            fallback.error = (e && e.message) ? e.message : 'Desktop diagnostics export failed.';
+            Shiny.setInputValue('itcsuite_desktop_export_diagnostics_result', fallback, { priority: 'event' });
+          }
+        });
+
+        Shiny.addCustomMessageHandler('itcsuite_copy_to_clipboard', async function(msg) {
+          var payload = msg || {};
+          var text = (payload.text || '').toString();
+          var out = { ok: false, error: '', ts: Date.now() };
+
+          try {
+            if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+              await navigator.clipboard.writeText(text);
+              out.ok = true;
+            } else {
+              var ta = document.createElement('textarea');
+              ta.value = text;
+              ta.setAttribute('readonly', '');
+              ta.style.position = 'absolute';
+              ta.style.left = '-9999px';
+              document.body.appendChild(ta);
+              ta.select();
+              out.ok = document.execCommand('copy');
+              document.body.removeChild(ta);
+            }
+          } catch (e) {
+            out.ok = false;
+            out.error = (e && e.message) ? e.message : 'clipboard error';
+          }
+
+          if (window.Shiny && typeof window.Shiny.setInputValue === 'function') {
+            window.Shiny.setInputValue('itcsuite_copy_result', out, { priority: 'event' });
           }
         });
 
@@ -646,7 +743,64 @@ server <- function(input, output, session) {
   # 日志级别：启动阶段 error；运行阶段 warning。
   # 恢复动作：启动阶段停止应用；运行阶段忽略本次无效 payload 并保留既有状态。
   try(session$allowReconnect(TRUE), silent = TRUE)
-  bridge_bus <- bridge_bus_server("bridge_bus")
+  is_desktop_runtime <- identical(
+    home_desktop_scalar_chr(Sys.getenv("ITCSUITE_DESKTOP", unset = ""), default = ""),
+    "1"
+  )
+  host_app_version <- home_contact_read_viabind_version(repo_root = repo_root, default_version = "0.0.0-dev")
+  telemetry <- telemetry_create_session(
+    app_version = host_app_version,
+    runtime = if (isTRUE(is_desktop_runtime)) "desktop" else "web",
+    retention_days = 30L
+  )
+  telemetry_log_event <- function(event, level = "INFO", module = "host", payload = list(), err = NULL, op_id = NULL, lang = "en") {
+    fn <- telemetry$log_event
+    if (!is.function(fn)) return(invisible(NULL))
+    tryCatch(
+      fn(event = event, level = level, module = module, payload = payload, err = err, op_id = op_id, lang = lang),
+      error = function(e) invisible(NULL)
+    )
+  }
+  telemetry_start_op <- function(event, module = "host", payload = list(), lang = "en") {
+    fn <- telemetry$start_op
+    if (!is.function(fn)) return("")
+    tryCatch(fn(event = event, module = module, payload = payload, lang = lang), error = function(e) "")
+  }
+  telemetry_finish_op <- function(op_id, outcome = "ok", payload = list(), err = NULL, module = NULL, lang = "en", level = NULL) {
+    fn <- telemetry$finish_op
+    if (!is.function(fn)) return(invisible(NULL))
+    tryCatch(
+      fn(op_id = op_id, outcome = outcome, payload = payload, err = err, lang = lang, level = level),
+      error = function(e) invisible(NULL)
+    )
+  }
+  session$userData$itcsuite_telemetry <- list(
+    trace_id = telemetry$trace_id %||% "",
+    session_id = telemetry$session_id %||% "",
+    runtime = telemetry$runtime %||% "",
+    app_version = telemetry$app_version %||% host_app_version,
+    logs_dir = telemetry$logs_dir %||% "",
+    log_event = telemetry_log_event,
+    start_op = telemetry_start_op,
+    finish_op = telemetry_finish_op
+  )
+
+  bridge_reject_logger <- function(label, reason, payload = NULL) {
+    telemetry_log_event(
+      event = "bridge.validation",
+      level = "WARN",
+      module = "bridge",
+      payload = list(
+        channel = label,
+        reason = reason,
+        payload = payload
+      ),
+      lang = "en"
+    )
+  }
+  bridge_set_reject_logger(bridge_reject_logger)
+
+  bridge_bus <- bridge_bus_server("bridge_bus", on_reject = bridge_reject_logger)
   bridge_s1s2 <- bridge_step1_to_step2_server("bridge_s1s2", bridge_bus)
   bridge_s2s3 <- bridge_step2_to_step3_server("bridge_s2s3", bridge_bus)
 
@@ -664,16 +818,19 @@ server <- function(input, output, session) {
     invisible(normalized)
   }
 
-  is_desktop_runtime <- identical(
-    home_desktop_scalar_chr(Sys.getenv("ITCSUITE_DESKTOP", unset = ""), default = ""),
-    "1"
-  )
   desktop_open_file_capability <- reactiveVal(FALSE)
+  desktop_export_diagnostics_capability <- reactiveVal(FALSE)
   desktop_open_file_seq <- reactiveVal(0L)
   desktop_open_file_pending <- new.env(parent = emptyenv())
+  desktop_diagnostics_seq <- reactiveVal(0L)
+  desktop_diagnostics_pending_id <- reactiveVal("")
 
   desktop_enabled <- function() {
     isTRUE(is_desktop_runtime) && isTRUE(desktop_open_file_capability())
+  }
+
+  desktop_diagnostics_enabled <- function() {
+    isTRUE(is_desktop_runtime) && isTRUE(desktop_export_diagnostics_capability())
   }
 
   desktop_default_filters <- function(purpose) {
@@ -701,7 +858,9 @@ server <- function(input, output, session) {
   }
 
   observeEvent(input$itcsuite_desktop_capability, {
-    desktop_open_file_capability(home_desktop_capability_open_file(input$itcsuite_desktop_capability))
+    capability <- input$itcsuite_desktop_capability
+    desktop_open_file_capability(home_desktop_capability_open_file(capability))
+    desktop_export_diagnostics_capability(home_desktop_capability_export_diagnostics(capability))
   }, ignoreInit = FALSE)
 
   observeEvent(input$itcsuite_desktop_open_file_result, {
@@ -726,6 +885,60 @@ server <- function(input, output, session) {
       return(invisible(NULL))
     }
     invoke_desktop_callback(on_selected, normalized)
+    invisible(NULL)
+  }, ignoreInit = TRUE)
+
+  diagnostics_report_template <- reactiveVal("")
+  diagnostics_archive_path <- reactiveVal("")
+
+  observeEvent(input$itcsuite_desktop_export_diagnostics_result, {
+    normalized <- home_desktop_normalize_export_diagnostics_result(input$itcsuite_desktop_export_diagnostics_result)
+    pending_id <- home_desktop_scalar_chr(desktop_diagnostics_pending_id(), default = "")
+    if (!nzchar(pending_id) || !identical(normalized$request_id, pending_id)) return(invisible(NULL))
+    desktop_diagnostics_pending_id("")
+
+    if (!isTRUE(normalized$ok)) {
+      msg <- home_desktop_scalar_chr(normalized$error, default = "Desktop diagnostics export failed.")
+      showNotification(host_trf("home_export_diagnostics_failed", host_lang(), msg), type = "error", duration = 6)
+      telemetry_log_event(
+        event = "home.user_action",
+        level = "ERROR",
+        module = "host",
+        payload = list(action = "export_diagnostics", outcome = "error", message = msg),
+        lang = host_lang()
+      )
+      return(invisible(NULL))
+    }
+
+    archive_path <- normalize_recent_path(normalized$file_path)
+    diagnostics_archive_path(archive_path)
+    template <- paste0(
+      "Issue summary:\n",
+      "- ViaBind version: ", host_app_version, "\n",
+      "- Runtime: desktop\n",
+      "- Date (UTC): ", format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"), "\n",
+      "- Diagnostics package: ", archive_path, "\n",
+      "- Steps to reproduce:\n",
+      "  1) ...\n",
+      "  2) ...\n",
+      "- Expected result:\n",
+      "  ...\n",
+      "- Actual result:\n",
+      "  ...\n"
+    )
+    diagnostics_report_template(template)
+    showNotification(
+      host_trf("home_export_diagnostics_success", host_lang(), basename(archive_path)),
+      type = "message",
+      duration = 5
+    )
+    telemetry_log_event(
+      event = "home.user_action",
+      level = "INFO",
+      module = "host",
+      payload = list(action = "export_diagnostics", outcome = "ok", archive = archive_path),
+      lang = host_lang()
+    )
     invisible(NULL)
   }, ignoreInit = TRUE)
 
@@ -1021,6 +1234,13 @@ server <- function(input, output, session) {
         type = "warning",
         duration = 4
       )
+      telemetry_log_event(
+        event = "home.user_action",
+        level = "WARN",
+        module = "host",
+        payload = list(action = "restore_recent", outcome = "no_payload", record_id = record_id, target_step = target_step),
+        lang = host_lang()
+      )
       return(invisible(FALSE))
     }
     if (!isTRUE(file.exists(source_path))) {
@@ -1028,6 +1248,13 @@ server <- function(input, output, session) {
         host_trf("home_restore_failed_path_missing", host_lang(), display_name),
         type = "warning",
         duration = 4
+      )
+      telemetry_log_event(
+        event = "home.user_action",
+        level = "WARN",
+        module = "host",
+        payload = list(action = "restore_recent", outcome = "path_missing", record_id = record_id, source_path = source_path),
+        lang = host_lang()
       )
       return(invisible(FALSE))
     }
@@ -1038,6 +1265,13 @@ server <- function(input, output, session) {
         host_trf("home_restore_failed_no_handler", host_lang(), target_label),
         type = "warning",
         duration = 4
+      )
+      telemetry_log_event(
+        event = "home.user_action",
+        level = "WARN",
+        module = "host",
+        payload = list(action = "restore_recent", outcome = "missing_handler", record_id = record_id, target_step = target_step),
+        lang = host_lang()
       )
       return(invisible(FALSE))
     }
@@ -1050,6 +1284,14 @@ server <- function(input, output, session) {
           type = "error",
           duration = 5
         )
+        telemetry_log_event(
+          event = "home.user_action",
+          level = "ERROR",
+          module = "host",
+          payload = list(action = "restore_recent", outcome = "error", record_id = record_id),
+          err = e,
+          lang = host_lang()
+        )
         FALSE
       }
     )
@@ -1060,6 +1302,13 @@ server <- function(input, output, session) {
       host_trf("home_restore_ok", host_lang(), display_name, target_label),
       type = "message",
       duration = 3
+    )
+    telemetry_log_event(
+      event = "home.user_action",
+      level = "INFO",
+      module = "host",
+      payload = list(action = "restore_recent", outcome = "ok", record_id = record_id, target_step = target_step),
+      lang = host_lang()
     )
     invisible(TRUE)
   }
@@ -1079,7 +1328,7 @@ server <- function(input, output, session) {
   session$userData$itcsuite_app_meta <- list(
     get_app_version = function() {
       version_chr <- home_desktop_scalar_chr(Sys.getenv("ITCSUITE_APP_VERSION", unset = ""), default = "")
-      if (nzchar(version_chr)) version_chr else "0.0.0-dev"
+      if (nzchar(version_chr)) version_chr else host_app_version
     },
     get_developer_profile = function() {
       list(
@@ -1093,6 +1342,9 @@ server <- function(input, output, session) {
   session$userData$itcsuite_desktop <- list(
     enabled = function() {
       desktop_enabled()
+    },
+    export_diagnostics_enabled = function() {
+      desktop_diagnostics_enabled()
     },
     open_file = function(
       purpose,
@@ -1170,11 +1422,25 @@ server <- function(input, output, session) {
 
   observeEvent(input$itcsuite_lang_init, {
     set_host_lang(input$itcsuite_lang_init, persist = TRUE)
+    telemetry_log_event(
+      event = "home.user_action",
+      level = "INFO",
+      module = "host",
+      payload = list(action = "lang_init", lang = host_lang()),
+      lang = host_lang()
+    )
   }, ignoreInit = TRUE, once = TRUE)
 
   observeEvent(input$host_lang_toggle, {
     next_lang <- if (identical(host_lang(), "en")) "zh" else "en"
     set_host_lang(next_lang, persist = TRUE)
+    telemetry_log_event(
+      event = "home.user_action",
+      level = "INFO",
+      module = "host",
+      payload = list(action = "lang_toggle", lang = next_lang),
+      lang = next_lang
+    )
   }, ignoreInit = TRUE)
 
   observeEvent(host_lang(), {
@@ -1191,10 +1457,61 @@ server <- function(input, output, session) {
     )
   }, ignoreInit = FALSE)
 
+  observeEvent(input$home_copy_issue_template, {
+    txt <- telemetry_scalar_chr(diagnostics_report_template(), default = "")
+    if (!nzchar(txt)) return(invisible(NULL))
+    session$sendCustomMessage("itcsuite_copy_to_clipboard", list(text = txt))
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$itcsuite_copy_result, {
+    out <- input$itcsuite_copy_result
+    if (!is.list(out)) return(invisible(NULL))
+    if (isTRUE(out$ok)) {
+      showNotification(host_tr("home_copy_template_ok", host_lang()), type = "message", duration = 3)
+      telemetry_log_event(
+        event = "home.user_action",
+        level = "INFO",
+        module = "host",
+        payload = list(action = "copy_issue_template", outcome = "ok"),
+        lang = host_lang()
+      )
+    } else {
+      showNotification(host_tr("home_copy_template_failed", host_lang()), type = "warning", duration = 4)
+      telemetry_log_event(
+        event = "home.user_action",
+        level = "WARN",
+        module = "host",
+        payload = list(action = "copy_issue_template", outcome = "error", message = out$error %||% ""),
+        lang = host_lang()
+      )
+    }
+  }, ignoreInit = TRUE)
+
   output$home_panel_ui <- renderUI({
     l <- host_lang()
     import_recs <- with_recent_path_status(home_state$import_records)
     if (!is.list(import_recs)) import_recs <- list()
+    issue_template_txt <- telemetry_scalar_chr(diagnostics_report_template(), default = "")
+    issue_template_panel <- NULL
+    if (nzchar(issue_template_txt)) {
+      issue_template_panel <- div(
+        class = "home-panel",
+        tags$h4(host_tr("home_issue_template_title", l)),
+        tags$p(host_tr("home_issue_template_desc", l)),
+        tags$textarea(
+          id = "home_issue_template_text",
+          class = "form-control",
+          readonly = "readonly",
+          rows = 10,
+          style = "width:100%;font-family:Menlo,Consolas,monospace;font-size:12px;",
+          issue_template_txt
+        ),
+        div(
+          style = "margin-top:8px;",
+          actionButton("home_copy_issue_template", host_tr("home_copy_template", l), class = "btn btn-default btn-sm")
+        )
+      )
+    }
 
     build_recent_table <- function(recs, empty_text) {
       if (!is.list(recs) || length(recs) < 1) {
@@ -1373,7 +1690,8 @@ server <- function(input, output, session) {
             )
           )
         )
-      )
+      ),
+      issue_template_panel
     )
   })
 
@@ -1403,6 +1721,25 @@ server <- function(input, output, session) {
   observeEvent(input$home_start_step1, {
     updateTabsetPanel(session, "main_tabs", selected = "step1")
   }, ignoreInit = TRUE)
+
+  telemetry_log_event(
+    event = "app.lifecycle",
+    level = "INFO",
+    module = "host",
+    payload = list(action = "session_started", session_id = telemetry$session_id %||% ""),
+    lang = "en"
+  )
+
+  session$onSessionEnded(function() {
+    telemetry_log_event(
+      event = "app.lifecycle",
+      level = "INFO",
+      module = "host",
+      payload = list(action = "session_ended", session_id = telemetry$session_id %||% ""),
+      lang = "en"
+    )
+    bridge_set_reject_logger(NULL)
+  })
 
   session$userData$itcsuite_bridge <- list(
     step1_payload = bridge_bus$step1_payload,

@@ -264,6 +264,68 @@ server <- function(input, output, session) {
     if (is.null(d) || !is.list(d)) NULL else d
   }, error = function(e) NULL)
 
+  session_telemetry <- tryCatch({
+    t <- session$userData$itcsuite_telemetry
+    if (is.null(t) || !is.list(t)) NULL else t
+  }, error = function(e) NULL)
+
+  telemetry_lang_safe <- function() {
+    tryCatch({
+      val <- lang()
+      if (identical(val, "zh")) "zh" else "en"
+    }, error = function(e) "en")
+  }
+
+  telemetry_log <- function(event, level = "INFO", payload = list(), err = NULL, op_id = NULL) {
+    fn <- if (!is.null(session_telemetry)) session_telemetry$log_event else NULL
+    if (!is.function(fn)) return(invisible(NULL))
+    tryCatch(
+      fn(
+        event = event,
+        level = level,
+        module = "step1",
+        payload = payload,
+        err = err,
+        op_id = op_id,
+        lang = telemetry_lang_safe()
+      ),
+      error = function(e) invisible(NULL)
+    )
+  }
+
+  telemetry_start <- function(event, payload = list()) {
+    fn <- if (!is.null(session_telemetry)) session_telemetry$start_op else NULL
+    if (!is.function(fn)) return("")
+    tryCatch(
+      fn(event = event, module = "step1", payload = payload, lang = telemetry_lang_safe()),
+      error = function(e) ""
+    )
+  }
+
+  telemetry_finish <- function(op_id, outcome = "ok", payload = list(), err = NULL, level = NULL) {
+    fn <- if (!is.null(session_telemetry)) session_telemetry$finish_op else NULL
+    if (!is.function(fn)) return(invisible(NULL))
+    tryCatch(
+      fn(
+        op_id = op_id,
+        outcome = outcome,
+        payload = payload,
+        err = err,
+        level = level,
+        lang = telemetry_lang_safe()
+      ),
+      error = function(e) invisible(NULL)
+    )
+    if (!identical(outcome, "ok")) {
+      telemetry_log(
+        event = "error.runtime",
+        level = "ERROR",
+        payload = list(op_id = op_id, outcome = outcome, context = "step1"),
+        err = err
+      )
+    }
+  }
+
   desktop_open_file_enabled <- function() {
     fn <- if (!is.null(session_desktop)) session_desktop$enabled else NULL
     if (!is.function(fn)) return(FALSE)
@@ -297,6 +359,8 @@ server <- function(input, output, session) {
   restored_step1_name <- reactiveVal(NULL)
   step1_active_source_path <- reactiveVal("")
   step1_active_source_kind <- reactiveVal("none")
+  step1_import_started_at <- reactiveVal(NA_real_)
+  step1_import_source <- reactiveVal("none")
   home_restore_inflight <- reactiveVal(FALSE)
   step1_last_export_name <- reactiveVal(NULL)
   set_local_lang <- function(value) {
@@ -442,6 +506,13 @@ server <- function(input, output, session) {
     restored_step1_name(name_norm)
     step1_active_source_path(path_norm)
     step1_active_source_kind(as.character(source_kind %||% "unknown")[1])
+    step1_import_started_at(as.numeric(Sys.time()))
+    step1_import_source(as.character(source_kind %||% "unknown")[1])
+    telemetry_log(
+      event = "step1.import",
+      level = "INFO",
+      payload = list(stage = "select", source = as.character(source_kind %||% "unknown")[1], file_name = name_norm)
+    )
     TRUE
   }
 
@@ -472,6 +543,13 @@ server <- function(input, output, session) {
     restored_step1_name(NULL)
     step1_active_source_path(normalize_step1_path(input$file1$datapath))
     step1_active_source_kind("upload")
+    step1_import_started_at(as.numeric(Sys.time()))
+    step1_import_source("upload")
+    telemetry_log(
+      event = "step1.import",
+      level = "INFO",
+      payload = list(stage = "select", source = "upload", file_name = input$file1$name %||% "")
+    )
     home_restore_inflight(FALSE)
   }, ignoreInit = TRUE)
 
@@ -479,6 +557,11 @@ server <- function(input, output, session) {
     fn <- if (!is.null(session_desktop)) session_desktop$open_file else NULL
     if (!is.function(fn) || !isTRUE(desktop_open_file_enabled())) return()
     lang_now <- lang()
+    telemetry_log(
+      event = "step1.import",
+      level = "INFO",
+      payload = list(stage = "pick_open", source = "desktop_native")
+    )
 
     fn(
       purpose = "step1_import",
@@ -507,6 +590,11 @@ server <- function(input, output, session) {
         if (!nzchar(trimws(msg))) {
           msg <- if (identical(lang_now, "zh")) "桌面文件选择失败。" else "Desktop file picker failed."
         }
+        telemetry_log(
+          event = "step1.import",
+          level = "ERROR",
+          payload = list(stage = "pick_error", source = "desktop_native", message = msg)
+        )
         showNotification(msg, type = "error", duration = 5)
       }
     )
@@ -560,6 +648,19 @@ server <- function(input, output, session) {
       return(tryCatch({
         read_itc(restored_path)
       }, error = function(e) {
+        started <- suppressWarnings(as.numeric(step1_import_started_at())[1])
+        elapsed_ms <- if (is.finite(started)) as.numeric(Sys.time()) * 1000 - started * 1000 else NA_real_
+        telemetry_log(
+          event = "step1.import",
+          level = "ERROR",
+          payload = list(
+            stage = "read",
+            source = step1_import_source(),
+            source_kind = step1_active_source_kind(),
+            elapsed_ms = elapsed_ms
+          ),
+          err = e
+        )
         stop(safeError(e))
       }))
     }
@@ -568,6 +669,19 @@ server <- function(input, output, session) {
     tryCatch({
       read_itc(input$file1$datapath)
     }, error = function(e) {
+      started <- suppressWarnings(as.numeric(step1_import_started_at())[1])
+      elapsed_ms <- if (is.finite(started)) as.numeric(Sys.time()) * 1000 - started * 1000 else NA_real_
+      telemetry_log(
+        event = "step1.import",
+        level = "ERROR",
+        payload = list(
+          stage = "read",
+          source = step1_import_source(),
+          source_kind = step1_active_source_kind(),
+          elapsed_ms = elapsed_ms
+        ),
+        err = e
+      )
       stop(safeError(e))
     })
   })
@@ -637,6 +751,22 @@ server <- function(input, output, session) {
       }
     }
     if (skip_recent_log) home_restore_inflight(FALSE)
+
+    started <- suppressWarnings(as.numeric(step1_import_started_at())[1])
+    elapsed_ms <- if (is.finite(started)) as.numeric(Sys.time()) * 1000 - started * 1000 else NA_real_
+    telemetry_log(
+      event = "step1.import",
+      level = "INFO",
+      payload = list(
+        stage = "read",
+        outcome = "ok",
+        source = step1_import_source(),
+        source_kind = step1_active_source_kind(),
+        data_points = nrow(rd$data %||% data.frame()),
+        injections = length(rd$injections %||% numeric(0)),
+        elapsed_ms = elapsed_ms
+      )
+    )
   })
 
   observeEvent(input$reset_baseline, {
@@ -829,12 +959,28 @@ server <- function(input, output, session) {
     if (!is.finite(click_id) || click_id <= 0L) return()
     payload <- step1_payload()
     if (is.null(payload)) {
+      telemetry_log(
+        event = "step1.bridge",
+        level = "WARN",
+        payload = list(action = "send_to_step2", outcome = "empty_payload")
+      )
       showNotification(tr("data_to_fit_unavailable", lang()), type = "warning", duration = 3)
       return()
     }
     payload$token <- next_bridge_token()
     payload$created_at <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
     bridge_set("step1_payload", payload)
+    rows <- if (is.data.frame(payload$integration)) nrow(payload$integration) else NA_integer_
+    telemetry_log(
+      event = "step1.bridge",
+      level = "INFO",
+      payload = list(
+        action = "send_to_step2",
+        outcome = "ok",
+        token = payload$token,
+        integration_rows = rows
+      )
+    )
     tryCatch({
       updateTabsetPanel(session, "main_tabs", selected = "step2")
     }, error = function(e) NULL)
@@ -1212,9 +1358,34 @@ server <- function(input, output, session) {
       fname
     },
     content = function(file) {
+      op_id <- telemetry_start(
+        event = "step1.export",
+        payload = list(format = "xlsx", action = "export_processed")
+      )
+      op_finished <- FALSE
+      finish_export <- function(outcome = "ok", payload = list(), err = NULL, level = NULL) {
+        if (isTRUE(op_finished)) return(invisible(NULL))
+        op_finished <<- TRUE
+        telemetry_finish(op_id, outcome = outcome, payload = payload, err = err, level = level)
+      }
+      on.exit({
+        if (!isTRUE(op_finished)) {
+          finish_export(
+            outcome = "error",
+            payload = list(reason = "unexpected_exit", target_file = file),
+            level = "ERROR"
+          )
+        }
+      }, add = TRUE)
+
       rd <- tryCatch(rawData(), error = function(e) NULL)
       pd <- tryCatch(processedData(), error = function(e) NULL)
       if (is.null(rd) || is.null(pd)) {
+        finish_export(
+          outcome = "error",
+          payload = list(reason = "no_data", target_file = file),
+          level = "ERROR"
+        )
         showNotification(tr("export_no_data", lang()), type = "warning", duration = 5, session = session)
         writexl::write_xlsx(
           list(Note = data.frame(message = tr("export_no_data", lang()))),
@@ -1265,7 +1436,13 @@ server <- function(input, output, session) {
       if (!nzchar(trimws(export_name))) export_name <- basename(file)
       export_path <- normalize_step1_path(file)
       import_path <- normalize_step1_path(restored_step1_path() %||% tryCatch(input$file1$datapath, error = function(e) ""))
-      if (!nzchar(import_path)) return(invisible(NULL))
+      if (!nzchar(import_path)) {
+        finish_export(
+          outcome = "ok",
+          payload = list(target_file = file, source_path = "", source_path_linked = FALSE)
+        )
+        return(invisible(NULL))
+      }
       home_add_recent_export(
         list(
           display_name = export_name,
@@ -1276,6 +1453,15 @@ server <- function(input, output, session) {
           source_path = import_path,
           artifact_path = export_path,
           source_path_kind = "import"
+        )
+      )
+      finish_export(
+        outcome = "ok",
+        payload = list(
+          target_file = file,
+          source_path = import_path,
+          rows_power = nrow(power_df),
+          rows_integration = nrow(pd$integration %||% data.frame())
         )
       )
     }

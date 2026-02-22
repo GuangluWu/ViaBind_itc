@@ -1,9 +1,18 @@
 const { app, BrowserWindow, Menu, dialog, shell, session, nativeImage, powerMonitor, ipcMain } = require("electron");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const http = require("http");
 const path = require("path");
 const fs = require("fs");
 const EventEmitter = require("events");
+const os = require("os");
+const {
+  sanitizeDiagnosticsRequest,
+  makeDiagnosticsResult,
+  copyRedactedLog,
+  collectDiagnosticsFiles,
+  sha256File,
+  buildManifest
+} = require("./diagnostics");
 
 const HOST = "127.0.0.1";
 const READY_PREFIX = "ITCSUITE_READY ";
@@ -17,6 +26,7 @@ const APP_DEVELOPER_EMAIL = "guanglu.wu@gmail.com";
 const APP_DEVELOPER_SITE = "guanglu.xyz";
 const appVersionSignature = () => `ViaBind v${app.getVersion()}`;
 const OPEN_FILE_CHANNEL = "itcsuite:open-file";
+const EXPORT_DIAGNOSTICS_CHANNEL = "itcsuite:export-diagnostics";
 const OPEN_FILE_PURPOSES = new Set(["step1_import", "step2_import", "step3_import"]);
 app.setName(APP_NAME);
 
@@ -34,6 +44,7 @@ let lastRecoveryAt = 0;
 let unresponsiveRecoveryTimer = null;
 let rendererMarkedUnresponsive = false;
 let openFileLastDir = "";
+let diagnosticsExportInFlight = false;
 
 const RECOVERY_COOLDOWN_MS = 10000;
 const UNRESPONSIVE_RECOVERY_DELAY_MS = 3000;
@@ -753,6 +764,201 @@ function makeOpenFileResult(payload, patch = {}) {
   };
 }
 
+function diagnosticsTimestamp() {
+  const d = new Date();
+  const pad = (v) => String(v).padStart(2, "0");
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+function defaultDiagnosticsArchivePath() {
+  const downloadsPath = app.getPath("downloads");
+  return uniqueDownloadPath(downloadsPath, `ViaBind_diagnostics_${diagnosticsTimestamp()}.zip`);
+}
+
+function zipDirectoryToFile(sourceDir, targetZipPath) {
+  if (process.platform === "win32") {
+    const escapedTarget = targetZipPath.replace(/'/g, "''");
+    const args = [
+      "-NoProfile",
+      "-Command",
+      `Compress-Archive -Path * -DestinationPath '${escapedTarget}' -Force`
+    ];
+    const out = spawnSync("powershell", args, { cwd: sourceDir, encoding: "utf8" });
+    if (out.status !== 0) {
+      const msg = trimScalar(out.stderr, trimScalar(out.stdout, "Compress-Archive failed"));
+      throw new Error(msg);
+    }
+    return;
+  }
+
+  const out = spawnSync("zip", ["-rq", targetZipPath, "."], {
+    cwd: sourceDir,
+    encoding: "utf8"
+  });
+  if (out.status !== 0) {
+    const msg = trimScalar(out.stderr, trimScalar(out.stdout, "zip command failed"));
+    throw new Error(msg);
+  }
+}
+
+function buildDiagnosticsArchive(payload, outputZipPath) {
+  const tmpRoot = fs.mkdtempSync(path.join(app.getPath("temp"), "viabind-diag-"));
+  const redactionOpts = {
+    userHome: os.homedir(),
+    userDataDir: app.getPath("userData")
+  };
+
+  try {
+    const candidates = collectDiagnosticsFiles(logsDir);
+    const copiedFiles = [];
+
+    for (const entry of candidates) {
+      const srcPath = entry.abs_path;
+      const destPath = path.join(tmpRoot, entry.name);
+      const ok = copyRedactedLog(srcPath, destPath, redactionOpts);
+      if (!ok) continue;
+      copiedFiles.push({
+        name: entry.name,
+        path: destPath,
+        bytes: fs.statSync(destPath).size,
+        sha256: sha256File(destPath)
+      });
+    }
+
+    const manifest = buildManifest({
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      locale: app.getLocale ? app.getLocale() : "",
+      privacyMode: payload.privacy_mode,
+      files: copiedFiles
+    });
+    const manifestPath = path.join(tmpRoot, "manifest.json");
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+    zipDirectoryToFile(tmpRoot, outputZipPath);
+
+    return {
+      file_count: copiedFiles.length + 1,
+      manifest: manifestPath
+    };
+  } finally {
+    try {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    } catch (_) {
+      // Best effort cleanup.
+    }
+  }
+}
+
+function resolveDialogParentWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    return mainWindow;
+  }
+  return null;
+}
+
+async function runDiagnosticsExport(rawPayload, trigger = "ipc") {
+  const payload = sanitizeDiagnosticsRequest(rawPayload);
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return makeDiagnosticsResult(payload, { error: "Main window is unavailable." });
+  }
+  if (!logsDir || !fs.existsSync(logsDir)) {
+    return makeDiagnosticsResult(payload, { error: "Logs directory is unavailable." });
+  }
+  if (diagnosticsExportInFlight) {
+    return makeDiagnosticsResult(payload, { error: "Diagnostics export already in progress." });
+  }
+
+  diagnosticsExportInFlight = true;
+  try {
+    const dialogParent = resolveDialogParentWindow();
+    const dialogOptions = {
+      title: "Export Diagnostics",
+      buttonLabel: "Export",
+      defaultPath: defaultDiagnosticsArchivePath(),
+      filters: [{ name: "ZIP Archive", extensions: ["zip"] }],
+      properties: ["showOverwriteConfirmation", "createDirectory", "showHiddenFiles"]
+    };
+    const savePath = dialogParent
+      ? dialog.showSaveDialogSync(dialogParent, dialogOptions)
+      : dialog.showSaveDialogSync(dialogOptions);
+
+    if (!savePath) {
+      return makeDiagnosticsResult(payload, { error: "Canceled by user." });
+    }
+
+    appendMainLog("diagnostics_export_start", {
+      request_id: payload.request_id,
+      privacy_mode: payload.privacy_mode,
+      output: savePath,
+      trigger
+    });
+
+    const archiveStats = buildDiagnosticsArchive(payload, savePath);
+    appendMainLog("diagnostics_export_success", {
+      request_id: payload.request_id,
+      privacy_mode: payload.privacy_mode,
+      output: savePath,
+      file_count: archiveStats.file_count,
+      trigger
+    });
+
+    return makeDiagnosticsResult(payload, {
+      ok: true,
+      file_path: path.resolve(savePath)
+    });
+  } catch (error) {
+    const message = error && error.message ? error.message : "Diagnostics export failed.";
+    appendMainLog("diagnostics_export_error", {
+      request_id: payload.request_id,
+      privacy_mode: payload.privacy_mode,
+      error: message,
+      trigger
+    });
+    return makeDiagnosticsResult(payload, { error: message });
+  } finally {
+    diagnosticsExportInFlight = false;
+  }
+}
+
+async function showDiagnosticsExportSuccessMessage(filePath) {
+  const dialogOptions = {
+    type: "info",
+    title: "Export Diagnostics",
+    message: "Diagnostics package exported successfully.",
+    detail: `File: ${filePath}\n\nAttach this ZIP file when reporting an issue.`,
+    buttons: ["Open Folder", "OK"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true
+  };
+  const dialogParent = resolveDialogParentWindow();
+  const result = dialogParent
+    ? await dialog.showMessageBox(dialogParent, dialogOptions)
+    : await dialog.showMessageBox(dialogOptions);
+  if (result.response !== 0) return;
+
+  const err = await shell.openPath(path.dirname(filePath));
+  if (err) {
+    dialog.showErrorBox("Open folder failed", err);
+  }
+}
+
+async function handleMenuExportDiagnostics() {
+  const result = await runDiagnosticsExport(
+    { privacy_mode: "default_redacted", reason: "menu" },
+    "menu"
+  );
+  if (result && result.ok === true && result.file_path) {
+    await showDiagnosticsExportSuccessMessage(result.file_path);
+    return;
+  }
+
+  const msg = trimScalar(result && result.error, "Diagnostics export failed.");
+  if (msg === "Canceled by user.") return;
+  dialog.showErrorBox("Export Diagnostics Failed", msg);
+}
+
 function registerIpcHandlers() {
   ipcMain.handle(OPEN_FILE_CHANNEL, async (_event, rawPayload) => {
     const payload = sanitizeOpenFilePayload(rawPayload);
@@ -804,6 +1010,10 @@ function registerIpcHandlers() {
       const message = error && error.message ? error.message : "Failed to open file dialog.";
       return makeOpenFileResult(payload, { error: message });
     }
+  });
+
+  ipcMain.handle(EXPORT_DIAGNOSTICS_CHANNEL, async (_event, rawPayload) => {
+    return runDiagnosticsExport(rawPayload, "ipc");
   });
 }
 
@@ -1061,6 +1271,12 @@ function buildAppMenu() {
             if (err) {
               dialog.showErrorBox("Open logs failed", err);
             }
+          }
+        },
+        {
+          label: "Export Diagnostics Package...",
+          click: async () => {
+            await handleMenuExportDiagnostics();
           }
         },
         { type: "separator" },
