@@ -271,15 +271,6 @@ host_tr <- function(key, lang) {
       home_recent_path_label = "Path",
       home_recent_path_missing = "Path unavailable (file not found).",
       home_unknown_name = "Unnamed Import",
-      home_export_diagnostics = "Export Diagnostics",
-      home_export_diagnostics_unavailable = "Diagnostics export is unavailable in this runtime.",
-      home_export_diagnostics_success = "Diagnostics package created: %s",
-      home_export_diagnostics_failed = "Diagnostics export failed: %s",
-      home_issue_template_title = "Issue Report Template",
-      home_issue_template_desc = "Copy this template into your email or issue tracker, then attach the diagnostics zip.",
-      home_copy_template = "Copy Template",
-      home_copy_template_ok = "Issue template copied to clipboard.",
-      home_copy_template_failed = "Failed to copy issue template.",
       home_contact_title = "Contact Developer",
       home_contact_dev_name_label = "Developer",
       home_contact_email_label = "Email",
@@ -331,15 +322,6 @@ host_tr <- function(key, lang) {
       home_recent_path_label = "路径",
       home_recent_path_missing = "路径不可用（文件不存在）。",
       home_unknown_name = "未命名导入",
-      home_export_diagnostics = "导出诊断包",
-      home_export_diagnostics_unavailable = "当前运行环境不支持导出诊断包。",
-      home_export_diagnostics_success = "诊断包已生成：%s",
-      home_export_diagnostics_failed = "诊断包导出失败：%s",
-      home_issue_template_title = "问题反馈模板",
-      home_issue_template_desc = "复制后粘贴到邮件或 issue，并附上诊断包。",
-      home_copy_template = "复制模板",
-      home_copy_template_ok = "反馈模板已复制到剪贴板。",
-      home_copy_template_failed = "复制反馈模板失败。",
       home_contact_title = "联系开发者",
       home_contact_dev_name_label = "开发者",
       home_contact_email_label = "邮箱",
@@ -565,17 +547,12 @@ ui <- fluidPage(
           return !!(window.itcsuiteDesktop && typeof window.itcsuiteDesktop.openFile === 'function');
         }
 
-        function desktopExportDiagnosticsSupported() {
-          return !!(window.itcsuiteDesktop && typeof window.itcsuiteDesktop.exportDiagnostics === 'function');
-        }
-
         function reportDesktopCapability() {
           if (!(window.Shiny && typeof window.Shiny.setInputValue === 'function')) return;
           window.Shiny.setInputValue(
             'itcsuite_desktop_capability',
             {
               open_file: desktopOpenFileSupported(),
-              export_diagnostics: desktopExportDiagnosticsSupported(),
               ts: Date.now()
             },
             { priority: 'event' }
@@ -623,63 +600,6 @@ ui <- fluidPage(
           } catch (e) {
             fallback.error = (e && e.message) ? e.message : 'Desktop open file failed.';
             Shiny.setInputValue('itcsuite_desktop_open_file_result', fallback, { priority: 'event' });
-          }
-        });
-
-        Shiny.addCustomMessageHandler('itcsuite_export_diagnostics', async function(msg) {
-          var payload = msg || {};
-          var fallback = {
-            request_id: (payload.request_id || '').toString(),
-            ok: false,
-            file_path: '',
-            error: 'Desktop diagnostics export API unavailable.'
-          };
-
-          if (!desktopExportDiagnosticsSupported()) {
-            Shiny.setInputValue('itcsuite_desktop_export_diagnostics_result', fallback, { priority: 'event' });
-            return;
-          }
-
-          try {
-            var result = await window.itcsuiteDesktop.exportDiagnostics(payload);
-            if (!result || typeof result !== 'object') {
-              Shiny.setInputValue('itcsuite_desktop_export_diagnostics_result', fallback, { priority: 'event' });
-              return;
-            }
-            Shiny.setInputValue('itcsuite_desktop_export_diagnostics_result', result, { priority: 'event' });
-          } catch (e) {
-            fallback.error = (e && e.message) ? e.message : 'Desktop diagnostics export failed.';
-            Shiny.setInputValue('itcsuite_desktop_export_diagnostics_result', fallback, { priority: 'event' });
-          }
-        });
-
-        Shiny.addCustomMessageHandler('itcsuite_copy_to_clipboard', async function(msg) {
-          var payload = msg || {};
-          var text = (payload.text || '').toString();
-          var out = { ok: false, error: '', ts: Date.now() };
-
-          try {
-            if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-              await navigator.clipboard.writeText(text);
-              out.ok = true;
-            } else {
-              var ta = document.createElement('textarea');
-              ta.value = text;
-              ta.setAttribute('readonly', '');
-              ta.style.position = 'absolute';
-              ta.style.left = '-9999px';
-              document.body.appendChild(ta);
-              ta.select();
-              out.ok = document.execCommand('copy');
-              document.body.removeChild(ta);
-            }
-          } catch (e) {
-            out.ok = false;
-            out.error = (e && e.message) ? e.message : 'clipboard error';
-          }
-
-          if (window.Shiny && typeof window.Shiny.setInputValue === 'function') {
-            window.Shiny.setInputValue('itcsuite_copy_result', out, { priority: 'event' });
           }
         });
 
@@ -819,18 +739,11 @@ server <- function(input, output, session) {
   }
 
   desktop_open_file_capability <- reactiveVal(FALSE)
-  desktop_export_diagnostics_capability <- reactiveVal(FALSE)
   desktop_open_file_seq <- reactiveVal(0L)
   desktop_open_file_pending <- new.env(parent = emptyenv())
-  desktop_diagnostics_seq <- reactiveVal(0L)
-  desktop_diagnostics_pending_id <- reactiveVal("")
 
   desktop_enabled <- function() {
     isTRUE(is_desktop_runtime) && isTRUE(desktop_open_file_capability())
-  }
-
-  desktop_diagnostics_enabled <- function() {
-    isTRUE(is_desktop_runtime) && isTRUE(desktop_export_diagnostics_capability())
   }
 
   desktop_default_filters <- function(purpose) {
@@ -860,7 +773,6 @@ server <- function(input, output, session) {
   observeEvent(input$itcsuite_desktop_capability, {
     capability <- input$itcsuite_desktop_capability
     desktop_open_file_capability(home_desktop_capability_open_file(capability))
-    desktop_export_diagnostics_capability(home_desktop_capability_export_diagnostics(capability))
   }, ignoreInit = FALSE)
 
   observeEvent(input$itcsuite_desktop_open_file_result, {
@@ -885,60 +797,6 @@ server <- function(input, output, session) {
       return(invisible(NULL))
     }
     invoke_desktop_callback(on_selected, normalized)
-    invisible(NULL)
-  }, ignoreInit = TRUE)
-
-  diagnostics_report_template <- reactiveVal("")
-  diagnostics_archive_path <- reactiveVal("")
-
-  observeEvent(input$itcsuite_desktop_export_diagnostics_result, {
-    normalized <- home_desktop_normalize_export_diagnostics_result(input$itcsuite_desktop_export_diagnostics_result)
-    pending_id <- home_desktop_scalar_chr(desktop_diagnostics_pending_id(), default = "")
-    if (!nzchar(pending_id) || !identical(normalized$request_id, pending_id)) return(invisible(NULL))
-    desktop_diagnostics_pending_id("")
-
-    if (!isTRUE(normalized$ok)) {
-      msg <- home_desktop_scalar_chr(normalized$error, default = "Desktop diagnostics export failed.")
-      showNotification(host_trf("home_export_diagnostics_failed", host_lang(), msg), type = "error", duration = 6)
-      telemetry_log_event(
-        event = "home.user_action",
-        level = "ERROR",
-        module = "host",
-        payload = list(action = "export_diagnostics", outcome = "error", message = msg),
-        lang = host_lang()
-      )
-      return(invisible(NULL))
-    }
-
-    archive_path <- normalize_recent_path(normalized$file_path)
-    diagnostics_archive_path(archive_path)
-    template <- paste0(
-      "Issue summary:\n",
-      "- ViaBind version: ", host_app_version, "\n",
-      "- Runtime: desktop\n",
-      "- Date (UTC): ", format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"), "\n",
-      "- Diagnostics package: ", archive_path, "\n",
-      "- Steps to reproduce:\n",
-      "  1) ...\n",
-      "  2) ...\n",
-      "- Expected result:\n",
-      "  ...\n",
-      "- Actual result:\n",
-      "  ...\n"
-    )
-    diagnostics_report_template(template)
-    showNotification(
-      host_trf("home_export_diagnostics_success", host_lang(), basename(archive_path)),
-      type = "message",
-      duration = 5
-    )
-    telemetry_log_event(
-      event = "home.user_action",
-      level = "INFO",
-      module = "host",
-      payload = list(action = "export_diagnostics", outcome = "ok", archive = archive_path),
-      lang = host_lang()
-    )
     invisible(NULL)
   }, ignoreInit = TRUE)
 
@@ -1343,9 +1201,6 @@ server <- function(input, output, session) {
     enabled = function() {
       desktop_enabled()
     },
-    export_diagnostics_enabled = function() {
-      desktop_diagnostics_enabled()
-    },
     open_file = function(
       purpose,
       title,
@@ -1457,61 +1312,11 @@ server <- function(input, output, session) {
     )
   }, ignoreInit = FALSE)
 
-  observeEvent(input$home_copy_issue_template, {
-    txt <- telemetry_scalar_chr(diagnostics_report_template(), default = "")
-    if (!nzchar(txt)) return(invisible(NULL))
-    session$sendCustomMessage("itcsuite_copy_to_clipboard", list(text = txt))
-  }, ignoreInit = TRUE)
-
-  observeEvent(input$itcsuite_copy_result, {
-    out <- input$itcsuite_copy_result
-    if (!is.list(out)) return(invisible(NULL))
-    if (isTRUE(out$ok)) {
-      showNotification(host_tr("home_copy_template_ok", host_lang()), type = "message", duration = 3)
-      telemetry_log_event(
-        event = "home.user_action",
-        level = "INFO",
-        module = "host",
-        payload = list(action = "copy_issue_template", outcome = "ok"),
-        lang = host_lang()
-      )
-    } else {
-      showNotification(host_tr("home_copy_template_failed", host_lang()), type = "warning", duration = 4)
-      telemetry_log_event(
-        event = "home.user_action",
-        level = "WARN",
-        module = "host",
-        payload = list(action = "copy_issue_template", outcome = "error", message = out$error %||% ""),
-        lang = host_lang()
-      )
-    }
-  }, ignoreInit = TRUE)
-
   output$home_panel_ui <- renderUI({
     l <- host_lang()
     import_recs <- with_recent_path_status(home_state$import_records)
+    import_recs <- home_filter_existing_recent_records(import_recs)
     if (!is.list(import_recs)) import_recs <- list()
-    issue_template_txt <- telemetry_scalar_chr(diagnostics_report_template(), default = "")
-    issue_template_panel <- NULL
-    if (nzchar(issue_template_txt)) {
-      issue_template_panel <- div(
-        class = "home-panel",
-        tags$h4(host_tr("home_issue_template_title", l)),
-        tags$p(host_tr("home_issue_template_desc", l)),
-        tags$textarea(
-          id = "home_issue_template_text",
-          class = "form-control",
-          readonly = "readonly",
-          rows = 10,
-          style = "width:100%;font-family:Menlo,Consolas,monospace;font-size:12px;",
-          issue_template_txt
-        ),
-        div(
-          style = "margin-top:8px;",
-          actionButton("home_copy_issue_template", host_tr("home_copy_template", l), class = "btn btn-default btn-sm")
-        )
-      )
-    }
 
     build_recent_table <- function(recs, empty_text) {
       if (!is.list(recs) || length(recs) < 1) {
@@ -1690,8 +1495,7 @@ server <- function(input, output, session) {
             )
           )
         )
-      ),
-      issue_template_panel
+      )
     )
   })
 

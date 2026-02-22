@@ -79,3 +79,23 @@ testthat::test_that("home_parse_imported_at keeps hh:mm:ss for ISO timestamps wi
   rendered <- format(as.POSIXct(ts_num, origin = "1970-01-01", tz = "UTC"), "%H:%M:%S")
   testthat::expect_identical(rendered, "11:28:34")
 })
+
+testthat::test_that("home_filter_existing_recent_records returns empty list for non-list input", {
+  testthat::expect_equal(home_filter_existing_recent_records(NULL), list())
+  testthat::expect_equal(home_filter_existing_recent_records("x"), list())
+})
+
+testthat::test_that("home_filter_existing_recent_records keeps only path_exists TRUE in original order", {
+  rec_a <- list(id = "a", path_exists = FALSE, marker = "drop")
+  rec_b <- list(id = "b", path_exists = TRUE, marker = "keep-1")
+  rec_c <- list(id = "c", marker = "drop-missing")
+  rec_d <- list(id = "d", path_exists = NA, marker = "drop-na")
+  rec_e <- list(id = "e", path_exists = TRUE, marker = "keep-2")
+
+  records <- list(rec_a, rec_b, rec_c, rec_d, rec_e)
+  out <- home_filter_existing_recent_records(records)
+
+  testthat::expect_equal(length(out), 2L)
+  testthat::expect_identical(out[[1]], rec_b)
+  testthat::expect_identical(out[[2]], rec_e)
+})

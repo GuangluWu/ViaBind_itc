@@ -3,7 +3,7 @@
 # [COMMENT_STD][MODULE_HEADER]
 # 模块职责：提供首页最近导入记录的类型识别、目标步骤映射与裁剪排序辅助函数。
 # 依赖：base R（字符串处理、列表处理、时间转换）。
-# 对外接口：home_detect_import_type()、home_target_step_from_import_type()、home_trim_recent_records()。
+# 对外接口：home_detect_import_type()、home_target_step_from_import_type()、home_filter_existing_recent_records()、home_trim_recent_records()。
 # 副作用：无（纯函数，不修改外部状态）。
 # 变更历史：2026-02-14 - 新增首页最近导入 helper。
 
@@ -97,6 +97,11 @@ home_sort_recent_records <- function(records) {
   scores[!is.finite(scores)] <- -Inf
   ord <- order(-scores, seq_along(scores))
   records[ord]
+}
+
+home_filter_existing_recent_records <- function(records) {
+  if (!is.list(records) || length(records) < 1) return(list())
+  Filter(function(rec) is.list(rec) && isTRUE(rec$path_exists), records)
 }
 
 home_trim_recent_records <- function(records, max_records = 200L) {

@@ -31,13 +31,6 @@ testthat::test_that("home_desktop_capability_open_file only accepts list capabil
   testthat::expect_false(home_desktop_capability_open_file("true"))
 })
 
-testthat::test_that("home_desktop_capability_export_diagnostics reads list capability", {
-  testthat::expect_false(home_desktop_capability_export_diagnostics(NULL))
-  testthat::expect_false(home_desktop_capability_export_diagnostics(list(export_diagnostics = FALSE)))
-  testthat::expect_true(home_desktop_capability_export_diagnostics(list(export_diagnostics = TRUE)))
-  testthat::expect_false(home_desktop_capability_export_diagnostics("true"))
-})
-
 testthat::test_that("home_desktop_sanitize_filters keeps valid extensions and falls back", {
   filters <- home_desktop_sanitize_filters(
     list(
@@ -78,19 +71,6 @@ testthat::test_that("home_desktop_normalize_open_file_result normalizes scalar f
   testthat::expect_false(out$canceled)
   testthat::expect_equal(out$file_path, "/tmp/a.xlsx")
   testthat::expect_equal(out$file_name, "a.xlsx")
-  testthat::expect_equal(out$error, "")
-})
-
-testthat::test_that("home_desktop_normalize_export_diagnostics_result normalizes fields", {
-  out <- home_desktop_normalize_export_diagnostics_result(list(
-    request_id = "  req_diag_1 ",
-    ok = TRUE,
-    file_path = " /tmp/diag.zip ",
-    error = NULL
-  ))
-  testthat::expect_equal(out$request_id, "req_diag_1")
-  testthat::expect_true(out$ok)
-  testthat::expect_equal(out$file_path, "/tmp/diag.zip")
   testthat::expect_equal(out$error, "")
 })
 
