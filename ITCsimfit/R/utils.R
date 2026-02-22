@@ -399,24 +399,6 @@ is_near_zero <- function(x, tolerance = NULL) {
 }
 
 # ==============================================================================
-# 进度条辅助函数
-# ==============================================================================
-
-#' 创建带自动清理的进度条
-#' 
-#' @param message 进度条消息
-#' @param value 初始值（0-1）
-#' @param ... 传递给 Progress$new() 的其他参数
-#' @return Progress 对象
-create_progress <- function(message = "处理中...", value = 0, ...) {
-  progress <- shiny::Progress$new(...)
-  progress$set(message = message, value = value)
-  
-  # 返回带有自动清理的对象
-  return(progress)
-}
-
-# ==============================================================================
 # 缓存辅助函数
 # ==============================================================================
 
@@ -432,17 +414,6 @@ cache_hit <- function(cache_val, cache_key, new_key) {
   }
   
   return(identical(cache_key, new_key))
-}
-
-#' 生成缓存键
-#' 
-#' 基于多个参数生成唯一的缓存键
-#' 
-#' @param ... 用于生成键的参数
-#' @return 字符串键
-generate_cache_key <- function(...) {
-  params <- list(...)
-  return(digest::digest(params))
 }
 
 # ==============================================================================
@@ -509,38 +480,4 @@ time_it <- function(expr, label = "", log_result = FALSE) {
   }
   
   return(list(result = result, elapsed = elapsed))
-}
-
-# ==============================================================================
-# 调试辅助函数
-# ==============================================================================
-
-#' 调试输出（仅在开发模式下）
-#' 
-#' @param ... 要输出的内容
-#' @param prefix 前缀（默认 "[DEBUG]"）
-debug_print <- function(..., prefix = "[DEBUG]") {
-  # 检查是否在开发模式
-  if(exists("DEBUG_MODE") && DEBUG_MODE) {
-    message(prefix, " ", ...)
-  }
-}
-
-#' 打印对象的结构信息
-#' 
-#' @param obj 对象
-#' @param name 对象名称
-print_object_info <- function(obj, name = "object") {
-  if(exists("DEBUG_MODE") && DEBUG_MODE) {
-    cat(sprintf("\n=== %s ===\n", name))
-    cat("Class:", class(obj), "\n")
-    if(is.data.frame(obj) || is.matrix(obj)) {
-      cat("Dimensions:", paste(dim(obj), collapse = " x "), "\n")
-    } else if(is.vector(obj) || is.list(obj)) {
-      cat("Length:", length(obj), "\n")
-    }
-    cat("Structure:\n")
-    str(obj, max.level = 2)
-    cat("\n")
-  }
 }

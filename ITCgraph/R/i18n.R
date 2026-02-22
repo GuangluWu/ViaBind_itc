@@ -168,10 +168,3 @@ graph_tr <- function(key, lang = "en") {
   }
   if (is.null(val)) key else val
 }
-
-graph_trf <- function(key, lang = "en", ...) {
-  tpl <- graph_tr(key, lang = lang)
-  args <- list(...)
-  if (length(args) == 0) return(tpl)
-  tryCatch(do.call(sprintf, c(list(tpl), args)), error = function(e) tpl)
-}

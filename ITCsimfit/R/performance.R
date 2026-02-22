@@ -527,22 +527,6 @@ is_slow_operation <- function(elapsed, threshold = NULL) {
   return(elapsed >= threshold)
 }
 
-#' 性能警告（当操作过慢时）
-#' 
-#' @param label 操作标签
-#' @param elapsed 耗时（秒）
-#' @param threshold 阈值（秒，默认使用配置的警告阈值）
-perf_warning <- function(label, elapsed, threshold = NULL) {
-  if (is.null(threshold)) {
-    threshold <- PERF_CONFIG$warning_threshold
-  }
-  
-  if (elapsed >= threshold) {
-    warning(sprintf("性能警告: '%s' 耗时 %.2f 秒（阈值: %.2f 秒）", 
-                   label, elapsed, threshold))
-  }
-}
-
 # ==============================================================================
 # 性能优化建议
 # ==============================================================================
