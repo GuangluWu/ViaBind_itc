@@ -209,3 +209,101 @@ testthat::test_that("validate_fit_range_restore_request rejects n_inj semantic m
   testthat::expect_false(isTRUE(out$ok))
   testthat::expect_equal(out$reason, "n_inj_mismatch")
 })
+
+testthat::test_that("extract_step2_import_diagnostics restores full diagnostics payload", {
+  sheets <- list(
+    error_analysis = data.frame(
+      Parameter = c("logK1", "H1"),
+      Value = c(6.5, -5000),
+      SE = c(0.012, 120),
+      stringsAsFactors = FALSE
+    ),
+    error_reliability = data.frame(
+      metric = c("n_data", "n_params", "dof", "reliability_color", "note"),
+      value = c("20", "5", "15", "#27ae60", "stable"),
+      stringsAsFactors = FALSE
+    ),
+    residuals = data.frame(
+      Inj = c(1, 2),
+      Fitted = c(-100, -90),
+      Residual = c(1.2, -0.8),
+      stringsAsFactors = FALSE
+    ),
+    correlation_matrix = data.frame(
+      Parameter = c("logK1", "H1"),
+      logK1 = c(1, 0.22),
+      H1 = c(0.22, 1),
+      stringsAsFactors = FALSE
+    ),
+    report = data.frame(
+      line = c(2, 1, 3),
+      text = c("line-2", "line-1", "line-3"),
+      stringsAsFactors = FALSE
+    )
+  )
+
+  out <- extract_step2_import_diagnostics(sheets)
+
+  testthat::expect_true(isTRUE(out$has_error_analysis))
+  testthat::expect_equal(nrow(out$error_analysis), 2)
+  testthat::expect_equal(out$error_analysis_info$n_data, 20)
+  testthat::expect_equal(out$error_analysis_info$n_params, 5)
+  testthat::expect_equal(out$error_analysis_info$dof, 15)
+  testthat::expect_equal(out$error_analysis_info$reliability_color, "#27ae60")
+  testthat::expect_equal(out$error_analysis_info$note, "stable")
+  testthat::expect_equal(nrow(out$residuals_data), 2)
+  testthat::expect_equal(nrow(out$correlation_matrix_df), 2)
+  testthat::expect_equal(out$current_report, "line-1\nline-2\nline-3")
+})
+
+testthat::test_that("extract_step2_import_diagnostics report fallback uses first column", {
+  sheets <- list(
+    report = data.frame(
+      content = c("alpha", "beta"),
+      stringsAsFactors = FALSE
+    )
+  )
+
+  out <- extract_step2_import_diagnostics(sheets)
+  testthat::expect_equal(out$current_report, "alpha\nbeta")
+  testthat::expect_false(isTRUE(out$has_error_analysis))
+})
+
+testthat::test_that("extract_step2_import_diagnostics keeps non-numeric reliability values", {
+  sheets <- list(
+    error_reliability = data.frame(
+      metric = c("dof", "reliability_color", "remark"),
+      value = c("9", "#f39c12", "moderate"),
+      stringsAsFactors = FALSE
+    )
+  )
+
+  out <- extract_step2_import_diagnostics(sheets)
+  testthat::expect_equal(out$error_analysis_info$dof, 9)
+  testthat::expect_equal(out$error_analysis_info$reliability_color, "#f39c12")
+  testthat::expect_equal(out$error_analysis_info$remark, "moderate")
+})
+
+testthat::test_that("extract_step2_import_diagnostics handles missing or empty sheets", {
+  out_missing <- extract_step2_import_diagnostics(list())
+  testthat::expect_false(isTRUE(out_missing$has_error_analysis))
+  testthat::expect_null(out_missing$error_analysis)
+  testthat::expect_null(out_missing$error_analysis_info)
+  testthat::expect_null(out_missing$residuals_data)
+  testthat::expect_null(out_missing$correlation_matrix_df)
+  testthat::expect_null(out_missing$current_report)
+
+  out_empty <- extract_step2_import_diagnostics(list(
+    error_analysis = data.frame(Parameter = character(0), SE = numeric(0), stringsAsFactors = FALSE),
+    error_reliability = data.frame(metric = character(0), value = character(0), stringsAsFactors = FALSE),
+    residuals = data.frame(stringsAsFactors = FALSE),
+    correlation_matrix = data.frame(stringsAsFactors = FALSE),
+    report = data.frame(text = character(0), stringsAsFactors = FALSE)
+  ))
+  testthat::expect_false(isTRUE(out_empty$has_error_analysis))
+  testthat::expect_null(out_empty$error_analysis)
+  testthat::expect_null(out_empty$error_analysis_info)
+  testthat::expect_null(out_empty$residuals_data)
+  testthat::expect_null(out_empty$correlation_matrix_df)
+  testthat::expect_null(out_empty$current_report)
+})

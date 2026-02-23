@@ -195,6 +195,94 @@ get_preferred_integration_sheet <- function(sheets) {
   NULL
 }
 
+extract_step2_import_diagnostics <- function(sheets) {
+  empty <- list(
+    error_analysis = NULL,
+    error_analysis_info = NULL,
+    residuals_data = NULL,
+    correlation_matrix_df = NULL,
+    current_report = NULL,
+    has_error_analysis = FALSE
+  )
+  if (is.null(sheets) || !is.list(sheets) || length(sheets) < 1L) return(empty)
+
+  as_non_empty_df <- function(x) {
+    if (!is.data.frame(x)) return(NULL)
+    df <- as.data.frame(x, stringsAsFactors = FALSE)
+    if (nrow(df) < 1L || ncol(df) < 1L) return(NULL)
+    df
+  }
+
+  parse_error_info <- function(df) {
+    if (is.null(df)) return(NULL)
+    cols <- names(df)
+    col_metric <- if ("metric" %in% cols) "metric" else if (length(cols) >= 1L) cols[[1]] else ""
+    col_value <- if ("value" %in% cols) "value" else if (length(cols) >= 2L) cols[[2]] else ""
+    if (!nzchar(col_metric) || !nzchar(col_value)) return(NULL)
+
+    metrics <- trimws(as.character(df[[col_metric]]))
+    values <- trimws(as.character(df[[col_value]]))
+    keep <- nzchar(metrics)
+    if (!any(keep)) return(NULL)
+
+    metrics <- metrics[keep]
+    values <- values[keep]
+    out <- list()
+    for (i in seq_along(metrics)) {
+      key <- metrics[[i]]
+      raw_value <- values[[i]]
+      value_num <- suppressWarnings(as.numeric(raw_value))
+      if (length(value_num) >= 1L && is.finite(value_num[[1]])) {
+        out[[key]] <- value_num[[1]]
+      } else if (nzchar(raw_value) && !identical(toupper(raw_value), "NA")) {
+        out[[key]] <- raw_value
+      }
+    }
+    if (length(out) < 1L) NULL else out
+  }
+
+  parse_report <- function(df) {
+    if (is.null(df)) return(NULL)
+    cols <- names(df)
+    if (length(cols) < 1L) return(NULL)
+
+    line_col <- if ("line" %in% cols) "line" else ""
+    text_col <- if ("text" %in% cols) "text" else ""
+    if (nzchar(text_col)) {
+      lines <- as.character(df[[text_col]])
+      if (nzchar(line_col)) {
+        order_key <- suppressWarnings(as.numeric(df[[line_col]]))
+        # Keep original order for non-numeric line indices while sorting known numeric ones.
+        order_key[!is.finite(order_key)] <- seq_along(order_key)[!is.finite(order_key)]
+        ord <- order(order_key, seq_along(order_key), na.last = TRUE)
+        lines <- lines[ord]
+      }
+      if (length(lines) < 1L) return(NULL)
+      return(paste(lines, collapse = "\n"))
+    }
+
+    first_col <- cols[[1]]
+    lines <- as.character(df[[first_col]])
+    if (length(lines) < 1L) return(NULL)
+    paste(lines, collapse = "\n")
+  }
+
+  error_analysis_df <- as_non_empty_df(sheets[["error_analysis"]])
+  error_info_df <- as_non_empty_df(sheets[["error_reliability"]])
+  residuals_df <- as_non_empty_df(sheets[["residuals"]])
+  corr_df <- as_non_empty_df(sheets[["correlation_matrix"]])
+  report_df <- as_non_empty_df(sheets[["report"]])
+
+  out <- empty
+  if (!is.null(error_analysis_df)) out$error_analysis <- error_analysis_df
+  out$error_analysis_info <- parse_error_info(error_info_df)
+  if (!is.null(residuals_df)) out$residuals_data <- residuals_df
+  if (!is.null(corr_df)) out$correlation_matrix_df <- corr_df
+  out$current_report <- parse_report(report_df)
+  out$has_error_analysis <- is.data.frame(out$error_analysis) && nrow(out$error_analysis) > 0L
+  out
+}
+
 resolve_first_injection_targets <- function(mode = c("step1", "import"),
                                             meta_vals = NULL,
                                             fp_restore = NULL,

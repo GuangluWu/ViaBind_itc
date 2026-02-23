@@ -328,6 +328,15 @@
     !source_kind %in% c("import", "sim_to_exp")
   }
 
+  clear_pending_step2_sleep_restore <- function() {
+    pending_sleep <- tryCatch(step2_sleep_restore_pending_snapshot(), error = function(e) NULL)
+    if (!is.list(pending_sleep) || length(pending_sleep) < 1L) return(invisible(FALSE))
+    # Manual Step1->Step2 bridge action should override stale/pending sleep replay state.
+    step2_sleep_restore_pending_snapshot(NULL)
+    step2_sleep_restore_last_snapshot(NULL)
+    invisible(TRUE)
+  }
+
   is_finite_scalar <- function(x) length(x) == 1 && is.finite(x)
 
   payload_token <- function(payload) {
@@ -783,7 +792,7 @@
       payload <- bridge_step1_channel()
       if (is.null(payload) || !is.list(payload)) return(FALSE)
       latest_step1_payload(payload)
-      if (!isTRUE(should_allow_step1_payload_sync())) return(FALSE)
+      clear_pending_step2_sleep_restore()
       tryCatch(
         consume_step1_payload(payload),
         error = function(e) {
@@ -1608,6 +1617,33 @@
     invisible(TRUE)
   }
 
+  coerce_step2_correlation_matrix <- function(value) {
+    if (is.null(value)) return(NULL)
+    if (is.matrix(value)) {
+      mat <- suppressWarnings(matrix(as.numeric(value), nrow = nrow(value), ncol = ncol(value)))
+      if (!is.matrix(mat) || nrow(mat) < 1L || ncol(mat) < 1L) return(NULL)
+      if (any(!is.finite(mat))) return(NULL)
+      rownames(mat) <- rownames(value)
+      colnames(mat) <- colnames(value)
+      return(mat)
+    }
+    if (!is.data.frame(value)) return(NULL)
+    df <- as.data.frame(value, stringsAsFactors = FALSE)
+    if (nrow(df) < 1L || ncol(df) < 1L) return(NULL)
+    row_names <- NULL
+    if ("Parameter" %in% names(df) && ncol(df) >= 2L) {
+      row_names <- as.character(df$Parameter)
+      df$Parameter <- NULL
+    }
+    mat <- suppressWarnings(data.matrix(df))
+    if (!is.matrix(mat) || nrow(mat) < 1L || ncol(mat) < 1L) return(NULL)
+    if (any(!is.finite(mat))) return(NULL)
+    if (!is.null(row_names) && length(row_names) == nrow(mat)) rownames(mat) <- row_names
+    if (!is.null(colnames(df)) && length(colnames(df)) == ncol(mat)) colnames(mat) <- colnames(df)
+    if (is.null(rownames(mat)) && nrow(mat) == ncol(mat) && !is.null(colnames(mat))) rownames(mat) <- colnames(mat)
+    mat
+  }
+
   apply_imported_xlsx_state <- function(sheets,
                                         filepath,
                                         file_name = NULL,
@@ -1773,6 +1809,33 @@
       sim_df <- sheets[["simulation"]]
       if (!is.null(sim_df) && "Ratio_App" %in% colnames(sim_df) && "dQ_App" %in% colnames(sim_df)) {
         showNotification(tr("import_fit_data_as_exp", lang()), type = "message", duration = 4)
+      }
+    }
+
+    imported_diag <- tryCatch(extract_step2_import_diagnostics(sheets), error = function(e) NULL)
+    if (is.list(imported_diag)) {
+      values$error_analysis <- if (is.data.frame(imported_diag$error_analysis) && nrow(imported_diag$error_analysis) > 0L) {
+        as.data.frame(imported_diag$error_analysis, stringsAsFactors = FALSE)
+      } else {
+        NULL
+      }
+      values$error_analysis_info <- if (is.list(imported_diag$error_analysis_info) && length(imported_diag$error_analysis_info) > 0L) {
+        imported_diag$error_analysis_info
+      } else {
+        NULL
+      }
+      values$residuals_data <- if (is.data.frame(imported_diag$residuals_data) && nrow(imported_diag$residuals_data) > 0L) {
+        as.data.frame(imported_diag$residuals_data, stringsAsFactors = FALSE)
+      } else {
+        NULL
+      }
+      values$correlation_matrix <- coerce_step2_correlation_matrix(imported_diag$correlation_matrix_df)
+
+      report_text <- as.character(imported_diag$current_report %||% "")[1]
+      values$current_report <- if (nzchar(report_text)) report_text else NULL
+
+      if (isTRUE(imported_diag$has_error_analysis)) {
+        update_checkbox_if_present("enable_error_analysis", TRUE)
       }
     }
 
@@ -2587,34 +2650,7 @@
       NULL
     }
 
-    coerce_correlation_matrix <- function(value) {
-      if (is.null(value)) return(NULL)
-      if (is.matrix(value)) {
-        mat <- suppressWarnings(matrix(as.numeric(value), nrow = nrow(value), ncol = ncol(value)))
-        if (!is.matrix(mat) || nrow(mat) < 1L || ncol(mat) < 1L) return(NULL)
-        if (any(!is.finite(mat))) return(NULL)
-        rownames(mat) <- rownames(value)
-        colnames(mat) <- colnames(value)
-        return(mat)
-      }
-      if (!is.data.frame(value)) return(NULL)
-      df <- as.data.frame(value, stringsAsFactors = FALSE)
-      if (nrow(df) < 1L || ncol(df) < 1L) return(NULL)
-      row_names <- NULL
-      if ("Parameter" %in% names(df) && ncol(df) >= 2L) {
-        row_names <- as.character(df$Parameter)
-        df$Parameter <- NULL
-      }
-      mat <- suppressWarnings(data.matrix(df))
-      if (!is.matrix(mat) || nrow(mat) < 1L || ncol(mat) < 1L) return(NULL)
-      if (any(!is.finite(mat))) return(NULL)
-      if (!is.null(row_names) && length(row_names) == nrow(mat)) rownames(mat) <- row_names
-      if (!is.null(colnames(df)) && length(colnames(df)) == ncol(mat)) colnames(mat) <- colnames(df)
-      if (is.null(rownames(mat)) && nrow(mat) == ncol(mat) && !is.null(colnames(mat))) rownames(mat) <- colnames(mat)
-      mat
-    }
-
-    values$correlation_matrix <- coerce_correlation_matrix(diag_norm$correlation_matrix)
+    values$correlation_matrix <- coerce_step2_correlation_matrix(diag_norm$correlation_matrix)
 
     residual_subtab <- normalize_step2_sleep_restore_scalar_chr(diag_norm$residual_subtab, default = "")
     if (residual_subtab %in% c("res1", "res2", "res3", "res4")) values$residual_subtab <- residual_subtab
