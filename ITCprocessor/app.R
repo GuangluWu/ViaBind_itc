@@ -259,6 +259,17 @@ server <- function(input, output, session) {
     invisible(FALSE)
   }
 
+  session_sleep_restore <- tryCatch({
+    s <- session$userData$itcsuite_sleep_restore
+    if (is.null(s) || !is.list(s)) NULL else s
+  }, error = function(e) NULL)
+
+  sleep_restore_register <- function(step, collect_fn, apply_fn) {
+    fn <- if (!is.null(session_sleep_restore)) session_sleep_restore$register_handler else NULL
+    if (!is.function(fn)) return(invisible(FALSE))
+    invisible(isTRUE(fn(step = step, collect_fn = collect_fn, apply_fn = apply_fn)))
+  }
+
   session_desktop <- tryCatch({
     d <- session$userData$itcsuite_desktop
     if (is.null(d) || !is.list(d)) NULL else d
@@ -357,6 +368,7 @@ server <- function(input, output, session) {
   local_lang_token <- reactiveVal(0)
   restored_step1_path <- reactiveVal(NULL)
   restored_step1_name <- reactiveVal(NULL)
+  step1_sleep_restore_pending_params <- reactiveVal(NULL)
   step1_active_source_path <- reactiveVal("")
   step1_active_source_kind <- reactiveVal("none")
   step1_import_started_at <- reactiveVal(NA_real_)
@@ -500,6 +512,9 @@ server <- function(input, output, session) {
     name_norm <- as.character(display_name %||% "")[1]
     name_norm <- trimws(name_norm)
     if (!nzchar(name_norm)) name_norm <- basename(path_norm)
+    if (!identical(as.character(source_kind %||% "")[1], "sleep_restore")) {
+      step1_sleep_restore_pending_params(NULL)
+    }
 
     home_restore_inflight(isTRUE(mark_restore))
     restored_step1_path(path_norm)
@@ -537,8 +552,154 @@ server <- function(input, output, session) {
 
   home_register_restore("step1", restore_step1_home_payload)
 
+  safe_step1_input_get <- function(id) {
+    tryCatch(shiny::isolate(input[[id]]), error = function(e) NULL)
+  }
+
+  normalize_step1_sleep_scalar_chr <- function(value, default = "") {
+    out <- as.character(value %||% "")[1]
+    out <- trimws(out)
+    if (nzchar(out)) out else default
+  }
+
+  normalize_step1_sleep_scalar_num <- function(value, default = NA_real_) {
+    out <- suppressWarnings(as.numeric(value)[1])
+    if (is.finite(out)) out else default
+  }
+
+  normalize_step1_sleep_scalar_lgl <- function(value, default = FALSE) {
+    out <- suppressWarnings(as.logical(value)[1])
+    if (isTRUE(is.na(out))) return(isTRUE(default))
+    isTRUE(out)
+  }
+
+  notify_step1_sleep_restore <- function(message_en, message_zh = message_en, type = "warning", duration = 4) {
+    lang_now <- tryCatch(lang(), error = function(e) "en")
+    msg <- if (identical(lang_now, "zh")) message_zh else message_en
+    showNotification(msg, type = type, duration = duration)
+  }
+
+  collect_step1_sleep_restore_snapshot <- function() {
+    source_path <- resolve_step1_recent_source_path()
+    if (!nzchar(source_path)) return(NULL)
+    display_name <- normalize_step1_sleep_scalar_chr(current_itc_name(), default = basename(source_path))
+    collect_bool <- function(id) {
+      raw <- safe_step1_input_get(id)
+      if (is.null(raw)) return(NULL)
+      value <- suppressWarnings(as.logical(raw)[1])
+      if (isTRUE(is.na(value))) return(NULL)
+      isTRUE(value)
+    }
+    collect_num <- function(id) {
+      raw <- safe_step1_input_get(id)
+      if (is.null(raw)) return(NULL)
+      value <- suppressWarnings(as.numeric(raw)[1])
+      if (is.finite(value)) value else NULL
+    }
+
+    params <- list()
+    params$zoom_baseline <- collect_bool("zoom_baseline")
+    params$duration <- collect_num("duration")
+    params$offset <- collect_num("offset")
+    params$spar <- collect_num("spar")
+    params$int_start_offset <- collect_num("int_start_offset")
+    params$limit_integration <- collect_bool("limit_integration")
+    params$integration_window <- collect_num("integration_window")
+    params$param_syringe_mM <- collect_num("param_syringe_mM")
+    params$param_cell_mM <- collect_num("param_cell_mM")
+    params$param_V_pre_ul <- collect_num("param_V_pre_ul")
+    params$param_V_inj_ul <- collect_num("param_V_inj_ul")
+    params <- params[!vapply(params, is.null, logical(1))]
+
+    list(
+      source_path = source_path,
+      display_name = display_name,
+      params = params
+    )
+  }
+
+  apply_step1_sleep_restore_params <- function(params) {
+    if (!is.list(params)) return(invisible(FALSE))
+
+    update_checkbox_if_needed <- function(id, value) {
+      value_lgl <- suppressWarnings(as.logical(value)[1])
+      if (isTRUE(is.na(value_lgl))) return(invisible(FALSE))
+      updateCheckboxInput(session, id, value = isTRUE(value_lgl))
+      invisible(TRUE)
+    }
+    update_numeric_if_needed <- function(id, value, round_int = FALSE) {
+      value_num <- suppressWarnings(as.numeric(value)[1])
+      if (!is.finite(value_num)) return(invisible(FALSE))
+      if (isTRUE(round_int)) value_num <- as.integer(round(value_num))
+      updateNumericInput(session, id, value = value_num)
+      invisible(TRUE)
+    }
+    update_slider_if_needed <- function(id, value) {
+      value_num <- suppressWarnings(as.numeric(value)[1])
+      if (!is.finite(value_num)) return(invisible(FALSE))
+      updateSliderInput(session, id, value = value_num)
+      invisible(TRUE)
+    }
+
+    update_checkbox_if_needed("zoom_baseline", params$zoom_baseline)
+    update_slider_if_needed("duration", params$duration)
+    update_slider_if_needed("offset", params$offset)
+    update_slider_if_needed("spar", params$spar)
+    update_numeric_if_needed("int_start_offset", params$int_start_offset)
+    update_checkbox_if_needed("limit_integration", params$limit_integration)
+    update_numeric_if_needed("integration_window", params$integration_window, round_int = TRUE)
+    update_numeric_if_needed("param_syringe_mM", params$param_syringe_mM)
+    update_numeric_if_needed("param_cell_mM", params$param_cell_mM)
+    update_numeric_if_needed("param_V_pre_ul", params$param_V_pre_ul)
+    update_numeric_if_needed("param_V_inj_ul", params$param_V_inj_ul)
+
+    invisible(TRUE)
+  }
+
+  apply_step1_sleep_restore_snapshot <- function(snapshot) {
+    if (is.null(snapshot) || !is.list(snapshot)) return(FALSE)
+    source_path <- normalize_step1_path(snapshot$source_path)
+    if (!nzchar(source_path) || !file.exists(source_path)) {
+      notify_step1_sleep_restore(
+        "Step1 restore failed: source file is missing.",
+        "Step1 恢复失败：源文件不存在。",
+        type = "warning",
+        duration = 5
+      )
+      return(FALSE)
+    }
+
+    display_name <- normalize_step1_sleep_scalar_chr(snapshot$display_name, default = basename(source_path))
+    ok <- isTRUE(import_step1_path(
+      filepath = source_path,
+      display_name = display_name,
+      source_kind = "sleep_restore",
+      mark_restore = TRUE
+    ))
+    if (!isTRUE(ok)) {
+      notify_step1_sleep_restore(
+        "Step1 restore failed: unable to import source file.",
+        "Step1 恢复失败：无法导入源文件。",
+        type = "warning",
+        duration = 5
+      )
+      return(FALSE)
+    }
+
+    params <- if (is.list(snapshot$params)) snapshot$params else list()
+    step1_sleep_restore_pending_params(params)
+    TRUE
+  }
+
+  sleep_restore_register(
+    "step1",
+    collect_fn = collect_step1_sleep_restore_snapshot,
+    apply_fn = apply_step1_sleep_restore_snapshot
+  )
+
   observeEvent(input$file1, {
     if (is.null(input$file1) || is.null(input$file1$datapath)) return()
+    step1_sleep_restore_pending_params(NULL)
     restored_step1_path(NULL)
     restored_step1_name(NULL)
     step1_active_source_path(normalize_step1_path(input$file1$datapath))
@@ -750,6 +911,13 @@ server <- function(input, output, session) {
         )
       }
     }
+
+    pending_sleep_params <- step1_sleep_restore_pending_params()
+    if (is.list(pending_sleep_params)) {
+      apply_step1_sleep_restore_params(pending_sleep_params)
+      step1_sleep_restore_pending_params(NULL)
+    }
+
     if (skip_recent_log) home_restore_inflight(FALSE)
 
     started <- suppressWarnings(as.numeric(step1_import_started_at())[1])

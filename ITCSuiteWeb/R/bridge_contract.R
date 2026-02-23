@@ -157,6 +157,9 @@ sanitize_step2_plot_payload <- function(payload) {
   source <- normalize_bridge_scalar_chr(payload$source)
   source_label <- as.character(payload$source_label %||% "")
   source_label <- if (length(source_label) == 0) "" else source_label[1]
+  source_path <- as.character(payload$source_path %||% "")
+  source_path <- if (length(source_path) == 0) "" else trimws(source_path[1])
+  if (!nzchar(source_path) || identical(toupper(source_path), "NA")) source_path <- ""
 
   list(
     schema_version = "itcsuite.step2_plot.v1",
@@ -164,6 +167,7 @@ sanitize_step2_plot_payload <- function(payload) {
     token = token,
     source = source,
     source_label = source_label,
+    source_path = source_path,
     sheets = sheets,
     integration_rev = if (is.data.frame(payload$integration_rev)) as.data.frame(payload$integration_rev) else NULL,
     meta_rev = if (is.data.frame(payload$meta_rev)) as.data.frame(payload$meta_rev) else NULL,

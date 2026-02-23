@@ -45,9 +45,11 @@ let unresponsiveRecoveryTimer = null;
 let rendererMarkedUnresponsive = false;
 let openFileLastDir = "";
 let diagnosticsExportInFlight = false;
+let latestPowerEventPayload = null;
 
 const RECOVERY_COOLDOWN_MS = 10000;
 const UNRESPONSIVE_RECOVERY_DELAY_MS = 3000;
+const POWER_EVENT_REPLAY_WINDOW_MS = 3 * 60 * 1000;
 
 function useBundledRuntimeInDev() {
   return process.env.ITCSUITE_USE_BUNDLED_R === "1";
@@ -512,12 +514,9 @@ async function restartBackendAndReload(reason) {
   }
 
   allowedUrlPrefix = `http://${HOST}:${port}`;
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    const currentUrl = mainWindow.webContents.getURL();
-    if (!currentUrl.startsWith(allowedUrlPrefix)) {
-      await loadShinyPage(allowedUrlPrefix);
-    }
-  }
+  // Let wireBackendEvents() own renderer navigation on backend-ready.
+  // Avoid a second load here, otherwise one wake cycle can create two
+  // back-to-back Shiny sessions and wipe the just-restored state.
 
   appendMainLog("backend_restart_success", { reason, port, url: allowedUrlPrefix });
 }
@@ -1044,6 +1043,130 @@ function emitDownloadSavedEvent(fileName, savePath) {
   mainWindow.webContents.executeJavaScript(script).catch(() => {});
 }
 
+function buildPowerEventPayload(type, source = "desktop-main", ts = Date.now()) {
+  const typeSafe = trimScalar(type, "");
+  if (!typeSafe) return null;
+  const sourceSafe = trimScalar(source, "desktop-main");
+  const tsNum = Number.isFinite(Number(ts)) ? Number(ts) : Date.now();
+  return { type: typeSafe, ts: tsNum, source: sourceSafe };
+}
+
+function emitPowerPayloadToRenderer(payload, emitKind = "direct", options = {}) {
+  if (!payload || typeof payload !== "object") return Promise.resolve(false);
+  const normalized = buildPowerEventPayload(payload.type, payload.source, payload.ts);
+  if (!normalized) return Promise.resolve(false);
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    appendMainLog("power_event_emit_skipped", {
+      type: normalized.type,
+      source: normalized.source,
+      emit_kind: emitKind,
+      reason: "window_unavailable"
+    });
+    return Promise.resolve(false);
+  }
+
+  const payloadJson = JSON.stringify(normalized);
+  const waitForShinyMsRaw = Number(options.waitForShinyMs);
+  const waitForShinyMs = Number.isFinite(waitForShinyMsRaw) && waitForShinyMsRaw > 0
+    ? Math.round(waitForShinyMsRaw)
+    : 0;
+  const pollIntervalMsRaw = Number(options.pollIntervalMs);
+  const pollIntervalMs = Number.isFinite(pollIntervalMsRaw) && pollIntervalMsRaw > 0
+    ? Math.max(25, Math.min(1000, Math.round(pollIntervalMsRaw)))
+    : 120;
+
+  const script = waitForShinyMs > 0
+    ? `(() => {
+      const payload = ${payloadJson};
+      const deadline = Date.now() + ${waitForShinyMs};
+      const pollMs = ${pollIntervalMs};
+      return new Promise((resolve) => {
+        const attempt = () => {
+          try {
+            if (window.Shiny && typeof window.Shiny.setInputValue === "function") {
+              window.Shiny.setInputValue("itcsuite_power_event", payload, { priority: "event" });
+              resolve(true);
+              return;
+            }
+          } catch (_) {}
+          if (Date.now() >= deadline) {
+            resolve(false);
+            return;
+          }
+          window.setTimeout(attempt, pollMs);
+        };
+        attempt();
+      });
+    })();`
+    : `(() => {
+      if (window.Shiny && typeof window.Shiny.setInputValue === "function") {
+        window.Shiny.setInputValue("itcsuite_power_event", ${payloadJson}, { priority: "event" });
+        return true;
+      }
+      return false;
+    })();`;
+
+  return mainWindow.webContents.executeJavaScript(script)
+    .then((ok) => {
+      const delivered = ok === true;
+      appendMainLog("power_event_emit", {
+        type: normalized.type,
+        source: normalized.source,
+        emit_kind: emitKind,
+        wait_for_shiny_ms: waitForShinyMs,
+        delivered
+      });
+      return delivered;
+    })
+    .catch((error) => {
+      appendMainLog("power_event_emit_failed", {
+        type: normalized.type,
+        source: normalized.source,
+        emit_kind: emitKind,
+        wait_for_shiny_ms: waitForShinyMs,
+        error: error.message
+      });
+      return false;
+    });
+}
+
+function emitPowerEventToRenderer(type, source = "desktop-main") {
+  const payload = buildPowerEventPayload(type, source, Date.now());
+  if (!payload) return Promise.resolve(false);
+  latestPowerEventPayload = payload;
+  return emitPowerPayloadToRenderer(payload, "direct");
+}
+
+function replayLatestPowerEventToRenderer(reason = "did-finish-load") {
+  const payload = latestPowerEventPayload;
+  if (!payload || typeof payload !== "object") return Promise.resolve(false);
+  if (!["resume", "unlock-screen"].includes(trimScalar(payload.type, ""))) {
+    return Promise.resolve(false);
+  }
+  const ageMs = Date.now() - Number(payload.ts || 0);
+  if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > POWER_EVENT_REPLAY_WINDOW_MS) {
+    return Promise.resolve(false);
+  }
+
+  const replayPayload = {
+    ...payload,
+    source: `${trimScalar(payload.source, "desktop-main")}.replay`
+  };
+  return emitPowerPayloadToRenderer(replayPayload, "replay", {
+    waitForShinyMs: 10000,
+    pollIntervalMs: 120
+  })
+    .then((delivered) => {
+      appendMainLog("power_event_replay", {
+        reason: trimScalar(reason, "did-finish-load"),
+        type: replayPayload.type,
+        age_ms: ageMs,
+        delivered
+      });
+      return delivered;
+    });
+}
+
 function configureDownloadBehavior() {
   session.defaultSession.on("will-download", (_event, item) => {
     const downloadsPath = app.getPath("downloads");
@@ -1167,11 +1290,14 @@ function createMainWindow() {
   });
 
   mainWindow.webContents.on("did-finish-load", async () => {
+    const currentUrl = mainWindow.webContents.getURL();
+    if (allowedUrlPrefix && currentUrl.startsWith(allowedUrlPrefix)) {
+      replayLatestPowerEventToRenderer("did-finish-load").catch(() => {});
+    }
+
     if (!smokeMode || smokeReported || !allowedUrlPrefix) {
       return;
     }
-
-    const currentUrl = mainWindow.webContents.getURL();
     if (!currentUrl.startsWith(allowedUrlPrefix)) {
       return;
     }
@@ -1384,12 +1510,18 @@ app.whenReady().then(async () => {
   configureDownloadBehavior();
   createMainWindow();
   wireBackendEvents();
+  powerMonitor.on("suspend", () => {
+    appendMainLog("power_suspend", {});
+    emitPowerEventToRenderer("suspend", "power-monitor");
+  });
   powerMonitor.on("resume", () => {
     appendMainLog("power_resume", {});
+    emitPowerEventToRenderer("resume", "power-monitor");
     recoverAfterResume("power-resume");
   });
   powerMonitor.on("unlock-screen", () => {
     appendMainLog("unlock_screen", {});
+    emitPowerEventToRenderer("unlock-screen", "power-monitor");
     recoverAfterResume("unlock-screen");
   });
 

@@ -16,6 +16,7 @@ source("R/bridge_contract.R")
 source("R/guide_annotations.R")
 source("R/home_recent_helpers.R")
 source("R/home_recent_store.R")
+source("R/home_sleep_restore_store.R")
 source("R/home_desktop_helpers.R")
 source("R/home_contact_helpers.R")
 source("R/telemetry.R")
@@ -28,6 +29,9 @@ if (!exists("home_detect_import_type", mode = "function")) {
 }
 if (!exists("home_recent_store_load", mode = "function")) {
   fail_fast("Startup check failed: home recent store helper is unavailable.")
+}
+if (!exists("home_sleep_restore_store_load", mode = "function")) {
+  fail_fast("Startup check failed: sleep restore store helper is unavailable.")
 }
 if (!exists("home_desktop_normalize_open_file_result", mode = "function")) {
   fail_fast("Startup check failed: home desktop helper is unavailable.")
@@ -520,6 +524,10 @@ ui <- fluidPage(
           disconnectTimer = null;
         }
 
+        function isDesktopRuntime() {
+          return !!(window.itcsuiteDesktop && typeof window.itcsuiteDesktop.openFile === 'function');
+        }
+
         function canAutoReload() {
           try {
             var raw = sessionStorage.getItem(disconnectReloadKey) || '0';
@@ -538,6 +546,9 @@ ui <- fluidPage(
         }
 
         function tryAutoReload() {
+          // Desktop shell already owns wake/reconnect recovery; avoid a second
+          // renderer reload from web-side disconnect timer after long sleep.
+          if (isDesktopRuntime()) return;
           if (!canAutoReload()) return;
           markAutoReload();
           window.location.reload();
@@ -610,6 +621,7 @@ ui <- fluidPage(
         });
 
         $(document).on('shiny:disconnected', function() {
+          if (isDesktopRuntime()) return;
           clearDisconnectTimer();
           disconnectTimer = setTimeout(function() {
             disconnectTimer = null;
@@ -726,11 +738,17 @@ server <- function(input, output, session) {
 
   host_lang <- reactiveVal("en")
   host_lang_token <- reactiveVal(0)
+  host_lang_runtime <- new.env(parent = emptyenv())
+  host_lang_runtime$current <- "en"
+  host_lang_runtime$token <- 0L
+  host_lang_runtime$skip_next_lang_init <- FALSE
   set_host_lang <- function(lang, persist = TRUE) {
     normalized <- normalize_lang(lang)
-    if (!identical(host_lang(), normalized)) {
+    if (!identical(host_lang_runtime$current, normalized)) {
+      host_lang_runtime$current <- normalized
+      host_lang_runtime$token <- as.integer(host_lang_runtime$token) + 1L
       host_lang(normalized)
-      host_lang_token(host_lang_token() + 1)
+      host_lang_token(host_lang_runtime$token)
     }
     if (isTRUE(persist)) {
       session$sendCustomMessage("itcsuite_i18n_set_lang", list(lang = normalized))
@@ -738,12 +756,17 @@ server <- function(input, output, session) {
     invisible(normalized)
   }
 
-  desktop_open_file_capability <- reactiveVal(FALSE)
+  desktop_runtime <- new.env(parent = emptyenv())
+  desktop_runtime$open_file_capability <- FALSE
   desktop_open_file_seq <- reactiveVal(0L)
   desktop_open_file_pending <- new.env(parent = emptyenv())
 
+  desktop_runtime_enabled <- function() {
+    isTRUE(is_desktop_runtime)
+  }
+
   desktop_enabled <- function() {
-    isTRUE(is_desktop_runtime) && isTRUE(desktop_open_file_capability())
+    isTRUE(desktop_runtime_enabled()) && isTRUE(desktop_runtime$open_file_capability)
   }
 
   desktop_default_filters <- function(purpose) {
@@ -772,7 +795,7 @@ server <- function(input, output, session) {
 
   observeEvent(input$itcsuite_desktop_capability, {
     capability <- input$itcsuite_desktop_capability
-    desktop_open_file_capability(home_desktop_capability_open_file(capability))
+    desktop_runtime$open_file_capability <- isTRUE(home_desktop_capability_open_file(capability))
   }, ignoreInit = FALSE)
 
   observeEvent(input$itcsuite_desktop_open_file_result, {
@@ -812,6 +835,648 @@ server <- function(input, output, session) {
     import_observer_ids = character(0)
   )
   home_restore_handlers <- new.env(parent = emptyenv())
+  sleep_restore_handlers <- new.env(parent = emptyenv())
+  sleep_restore_runtime <- new.env(parent = emptyenv())
+  sleep_restore_runtime$last_event_key <- ""
+  sleep_restore_runtime$active_tab <- ""
+  sleep_restore_runtime$session_started_at <- as.numeric(Sys.time())
+  sleep_restore_runtime$autosave_bootstrap_done <- FALSE
+
+  normalize_power_event <- function(payload) {
+    src <- if (is.list(payload)) payload else list()
+    type <- normalize_home_scalar_chr(src$type, default = "")
+    if (!type %in% c("suspend", "resume", "unlock-screen")) type <- ""
+    ts_num <- suppressWarnings(as.numeric(src$ts)[1])
+    if (!is.finite(ts_num)) ts_num <- as.numeric(Sys.time()) * 1000
+    list(
+      type = type,
+      ts = ts_num,
+      source = normalize_home_scalar_chr(src$source, default = "unknown")
+    )
+  }
+
+  build_power_event_key <- function(event_payload) {
+    ev <- normalize_power_event(event_payload)
+    if (!nzchar(ev$type)) return("")
+    # De-duplicate direct + replay deliveries for the same power event.
+    paste0(ev$type, "|", format(ev$ts, scientific = FALSE, trim = TRUE))
+  }
+
+  sleep_restore_last_event_key <- function(value) {
+    if (missing(value)) {
+      return(normalize_home_scalar_chr(sleep_restore_runtime$last_event_key, default = ""))
+    }
+    sleep_restore_runtime$last_event_key <- normalize_home_scalar_chr(value, default = "")
+    invisible(sleep_restore_runtime$last_event_key)
+  }
+
+  set_sleep_restore_active_tab <- function(value) {
+    tab_norm <- normalize_home_scalar_chr(value, default = "")
+    if (!tab_norm %in% c("home", "step1", "step2", "step3")) tab_norm <- ""
+    sleep_restore_runtime$active_tab <- tab_norm
+    invisible(tab_norm)
+  }
+
+  observeEvent(input$main_tabs, {
+    set_sleep_restore_active_tab(input$main_tabs)
+  }, ignoreInit = FALSE)
+
+  is_sleep_restore_step <- function(step) {
+    step_norm <- normalize_home_scalar_chr(step, default = "")
+    step_norm %in% c("step1", "step2", "step3")
+  }
+
+  register_sleep_restore_handler <- function(step, collect_fn, apply_fn) {
+    step_norm <- normalize_home_scalar_chr(step, default = "")
+    if (!is_sleep_restore_step(step_norm)) return(invisible(FALSE))
+    if (!is.function(collect_fn) || !is.function(apply_fn)) return(invisible(FALSE))
+    assign(step_norm, list(collect = collect_fn, apply = apply_fn), envir = sleep_restore_handlers)
+    invisible(TRUE)
+  }
+
+  resolve_sleep_restore_handler <- function(step) {
+    step_norm <- normalize_home_scalar_chr(step, default = "")
+    if (!is_sleep_restore_step(step_norm)) return(NULL)
+    if (!exists(step_norm, envir = sleep_restore_handlers, inherits = FALSE)) return(NULL)
+    entry <- get(step_norm, envir = sleep_restore_handlers, inherits = FALSE)
+    if (!is.list(entry)) return(NULL)
+    collect_fn <- entry$collect
+    apply_fn <- entry$apply
+    if (!is.function(collect_fn) || !is.function(apply_fn)) return(NULL)
+    entry
+  }
+
+  collect_sleep_restore_step <- function(step) {
+    entry <- resolve_sleep_restore_handler(step)
+    if (is.null(entry)) return(NULL)
+    out <- tryCatch(entry$collect(), error = function(e) NULL)
+    if (!is.list(out) || length(out) < 1L) return(NULL)
+    out
+  }
+
+  apply_sleep_restore_step <- function(step, payload) {
+    entry <- resolve_sleep_restore_handler(step)
+    if (is.null(entry)) return(FALSE)
+    if (!is.list(payload) || length(payload) < 1L) return(FALSE)
+    isTRUE(tryCatch(entry$apply(payload), error = function(e) FALSE))
+  }
+
+  resolve_sleep_restore_active_tab <- function(tab_value = NULL) {
+    if (is.null(tab_value)) {
+      return(normalize_home_scalar_chr(sleep_restore_runtime$active_tab, default = ""))
+    }
+    tab_norm <- normalize_home_scalar_chr(tab_value, default = "")
+    if (tab_norm %in% c("home", "step1", "step2", "step3")) tab_norm else ""
+  }
+
+  sleep_restore_lang <- function(default = "en") {
+    out <- tryCatch(host_lang(), error = function(e) default)
+    normalize_lang(out)
+  }
+
+  parse_sleep_restore_saved_at <- function(value) {
+    saved_at <- normalize_home_scalar_chr(value, default = "")
+    if (!nzchar(saved_at)) return(NA_real_)
+    parsed <- tryCatch(
+      as.POSIXct(saved_at, tz = "UTC", format = "%Y-%m-%dT%H:%M:%OSZ"),
+      error = function(e) NA
+    )
+    if (!is.finite(suppressWarnings(as.numeric(parsed)[1]))) {
+      parsed <- tryCatch(
+        as.POSIXct(saved_at, tz = "UTC", format = "%Y-%m-%dT%H:%M:%SZ"),
+        error = function(e) NA
+      )
+    }
+    parsed_num <- suppressWarnings(as.numeric(parsed)[1])
+    if (is.finite(parsed_num)) parsed_num else NA_real_
+  }
+
+  should_startup_consume_pending_sleep_restore <- function(state, max_age_seconds = 6 * 3600) {
+    if (!is.list(state)) return(FALSE)
+    if (!isTRUE(state$pending_restore)) return(FALSE)
+    source_event_norm <- normalize_home_scalar_chr(state$source_event, default = "")
+    if (!identical(source_event_norm, "suspend")) return(FALSE)
+    saved_at_num <- parse_sleep_restore_saved_at(state$saved_at)
+    if (!is.finite(saved_at_num)) return(FALSE)
+    age_sec <- as.numeric(Sys.time()) - saved_at_num
+    is.finite(age_sec) && age_sec >= 0 && age_sec <= as.numeric(max_age_seconds)
+  }
+
+  sleep_restore_state_has_steps <- function(state) {
+    if (!is.list(state)) return(FALSE)
+    steps <- if (is.list(state$steps)) state$steps else list()
+    if (length(steps) < 1L) return(FALSE)
+    isTRUE(any(vapply(steps, function(x) is.list(x) && length(x) > 0L, logical(1))))
+  }
+
+  should_resume_consume_autosave_fallback <- function(state, max_age_seconds = 24 * 3600) {
+    if (!is.list(state)) return(FALSE)
+    if (isTRUE(state$pending_restore)) return(FALSE)
+    source_event_norm <- normalize_home_scalar_chr(state$source_event, default = "")
+    if (!identical(source_event_norm, "autosave")) return(FALSE)
+    if (!isTRUE(sleep_restore_state_has_steps(state))) return(FALSE)
+    active_tab_norm <- resolve_sleep_restore_active_tab(state$active_tab)
+    if (!active_tab_norm %in% c("home", "step1", "step2", "step3")) return(FALSE)
+
+    saved_at_num <- parse_sleep_restore_saved_at(state$saved_at)
+    if (!is.finite(saved_at_num)) return(FALSE)
+    age_sec <- as.numeric(Sys.time()) - saved_at_num
+    if (!(is.finite(age_sec) && age_sec >= 0 && age_sec <= as.numeric(max_age_seconds))) return(FALSE)
+    session_started_at_num <- suppressWarnings(as.numeric(sleep_restore_runtime$session_started_at)[1])
+    if (is.finite(session_started_at_num) && saved_at_num >= (session_started_at_num - 1)) return(FALSE)
+
+    restored_at_num <- parse_sleep_restore_saved_at(state$restored_at)
+    if (is.finite(restored_at_num) && restored_at_num >= saved_at_num) return(FALSE)
+    TRUE
+  }
+
+  resolve_sleep_restore_main_log_path <- function() {
+    base_dir <- normalize_home_scalar_chr(Sys.getenv("ITCSUITE_USER_DATA_DIR", unset = ""), default = "")
+    if (!nzchar(base_dir)) return("")
+    file.path(base_dir, "logs", "main.log")
+  }
+
+  extract_main_log_ts <- function(line) {
+    if (!is.character(line) || length(line) < 1L) return("")
+    match <- regexpr("\"ts\":\"[^\"]+\"", line[[1]], perl = TRUE)
+    if (identical(match, -1L)) return("")
+    raw <- regmatches(line[[1]], match)
+    sub("^\"ts\":\"([^\"]+)\"$", "\\1", raw, perl = TRUE)
+  }
+
+  find_recent_main_wake_event <- function(max_age_seconds = 20 * 60, max_lines = 1200L) {
+    if (!isTRUE(desktop_runtime_enabled())) return(NULL)
+
+    log_path <- resolve_sleep_restore_main_log_path()
+    if (!nzchar(log_path) || !isTRUE(file.exists(log_path))) return(NULL)
+
+    lines <- tryCatch(readLines(log_path, warn = FALSE), error = function(e) character(0))
+    if (length(lines) < 1L) return(NULL)
+
+    max_n <- suppressWarnings(as.integer(max_lines)[1])
+    if (!is.finite(max_n) || max_n < 200L) max_n <- 1200L
+    lines <- tail(lines, max_n)
+
+    for (idx in rev(seq_along(lines))) {
+      line <- lines[[idx]]
+      event_type <- ""
+      if (grepl("\"event\":\"power_resume\"", line, fixed = TRUE)) {
+        event_type <- "resume"
+      } else if (grepl("\"event\":\"unlock_screen\"", line, fixed = TRUE)) {
+        event_type <- "unlock-screen"
+      } else if (grepl("\"event\":\"power_suspend\"", line, fixed = TRUE)) {
+        # Newest relevant event is suspend, no wake signal to consume.
+        return(NULL)
+      } else {
+        next
+      }
+
+      ts_value <- extract_main_log_ts(line)
+      ts_num <- parse_sleep_restore_saved_at(ts_value)
+      if (!is.finite(ts_num)) next
+
+      age_sec <- as.numeric(Sys.time()) - ts_num
+      if (!(is.finite(age_sec) && age_sec >= 0 && age_sec <= as.numeric(max_age_seconds))) {
+        return(NULL)
+      }
+
+      return(list(type = event_type, ts = ts_value, ts_num = ts_num))
+    }
+
+    NULL
+  }
+
+  should_startup_consume_autosave_fallback <- function(state) {
+    if (!isTRUE(should_resume_consume_autosave_fallback(state))) return(FALSE)
+
+    wake_event <- find_recent_main_wake_event()
+    if (is.null(wake_event) || !is.list(wake_event)) return(FALSE)
+    wake_ts_num <- suppressWarnings(as.numeric(wake_event$ts_num)[1])
+    if (!is.finite(wake_ts_num)) return(FALSE)
+
+    session_started_at_num <- suppressWarnings(as.numeric(sleep_restore_runtime$session_started_at)[1])
+    if (is.finite(session_started_at_num)) {
+      wake_to_session_sec <- session_started_at_num - wake_ts_num
+      if (!(is.finite(wake_to_session_sec) && wake_to_session_sec >= 0 && wake_to_session_sec <= 180)) {
+        return(FALSE)
+      }
+    }
+
+    restored_at_num <- parse_sleep_restore_saved_at(state$restored_at)
+    if (is.finite(restored_at_num) && wake_ts_num <= restored_at_num) return(FALSE)
+
+    saved_at_num <- parse_sleep_restore_saved_at(state$saved_at)
+    if (!is.finite(saved_at_num)) return(FALSE)
+    if (wake_ts_num + 30 < saved_at_num) return(FALSE)
+
+    TRUE
+  }
+
+  consume_resume_autosave_fallback <- function(event_type = "resume", trigger = "power_event") {
+    if (!isTRUE(desktop_runtime_enabled())) return(invisible(FALSE))
+    event_norm <- normalize_home_scalar_chr(event_type, default = "")
+    if (!identical(event_norm, "resume")) return(invisible(FALSE))
+
+    state <- home_sleep_restore_store_load(warn_fn = function(...) NULL)
+    if (!isTRUE(should_resume_consume_autosave_fallback(state))) return(invisible(FALSE))
+
+    state$pending_restore <- TRUE
+    state$source_event <- "suspend"
+    ok_save <- isTRUE(home_sleep_restore_store_save(state, warn_fn = function(...) NULL))
+    if (!isTRUE(ok_save)) return(invisible(FALSE))
+
+    isTRUE(consume_pending_sleep_restore(
+      event_type = "resume",
+      trigger = paste0(normalize_home_scalar_chr(trigger, default = "power_event"), "_autosave_fallback")
+    ))
+  }
+
+  merge_step1_sleep_restore_payload <- function(payload, existing) {
+    out <- if (is.list(payload)) payload else list()
+    if (!is.list(existing) || length(existing) < 1L) {
+      return(list(payload = out, reused_existing = FALSE))
+    }
+
+    reused <- FALSE
+    out_path <- normalize_home_scalar_chr(out$source_path, default = "")
+    if (!nzchar(out_path)) {
+      existing_path <- normalize_home_scalar_chr(existing$source_path, default = "")
+      if (nzchar(existing_path)) {
+        out$source_path <- existing_path
+        reused <- TRUE
+      }
+    }
+
+    out_name <- normalize_home_scalar_chr(out$display_name, default = "")
+    if (!nzchar(out_name)) {
+      existing_name <- normalize_home_scalar_chr(existing$display_name, default = "")
+      if (nzchar(existing_name)) {
+        out$display_name <- existing_name
+        reused <- TRUE
+      }
+    }
+
+    out_params <- home_sleep_restore_normalize_scalar_map(out$params)
+    existing_params <- home_sleep_restore_normalize_scalar_map(existing$params)
+    if (length(existing_params) > 0L) {
+      if (length(out_params) < 1L) {
+        out$params <- existing_params
+        reused <- TRUE
+      } else {
+        merged <- existing_params
+        for (nm in names(out_params)) merged[[nm]] <- out_params[[nm]]
+        out$params <- merged
+      }
+    } else {
+      out$params <- out_params
+    }
+
+    list(payload = out, reused_existing = reused)
+  }
+
+  step2_sleep_restore_payload_is_weak <- function(payload) {
+    if (!is.list(payload) || length(payload) < 1L) return(TRUE)
+
+    source_path <- home_sleep_restore_scalar_chr(payload$source_path, default = "")
+    file_name <- home_sleep_restore_scalar_chr(payload$file_name, default = "")
+    source_kind <- home_sleep_restore_scalar_chr(payload$source_kind, default = "none")
+    if (!source_kind %in% c("import", "step1_bridge", "sim_to_exp", "none")) source_kind <- "none"
+
+    if (nzchar(source_path) || nzchar(file_name) || !identical(source_kind, "none")) return(FALSE)
+
+    sheets <- home_sleep_restore_normalize_table_list(payload$sheets)
+    if (length(sheets) > 0L) return(FALSE)
+
+    manual_exp_data <- home_sleep_restore_normalize_table_like(payload$manual_exp_data)
+    if (is.data.frame(manual_exp_data) && nrow(manual_exp_data) > 0L) return(FALSE)
+
+    if (isTRUE(home_sleep_restore_scalar_lgl(payload$exp_data_disabled, default = FALSE))) return(FALSE)
+
+    snapshot_table <- home_sleep_restore_normalize_step2_snapshot_table(payload$snapshot_table)
+    if (is.data.frame(snapshot_table$rows) && nrow(snapshot_table$rows) > 0L) return(FALSE)
+    if (length(snapshot_table$checked_ids %||% character(0)) > 0L) return(FALSE)
+    if (nzchar(home_sleep_restore_scalar_chr(snapshot_table$active_row_id, default = ""))) return(FALSE)
+
+    diagnostics <- home_sleep_restore_normalize_step2_diagnostics(payload$diagnostics)
+    diag_names <- names(diagnostics)
+    if (is.null(diag_names)) diag_names <- character(0)
+    diag_effective <- setdiff(diag_names, "residual_subtab")
+    if (length(diag_effective) > 0L) return(FALSE)
+
+    params <- home_sleep_restore_normalize_step2_params(payload$params)
+    param_names <- names(params)
+    if (is.null(param_names)) param_names <- character(0)
+    param_effective <- setdiff(param_names, "residual_subtab")
+    if (length(param_effective) > 0L) return(FALSE)
+
+    TRUE
+  }
+
+  step3_sleep_restore_settings_is_default_like <- function(settings) {
+    settings_norm <- home_sleep_restore_normalize_scalar_map(settings)
+    keys <- c(
+      "top_xmin", "top_xmax", "top_ymin", "top_ymax",
+      "bot_xmin", "bot_xmax", "bot_ymin", "bot_ymax",
+      "bot_no_dim_start", "bot_no_dim_end"
+    )
+    if (!all(keys %in% names(settings_norm))) return(FALSE)
+
+    targets <- c(
+      top_xmin = 0,
+      top_xmax = 100,
+      top_ymin = -5,
+      top_ymax = 5,
+      bot_xmin = 0,
+      bot_xmax = 3,
+      bot_ymin = -20,
+      bot_ymax = 5,
+      bot_no_dim_start = 1,
+      bot_no_dim_end = 1
+    )
+    as_num <- function(x) suppressWarnings(as.numeric(x)[1])
+    for (nm in names(targets)) {
+      value_num <- as_num(settings_norm[[nm]])
+      target_num <- targets[[nm]]
+      if (!is.finite(value_num) || abs(value_num - target_num) > 1e-9) return(FALSE)
+    }
+    TRUE
+  }
+
+  merge_step3_sleep_restore_payload <- function(payload, existing) {
+    out <- if (is.list(payload)) payload else list()
+    if (!is.list(existing) || length(existing) < 1L) {
+      out$settings <- home_sleep_restore_normalize_scalar_map(out$settings)
+      sheets_now <- home_sleep_restore_normalize_step3_sheets(out$sheets)
+      if (length(sheets_now) > 0L) {
+        out$sheets <- sheets_now
+      } else {
+        out$sheets <- NULL
+      }
+      has_payload <- nzchar(normalize_home_scalar_chr(out$source_path, default = "")) ||
+        nzchar(normalize_home_scalar_chr(out$file_name, default = "")) ||
+        length(out$settings) > 0L ||
+        length(sheets_now) > 0L
+      return(list(payload = if (isTRUE(has_payload)) out else NULL, reused_existing = FALSE))
+    }
+
+    reused <- FALSE
+
+    out_path <- normalize_home_scalar_chr(out$source_path, default = "")
+    existing_path <- normalize_home_scalar_chr(existing$source_path, default = "")
+    if (!nzchar(out_path) && nzchar(existing_path)) {
+      out$source_path <- existing_path
+      reused <- TRUE
+    }
+
+    out_name <- normalize_home_scalar_chr(out$file_name, default = "")
+    existing_name <- normalize_home_scalar_chr(existing$file_name, default = "")
+    if (!nzchar(out_name) && nzchar(existing_name)) {
+      out$file_name <- existing_name
+      reused <- TRUE
+    }
+
+    out_settings <- home_sleep_restore_normalize_scalar_map(out$settings)
+    existing_settings <- home_sleep_restore_normalize_scalar_map(existing$settings)
+    if (length(existing_settings) > 0L) {
+      if (length(out_settings) < 1L) {
+        out$settings <- existing_settings
+        reused <- TRUE
+      } else {
+        out_is_default <- isTRUE(step3_sleep_restore_settings_is_default_like(out_settings))
+        existing_is_default <- isTRUE(step3_sleep_restore_settings_is_default_like(existing_settings))
+        if (isTRUE(out_is_default) && !isTRUE(existing_is_default)) {
+          out$settings <- existing_settings
+          reused <- TRUE
+        } else {
+          merged <- existing_settings
+          for (nm in names(out_settings)) merged[[nm]] <- out_settings[[nm]]
+          out$settings <- merged
+        }
+      }
+    } else {
+      out$settings <- out_settings
+    }
+
+    out_sheets <- home_sleep_restore_normalize_step3_sheets(out$sheets)
+    existing_sheets <- home_sleep_restore_normalize_step3_sheets(existing$sheets)
+    if (length(existing_sheets) > 0L) {
+      if (length(out_sheets) < 1L) {
+        out$sheets <- existing_sheets
+        reused <- TRUE
+      } else {
+        merged_sheets <- existing_sheets
+        for (nm in names(out_sheets)) merged_sheets[[nm]] <- out_sheets[[nm]]
+        out$sheets <- merged_sheets
+      }
+    } else if (length(out_sheets) > 0L) {
+      out$sheets <- out_sheets
+    } else {
+      out$sheets <- NULL
+    }
+
+    has_payload <- nzchar(normalize_home_scalar_chr(out$source_path, default = "")) ||
+      nzchar(normalize_home_scalar_chr(out$file_name, default = "")) ||
+      length(home_sleep_restore_normalize_scalar_map(out$settings)) > 0L ||
+      length(home_sleep_restore_normalize_step3_sheets(out$sheets)) > 0L
+    list(payload = if (isTRUE(has_payload)) out else NULL, reused_existing = reused)
+  }
+
+  request_sleep_restore_snapshot <- function(reason = "manual", source_event = "manual") {
+    if (!isTRUE(desktop_runtime_enabled())) return(invisible(FALSE))
+    reason_norm <- normalize_home_scalar_chr(reason, default = "manual")
+    source_event_norm <- normalize_home_scalar_chr(source_event, default = "manual")
+    existing <- home_sleep_restore_store_load(warn_fn = function(...) NULL)
+    allow_existing_reuse <- identical(source_event_norm, "autosave")
+    existing_pending <- isTRUE(existing$pending_restore)
+    existing_source_event <- normalize_home_scalar_chr(existing$source_event, default = "")
+    existing_active_tab <- resolve_sleep_restore_active_tab(existing$active_tab)
+    existing_steps <- if (is.list(existing$steps)) existing$steps else list()
+    steps <- list()
+    reused_existing <- list(step1 = FALSE, step2 = FALSE, step3 = FALSE)
+    for (step in c("step1", "step2", "step3")) {
+      payload <- collect_sleep_restore_step(step)
+      existing_payload <- existing_steps[[step]]
+
+      if (identical(step, "step1") && is.list(payload)) {
+        merged <- merge_step1_sleep_restore_payload(payload, existing_payload)
+        payload <- merged$payload
+        if (isTRUE(merged$reused_existing)) reused_existing[[step]] <- TRUE
+      }
+
+      if (identical(step, "step2") && is.list(payload) && isTRUE(step2_sleep_restore_payload_is_weak(payload))) {
+        if (is.list(existing_payload) && length(existing_payload) > 0L) {
+          payload <- existing_payload
+          reused_existing[[step]] <- TRUE
+        } else {
+          payload <- NULL
+        }
+      }
+
+      if (identical(step, "step3") && is.list(payload)) {
+        merged <- merge_step3_sleep_restore_payload(payload, existing_payload)
+        payload <- merged$payload
+        if (isTRUE(merged$reused_existing)) reused_existing[[step]] <- TRUE
+      }
+
+      allow_suspend_reuse <- identical(source_event_norm, "suspend")
+      if ((isTRUE(allow_existing_reuse) || isTRUE(allow_suspend_reuse)) && is.null(payload)) {
+        fallback <- existing_payload
+        if (is.list(fallback) && length(fallback) > 0L) {
+          payload <- fallback
+          reused_existing[[step]] <- TRUE
+        }
+      }
+      if (is.null(payload)) next
+      steps[[step]] <- payload
+    }
+    has_steps <- length(steps) > 0L
+    active_tab_now <- resolve_sleep_restore_active_tab(tryCatch(shiny::isolate(input$main_tabs), error = function(e) NULL))
+    if (!nzchar(active_tab_now)) active_tab_now <- resolve_sleep_restore_active_tab()
+    if (!nzchar(active_tab_now) && nzchar(existing_active_tab)) active_tab_now <- existing_active_tab
+
+    pending_restore <- has_steps
+    if (identical(source_event_norm, "autosave")) {
+      # autosave 只作为兜底数据，不直接产生 pending；仅在复用 suspend pending 时沿用 pending。
+      pending_from_existing <- isTRUE(
+        has_steps &&
+          existing_pending &&
+          identical(existing_source_event, "suspend")
+      )
+      pending_restore <- isTRUE(pending_from_existing)
+      if (isTRUE(pending_from_existing)) {
+        source_event_norm <- "suspend"
+      }
+      if (isTRUE(pending_from_existing) && existing_active_tab %in% c("step1", "step2", "step3")) {
+        active_tab_now <- existing_active_tab
+      }
+    }
+
+    state <- list(
+      schema_version = home_sleep_restore_store_schema(),
+      pending_restore = pending_restore,
+      saved_at = home_sleep_restore_store_now_utc(),
+      source_event = source_event_norm,
+      lang = sleep_restore_lang(),
+      active_tab = active_tab_now,
+      steps = steps,
+      restored_at = normalize_home_scalar_chr(existing$restored_at, default = "")
+    )
+    ok <- isTRUE(home_sleep_restore_store_save(state, warn_fn = function(...) NULL))
+    telemetry_log_event(
+      event = "sleep_restore.snapshot",
+      level = if (isTRUE(ok)) "INFO" else "WARN",
+      module = "host",
+      payload = list(
+        reason = reason_norm,
+        source_event = source_event_norm,
+        has_step1 = "step1" %in% names(steps),
+        has_step2 = "step2" %in% names(steps),
+        has_step3 = "step3" %in% names(steps),
+        reused_step1 = isTRUE(reused_existing$step1),
+        reused_step2 = isTRUE(reused_existing$step2),
+        reused_step3 = isTRUE(reused_existing$step3),
+        pending_restore = pending_restore
+      ),
+      lang = sleep_restore_lang()
+    )
+    invisible(ok)
+  }
+
+  consume_pending_sleep_restore <- function(event_type = "resume", trigger = "power_event") {
+    if (!isTRUE(desktop_runtime_enabled())) return(invisible(FALSE))
+    event_norm <- normalize_home_scalar_chr(event_type, default = "")
+    if (!event_norm %in% c("resume", "unlock-screen")) return(invisible(FALSE))
+
+    state <- home_sleep_restore_store_load(warn_fn = function(...) NULL)
+    if (!isTRUE(state$pending_restore)) return(invisible(FALSE))
+    source_event_norm <- normalize_home_scalar_chr(state$source_event, default = "")
+    if (!identical(source_event_norm, "suspend")) return(invisible(FALSE))
+    host_lang_runtime$skip_next_lang_init <- TRUE
+    set_host_lang(normalize_home_scalar_chr(state$lang, default = "en"), persist = TRUE)
+
+    steps <- if (is.list(state$steps)) state$steps else list()
+    applied_steps <- character(0)
+    for (step in c("step1", "step2", "step3")) {
+      payload <- steps[[step]]
+      if (!is.list(payload) || length(payload) < 1L) next
+      ok <- isTRUE(apply_sleep_restore_step(step, payload))
+      if (isTRUE(ok)) applied_steps <- c(applied_steps, step)
+    }
+
+    if (length(applied_steps) < 1L) {
+      telemetry_log_event(
+        event = "sleep_restore.restore",
+        level = "WARN",
+        module = "host",
+        payload = list(
+          trigger = normalize_home_scalar_chr(trigger, default = "power_event"),
+          event_type = event_norm,
+          outcome = "deferred_no_steps_applied"
+        ),
+        lang = sleep_restore_lang()
+      )
+      session$onFlushed(function() {
+        tryCatch(
+          consume_pending_sleep_restore(
+            event_type = "resume",
+            trigger = paste0(normalize_home_scalar_chr(trigger, default = "power_event"), "_retry")
+          ),
+          error = function(e) NULL
+        )
+      }, once = TRUE)
+      return(invisible(FALSE))
+    }
+
+    target_tab <- normalize_home_scalar_chr(state$active_tab, default = "")
+    if (identical(target_tab, "home")) {
+      tryCatch(updateTabsetPanel(session, "main_tabs", selected = "home"), error = function(e) NULL)
+    } else if (target_tab %in% c("step1", "step2", "step3") && target_tab %in% applied_steps) {
+      tryCatch(updateTabsetPanel(session, "main_tabs", selected = target_tab), error = function(e) NULL)
+    }
+
+    state$pending_restore <- FALSE
+    state$restored_at <- home_sleep_restore_store_now_utc()
+    home_sleep_restore_store_save(state, warn_fn = function(...) NULL)
+    telemetry_log_event(
+      event = "sleep_restore.restore",
+      level = "INFO",
+      module = "host",
+      payload = list(
+        trigger = normalize_home_scalar_chr(trigger, default = "power_event"),
+        event_type = event_norm,
+        restored_step1 = "step1" %in% applied_steps,
+        restored_step2 = "step2" %in% applied_steps,
+        restored_step3 = "step3" %in% applied_steps,
+        target_tab = target_tab
+      ),
+      lang = sleep_restore_lang()
+    )
+
+    invisible(length(applied_steps) > 0L)
+  }
+
+  process_power_event <- function(payload, trigger = "input") {
+    if (!isTRUE(desktop_runtime_enabled())) return(invisible(FALSE))
+    event <- normalize_power_event(payload)
+    if (!nzchar(event$type)) return(invisible(FALSE))
+    event_key <- build_power_event_key(event)
+    if (!nzchar(event_key)) return(invisible(FALSE))
+    if (identical(event_key, sleep_restore_last_event_key())) return(invisible(FALSE))
+    sleep_restore_last_event_key(event_key)
+
+    if (identical(event$type, "suspend")) {
+      request_sleep_restore_snapshot(reason = trigger, source_event = "suspend")
+      return(invisible(TRUE))
+    }
+    if (event$type %in% c("resume", "unlock-screen")) {
+      restored <- isTRUE(consume_pending_sleep_restore(event_type = event$type, trigger = trigger))
+      if (!isTRUE(restored) && identical(event$type, "resume")) {
+        restored <- isTRUE(consume_resume_autosave_fallback(event_type = "resume", trigger = trigger))
+      }
+      return(invisible(restored))
+    }
+    invisible(FALSE)
+  }
 
   normalize_recent_path <- function(path) {
     p <- normalize_home_scalar_chr(path, default = "")
@@ -1275,7 +1940,61 @@ server <- function(input, output, session) {
     }
   )
 
+  session$userData$itcsuite_sleep_restore <- list(
+    register_handler = function(step, collect_fn, apply_fn) {
+      register_sleep_restore_handler(step, collect_fn = collect_fn, apply_fn = apply_fn)
+    },
+    request_snapshot_now = function(reason = "manual") {
+      request_sleep_restore_snapshot(
+        reason = normalize_home_scalar_chr(reason, default = "manual"),
+        source_event = "manual"
+      )
+    }
+  )
+
+  observe({
+    if (!isTRUE(desktop_runtime_enabled())) return(invisible(NULL))
+    invalidateLater(15000, session)
+    if (!isTRUE(sleep_restore_runtime$autosave_bootstrap_done)) {
+      sleep_restore_runtime$autosave_bootstrap_done <- TRUE
+      return(invisible(NULL))
+    }
+    shiny::isolate(request_sleep_restore_snapshot(reason = "periodic_autosave", source_event = "autosave"))
+  })
+
+  observeEvent(input$itcsuite_power_event, {
+    process_power_event(input$itcsuite_power_event, trigger = "power_event_input")
+  }, ignoreInit = FALSE)
+
+  session$onFlushed(function() {
+    payload <- tryCatch(shiny::isolate(input$itcsuite_power_event), error = function(e) NULL)
+    handled <- isTRUE(process_power_event(payload, trigger = "startup_flush"))
+    if (isTRUE(handled)) return(invisible(NULL))
+
+    state <- home_sleep_restore_store_load(warn_fn = function(...) NULL)
+    if (isTRUE(should_startup_consume_pending_sleep_restore(state))) {
+      consume_pending_sleep_restore(event_type = "resume", trigger = "startup_pending")
+      return(invisible(NULL))
+    }
+
+    if (isTRUE(should_startup_consume_autosave_fallback(state))) {
+      consume_resume_autosave_fallback(event_type = "resume", trigger = "startup_wake_detected")
+    }
+  }, once = TRUE)
+
   observeEvent(input$itcsuite_lang_init, {
+    if (isTRUE(host_lang_runtime$skip_next_lang_init)) {
+      host_lang_runtime$skip_next_lang_init <- FALSE
+      session$sendCustomMessage("itcsuite_i18n_set_lang", list(lang = host_lang_runtime$current))
+      telemetry_log_event(
+        event = "home.user_action",
+        level = "INFO",
+        module = "host",
+        payload = list(action = "lang_init_skipped_after_restore", lang = host_lang()),
+        lang = host_lang()
+      )
+      return(invisible(NULL))
+    }
     set_host_lang(input$itcsuite_lang_init, persist = TRUE)
     telemetry_log_event(
       event = "home.user_action",

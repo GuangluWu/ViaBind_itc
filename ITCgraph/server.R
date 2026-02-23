@@ -91,6 +91,17 @@ server <- function(input, output, session) {
     invisible(FALSE)
   }
 
+  session_sleep_restore <- tryCatch({
+    s <- session$userData$itcsuite_sleep_restore
+    if (is.null(s) || !is.list(s)) NULL else s
+  }, error = function(e) NULL)
+
+  sleep_restore_register <- function(step, collect_fn, apply_fn) {
+    fn <- if (!is.null(session_sleep_restore)) session_sleep_restore$register_handler else NULL
+    if (!is.function(fn)) return(invisible(FALSE))
+    invisible(isTRUE(fn(step = step, collect_fn = collect_fn, apply_fn = apply_fn)))
+  }
+
   session_desktop <- tryCatch({
     d <- session$userData$itcsuite_desktop
     if (is.null(d) || !is.list(d)) NULL else d
@@ -676,6 +687,31 @@ server <- function(input, output, session) {
 
   latest_step2_plot_payload <- reactiveVal(NULL)
   step3_replay_pending <- reactiveVal(FALSE)
+  step3_sleep_restore_bridge_guard_until <- reactiveVal(NA_real_)
+
+  is_step3_sleep_restore_bridge_guard_active <- function() {
+    until <- suppressWarnings(as.numeric(rv_get(step3_sleep_restore_bridge_guard_until, default = NA_real_))[1])
+    is.finite(until) && (as.numeric(Sys.time()) <= until)
+  }
+
+  reapply_step3_sleep_restore_settings_if_guarded <- function(trigger = "bridge_payload") {
+    if (!isTRUE(is_step3_sleep_restore_bridge_guard_active())) return(invisible(FALSE))
+    snapshot <- tryCatch(step3_sleep_restore_last_snapshot(), error = function(e) NULL)
+    settings <- if (is.list(snapshot) && is.list(snapshot$settings)) snapshot$settings else list()
+    if (!is.list(settings) || length(settings) < 1L) return(invisible(FALSE))
+
+    tryCatch(apply_plot_settings_snapshot(settings), error = function(e) NULL)
+    session$onFlushed(function() {
+      tryCatch(apply_plot_settings_snapshot(settings), error = function(e) NULL)
+    }, once = TRUE)
+    telemetry_log(
+      event = "step3.sleep_restore",
+      level = "INFO",
+      payload = list(stage = "bridge_guard_reapply", trigger = as.character(trigger %||% "bridge_payload")[1])
+    )
+    invisible(TRUE)
+  }
+
   bridge_step2_channel <- resolve_bridge_channel("step2_plot_payload")
   if (is.function(bridge_step2_channel)) {
     observeEvent(bridge_step2_channel(), {
@@ -685,6 +721,7 @@ server <- function(input, output, session) {
 
       consumed <- isTRUE(consume_step2_plot_payload(payload))
       if (!isTRUE(consumed)) return(invisible(FALSE))
+      reapply_step3_sleep_restore_settings_if_guarded(trigger = "bridge_consume")
 
       # Guard against tab-revisit resets: only queue one replay when payload
       # arrives while Step 3 is hidden; do not replay on routine tab switches.
@@ -706,6 +743,7 @@ server <- function(input, output, session) {
     # Replay at most once for the latest off-tab payload so manual range/no-dim
     # edits survive normal Step 3 tab revisit.
     consume_step2_plot_payload(payload, replay_only = TRUE)
+    reapply_step3_sleep_restore_settings_if_guarded(trigger = "bridge_replay")
   }, ignoreInit = TRUE)
   
   expand_limits <- function(v, mult = 0.05) {
@@ -1786,6 +1824,297 @@ server <- function(input, output, session) {
     if (!is.null(s$bot_line_color)) update_color_input("bot_line_color", as.character(s$bot_line_color))
     invisible(TRUE)
   }
+
+  notify_step3_sleep_restore <- function(message_en, message_zh = message_en, type = "warning", duration = 5) {
+    lang_now <- tryCatch(lang(), error = function(e) "en")
+    msg <- if (identical(lang_now, "zh")) message_zh else message_en
+    showNotification(msg, type = type, duration = duration)
+  }
+
+  normalize_step3_sleep_restore_sheets <- function(sheets) {
+    if (!is.list(sheets)) return(list())
+    out <- list()
+    keys <- names(sheets)
+    if (is.null(keys)) keys <- character(0)
+    for (nm in keys) {
+      key <- normalize_step3_file_name(nm, default = "")
+      if (!nzchar(key)) next
+      value <- sheets[[nm]]
+      if (!is.data.frame(value)) next
+      out[[key]] <- as.data.frame(value, stringsAsFactors = FALSE)
+    }
+    out
+  }
+
+  step3_sleep_restore_pending_snapshot <- reactiveVal(NULL)
+  step3_sleep_restore_last_snapshot <- reactiveVal(NULL)
+
+  collect_step3_runtime_sheets_snapshot <- function() {
+    sheets <- normalize_step3_sleep_restore_sheets(imported_data$sheets)
+    if (length(sheets) > 0L) return(sheets)
+
+    out <- list()
+    if (is.data.frame(imported_data$power_original)) {
+      out[["power_original"]] <- as.data.frame(imported_data$power_original, stringsAsFactors = FALSE)
+    }
+    if (is.data.frame(imported_data$power)) {
+      out[["power_corrected"]] <- as.data.frame(imported_data$power, stringsAsFactors = FALSE)
+    }
+    if (is.data.frame(imported_data$integration)) {
+      out[["integration_rev"]] <- as.data.frame(imported_data$integration, stringsAsFactors = FALSE)
+    }
+    if (is.data.frame(imported_data$simulation)) {
+      out[["simulation"]] <- as.data.frame(imported_data$simulation, stringsAsFactors = FALSE)
+    }
+    if (is.data.frame(imported_data$fit_params)) {
+      out[["fit_params"]] <- as.data.frame(imported_data$fit_params, stringsAsFactors = FALSE)
+    }
+    if (is.data.frame(imported_data$meta)) {
+      out[["meta_rev"]] <- as.data.frame(imported_data$meta, stringsAsFactors = FALSE)
+    }
+    out
+  }
+
+  collect_step3_sleep_restore_snapshot <- function() {
+    pending_snapshot <- tryCatch(step3_sleep_restore_pending_snapshot(), error = function(e) NULL)
+    pending_source_path <- normalize_step3_path(if (is.list(pending_snapshot)) pending_snapshot$source_path else "")
+    pending_file_name <- normalize_step3_file_name(
+      if (is.list(pending_snapshot)) pending_snapshot$file_name else "",
+      default = ""
+    )
+    pending_sheets <- normalize_step3_sleep_restore_sheets(if (is.list(pending_snapshot)) pending_snapshot$sheets else list())
+    pending_settings <- if (is.list(pending_snapshot) && is.list(pending_snapshot$settings)) pending_snapshot$settings else list()
+    last_snapshot <- tryCatch(step3_sleep_restore_last_snapshot(), error = function(e) NULL)
+    last_settings <- if (is.list(last_snapshot) && is.list(last_snapshot$settings)) last_snapshot$settings else list()
+    current_tab <- tryCatch(shiny::isolate(input$main_tabs), error = function(e) NULL)
+    on_step3_tab <- isTRUE(is_step3_tab_selected(current_tab))
+
+    source_path <- normalize_step3_path(imported_data$source_path)
+    if (!nzchar(source_path) && nzchar(pending_source_path)) source_path <- pending_source_path
+
+    sheets <- collect_step3_runtime_sheets_snapshot()
+    if (length(sheets) < 1L && length(pending_sheets) > 0L) sheets <- pending_sheets
+    if (!nzchar(source_path) && length(sheets) < 1L) return(NULL)
+    settings <- list()
+    if (isTRUE(on_step3_tab) && isTRUE(step3_sleep_restore_ui_ready())) {
+      settings <- tryCatch(get_settings_list(), error = function(e) list())
+      if (!is.list(settings)) settings <- list()
+    }
+    if (length(settings) < 1L && length(pending_settings) > 0L) settings <- pending_settings
+    if (length(settings) < 1L && length(last_settings) > 0L) settings <- last_settings
+    out <- list(
+      source_path = source_path,
+      file_name = normalize_step3_file_name(
+        imported_data$filename,
+        default = if (nzchar(pending_file_name)) {
+          pending_file_name
+        } else if (nzchar(source_path)) {
+          basename(source_path)
+        } else {
+          "step3_snapshot.xlsx"
+        }
+      ),
+      settings = settings
+    )
+    if (length(sheets) > 0L) out$sheets <- sheets
+    step3_sleep_restore_last_snapshot(out)
+    out
+  }
+
+  step3_sleep_restore_ui_ready <- function() {
+    isTRUE(tryCatch(shiny::isolate({
+      !is.null(input$top_xlab) &&
+        !is.null(input$bot_xlab) &&
+        !is.null(input$top_xmin) &&
+        !is.null(input$bot_no_dim_range)
+    }), error = function(e) FALSE))
+  }
+
+  apply_step3_sleep_restore_snapshot_now <- function(snapshot) {
+    if (is.null(snapshot) || !is.list(snapshot)) return(FALSE)
+    source_path <- normalize_step3_path(snapshot$source_path)
+    source_exists <- nzchar(source_path) && file.exists(source_path)
+    snapshot_sheets <- normalize_step3_sleep_restore_sheets(snapshot$sheets)
+    has_snapshot_sheets <- is.list(snapshot_sheets) && length(snapshot_sheets) > 0L
+
+    is_valid_sheet_bundle <- function(sheets) {
+      is.list(sheets) && length(sheets) > 0L
+    }
+
+    apply_bundle <- function(sheets, source_mode = c("file", "snapshot")) {
+      mode <- match.arg(source_mode)
+      if (!is_valid_sheet_bundle(sheets)) return(FALSE)
+      isTRUE(tryCatch(
+        apply_step3_imported_sheets(
+          sheets = sheets,
+          file_name = file_name,
+          source_tag = "sleep_restore",
+          source_path = if (identical(mode, "file")) source_path else "",
+          notify_messages = FALSE
+        ),
+        error = function(e) FALSE
+      ))
+    }
+
+    if (nzchar(source_path) && !isTRUE(source_exists)) {
+      notify_step3_sleep_restore(
+        "Step3 restore failed: source file is missing.",
+        "Step3 恢复失败：源文件不存在。",
+        type = "warning",
+        duration = 5
+      )
+    }
+
+    file_sheets <- if (isTRUE(source_exists)) {
+      tryCatch(read_step3_xlsx_sheets(source_path), error = function(e) NULL)
+    } else {
+      NULL
+    }
+
+    use_file_sheets <- is_valid_sheet_bundle(file_sheets)
+    sheets <- if (isTRUE(use_file_sheets)) file_sheets else snapshot_sheets
+    if (!isTRUE(use_file_sheets) && isTRUE(source_exists) && isTRUE(has_snapshot_sheets)) {
+      notify_step3_sleep_restore(
+        "Step3 source file read failed; restored from snapshot data instead.",
+        "Step3 源文件读取失败；已改用快照数据恢复。",
+        type = "warning",
+        duration = 5
+      )
+    }
+
+    if (!is_valid_sheet_bundle(sheets)) {
+      notify_step3_sleep_restore(
+        "Step3 restore failed: workbook is invalid or empty, and no snapshot sheets are available.",
+        "Step3 恢复失败：工作簿无效或为空，且没有可用快照数据。",
+        type = "warning",
+        duration = 5
+      )
+      return(FALSE)
+    }
+
+    file_name <- normalize_step3_file_name(
+      snapshot$file_name,
+      default = if (nzchar(source_path)) basename(source_path) else "step3_snapshot.xlsx"
+    )
+
+    ok <- apply_bundle(sheets, source_mode = if (isTRUE(use_file_sheets)) "file" else "snapshot")
+    if (!isTRUE(ok) && isTRUE(use_file_sheets) && isTRUE(has_snapshot_sheets)) {
+      ok <- apply_bundle(snapshot_sheets, source_mode = "snapshot")
+      if (isTRUE(ok)) {
+        notify_step3_sleep_restore(
+          "Step3 source workbook apply failed; restored from snapshot data.",
+          "Step3 源工作簿应用失败；已改用快照数据恢复。",
+          type = "warning",
+          duration = 5
+        )
+      }
+    }
+
+    if (!isTRUE(ok)) {
+      notify_step3_sleep_restore(
+        "Step3 restore failed: unable to apply imported sheets.",
+        "Step3 恢复失败：无法应用导入数据。",
+        type = "warning",
+        duration = 5
+      )
+      return(FALSE)
+    }
+
+    settings <- if (is.list(snapshot$settings)) snapshot$settings else list()
+    if (length(settings) > 0L) {
+      tryCatch(apply_plot_settings_snapshot(settings), error = function(e) NULL)
+      step3_sleep_restore_bridge_guard_until(as.numeric(Sys.time()) + 8)
+    }
+    step3_sleep_restore_last_snapshot(snapshot)
+    telemetry_log(
+      event = "step3.sleep_restore",
+      level = "INFO",
+      payload = list(
+        stage = "apply_now",
+        outcome = "ok",
+        source_path = source_path,
+        source_exists = isTRUE(source_exists),
+        used_snapshot_fallback = !isTRUE(use_file_sheets)
+      )
+    )
+    TRUE
+  }
+
+  consume_pending_step3_sleep_restore <- function(trigger = "manual") {
+    pending <- tryCatch(step3_sleep_restore_pending_snapshot(), error = function(e) NULL)
+    if (is.null(pending) || !is.list(pending)) return(FALSE)
+    if (!isTRUE(step3_sleep_restore_ui_ready())) return(FALSE)
+
+    ok <- isTRUE(tryCatch(
+      apply_step3_sleep_restore_snapshot_now(pending),
+      error = function(e) FALSE
+    ))
+    if (isTRUE(ok)) {
+      step3_sleep_restore_pending_snapshot(NULL)
+      telemetry_log(
+        event = "step3.sleep_restore",
+        level = "INFO",
+        payload = list(stage = "pending_apply", outcome = "ok", trigger = as.character(trigger %||% "manual")[1])
+      )
+      return(TRUE)
+    }
+    telemetry_log(
+      event = "step3.sleep_restore",
+      level = "WARN",
+      payload = list(stage = "pending_apply", outcome = "error", trigger = as.character(trigger %||% "manual")[1])
+    )
+    FALSE
+  }
+
+  apply_step3_sleep_restore_snapshot <- function(snapshot) {
+    if (is.null(snapshot) || !is.list(snapshot)) return(FALSE)
+    step3_sleep_restore_last_snapshot(snapshot)
+
+    source_path <- normalize_step3_path(snapshot$source_path)
+    source_exists <- nzchar(source_path) && file.exists(source_path)
+    snapshot_sheets <- normalize_step3_sleep_restore_sheets(snapshot$sheets)
+    has_snapshot_sheets <- length(snapshot_sheets) > 0L
+
+    # Keep parity with Step1 behavior: accept restore now, then apply once UI controls exist.
+    if (!isTRUE(step3_sleep_restore_ui_ready())) {
+      if (!isTRUE(source_exists) && !isTRUE(has_snapshot_sheets)) {
+        return(isTRUE(apply_step3_sleep_restore_snapshot_now(snapshot)))
+      }
+      step3_sleep_restore_pending_snapshot(snapshot)
+      session$onFlushed(function() {
+        tryCatch(consume_pending_step3_sleep_restore(trigger = "on_flushed"), error = function(e) NULL)
+      }, once = TRUE)
+      telemetry_log(
+        event = "step3.sleep_restore",
+        level = "INFO",
+        payload = list(
+          stage = "queued",
+          reason = "ui_not_ready",
+          source_exists = isTRUE(source_exists),
+          has_snapshot_sheets = isTRUE(has_snapshot_sheets)
+        )
+      )
+      return(TRUE)
+    }
+
+    isTRUE(apply_step3_sleep_restore_snapshot_now(snapshot))
+  }
+
+  observeEvent(input$main_tabs, {
+    if (!is_step3_tab_selected(input$main_tabs)) return(invisible(FALSE))
+    consume_pending_step3_sleep_restore(trigger = "tab_selected")
+  }, ignoreInit = FALSE)
+
+  step3_sleep_restore_registered <- isTRUE(sleep_restore_register(
+    "step3",
+    collect_fn = collect_step3_sleep_restore_snapshot,
+    apply_fn = apply_step3_sleep_restore_snapshot
+  ))
+  telemetry_log(
+    event = "step3.sleep_restore",
+    level = if (isTRUE(step3_sleep_restore_registered)) "INFO" else "WARN",
+    payload = list(stage = "register", outcome = if (isTRUE(step3_sleep_restore_registered)) "ok" else "error")
+  )
   
   output$save_settings <- downloadHandler(
     filename = function() {

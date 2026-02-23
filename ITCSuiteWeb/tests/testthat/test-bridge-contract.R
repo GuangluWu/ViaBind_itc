@@ -1,4 +1,27 @@
-source("/Users/guanglu/Documents/myScript/ITCSuite/ITCSuiteWeb/R/bridge_contract.R")
+resolve_repo_root <- function() {
+  env_root <- Sys.getenv("ITCSUITE_REPO_ROOT", unset = "")
+  if (nzchar(env_root)) {
+    p <- normalizePath(env_root, winslash = "/", mustWork = FALSE)
+    if (dir.exists(file.path(p, "ITCSuiteWeb")) && dir.exists(file.path(p, "tests"))) {
+      return(normalizePath(p, winslash = "/", mustWork = TRUE))
+    }
+  }
+
+  cur <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
+  for (i in 0:8) {
+    if (dir.exists(file.path(cur, "ITCSuiteWeb")) && dir.exists(file.path(cur, "tests"))) {
+      return(normalizePath(cur, winslash = "/", mustWork = TRUE))
+    }
+    parent <- dirname(cur)
+    if (identical(parent, cur)) break
+    cur <- parent
+  }
+  stop("Cannot resolve repository root.")
+}
+
+repo_root <- resolve_repo_root()
+web_dir <- file.path(repo_root, "ITCSuiteWeb")
+source(file.path(web_dir, "R", "bridge_contract.R"), local = FALSE)
 
 testthat::test_that("normalize_bridge_token keeps numeric token", {
   testthat::expect_equal(normalize_bridge_token("1.25"), 1.25)
@@ -100,6 +123,7 @@ testthat::test_that("sanitize_step2_plot_payload normalizes valid payload", {
     token = "3.25",
     source = "bridge",
     source_label = "Step1 bridge",
+    source_path = " /tmp/step2.xlsx ",
     sheets = list(integration = data.frame(Injection = 1))
   )
   res <- sanitize_step2_plot_payload(payload)
@@ -107,6 +131,7 @@ testthat::test_that("sanitize_step2_plot_payload normalizes valid payload", {
   testthat::expect_equal(res$schema_version, "itcsuite.step2_plot.v1")
   testthat::expect_equal(res$source, "bridge")
   testthat::expect_equal(res$source_label, "Step1 bridge")
+  testthat::expect_equal(res$source_path, "/tmp/step2.xlsx")
   testthat::expect_equal(res$token, 3.25)
   testthat::expect_true(is.list(res$sheets))
 })

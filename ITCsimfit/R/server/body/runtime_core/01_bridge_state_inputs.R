@@ -40,6 +40,8 @@
   fit_slider_pending_restore <- reactiveVal(NULL)
   path_selection_programmatic <- reactiveVal(FALSE)
   path_selection_last <- reactiveVal(character(0))
+  step2_sleep_restore_pending_snapshot <- reactiveVal(NULL)
+  step2_sleep_restore_last_snapshot <- reactiveVal(NULL)
 
   normalize_active_paths_safe <- function(paths) {
     tryCatch(
@@ -280,6 +282,52 @@
     invisible(FALSE)
   }
 
+  session_sleep_restore <- tryCatch({
+    s <- session$userData$itcsuite_sleep_restore
+    if (is.null(s) || !is.list(s)) NULL else s
+  }, error = function(e) NULL)
+
+  sleep_restore_register <- function(step, collect_fn, apply_fn) {
+    fn <- if (!is.null(session_sleep_restore)) session_sleep_restore$register_handler else NULL
+    if (!is.function(fn)) return(invisible(FALSE))
+    invisible(isTRUE(fn(step, collect_fn, apply_fn)))
+  }
+
+  infer_step2_data_source_kind <- function() {
+    manual_source <- as.character(values$manual_exp_source %||% "")[1]
+    manual_source <- trimws(tolower(manual_source))
+    if (manual_source %in% c("step1_bridge", "sim_to_exp")) {
+      return(manual_source)
+    }
+
+    source_path <- as.character(values$imported_xlsx_file_path %||% "")[1]
+    source_path <- trimws(source_path)
+    if (nzchar(source_path)) {
+      if (startsWith(tolower(source_path), "bridge://")) {
+        return("step1_bridge")
+      }
+      return("import")
+    }
+
+    has_sheets <- is.list(values$imported_xlsx_sheets) && length(values$imported_xlsx_sheets) > 0L
+    file_name <- as.character(values$imported_xlsx_filename %||% "")[1]
+    file_name <- trimws(file_name)
+    if (isTRUE(has_sheets) || nzchar(file_name)) {
+      return("import")
+    }
+
+    "none"
+  }
+
+  should_allow_step1_payload_sync <- function() {
+    if (isTRUE(values$exp_data_disabled)) return(FALSE)
+    pending_sleep <- tryCatch(step2_sleep_restore_pending_snapshot(), error = function(e) NULL)
+    if (is.list(pending_sleep) && length(pending_sleep) > 0L) return(FALSE)
+
+    source_kind <- infer_step2_data_source_kind()
+    !source_kind %in% c("import", "sim_to_exp")
+  }
+
   is_finite_scalar <- function(x) length(x) == 1 && is.finite(x)
 
   payload_token <- function(payload) {
@@ -316,6 +364,16 @@
 
   safe_rv_get <- function(rv_fun, default = NULL) {
     tryCatch(shiny::isolate(rv_fun()), error = function(e) default)
+  }
+
+  safe_output_options <- function(output_name, suspend_when_hidden = FALSE) {
+    out_name <- as.character(output_name %||% "")[1]
+    if (!nzchar(out_name)) return(invisible(FALSE))
+    ok <- tryCatch({
+      outputOptions(output, out_name, suspendWhenHidden = isTRUE(suspend_when_hidden))
+      TRUE
+    }, error = function(e) FALSE)
+    invisible(ok)
   }
 
   # Programmatic V_pre update helper:
@@ -725,6 +783,7 @@
       payload <- bridge_step1_channel()
       if (is.null(payload) || !is.list(payload)) return(FALSE)
       latest_step1_payload(payload)
+      if (!isTRUE(should_allow_step1_payload_sync())) return(FALSE)
       tryCatch(
         consume_step1_payload(payload),
         error = function(e) {
@@ -743,6 +802,7 @@
     current_tab <- as.character(safe_input_get("main_tabs") %||% "")
     if (!is_step2_tab_selected(current_tab)) return(invisible(FALSE))
     if (is.null(payload) || !is.list(payload)) return(invisible(FALSE))
+    if (!isTRUE(should_allow_step1_payload_sync())) return(invisible(FALSE))
     sig <- payload_signature(payload)
     sig_state <- get_step1_signature_state()
 
@@ -780,6 +840,7 @@
 
   is_step1_payload_sync_pending <- function(payload = get_latest_step1_payload()) {
     if (is.null(payload) || !is.list(payload)) return(FALSE)
+    if (!isTRUE(should_allow_step1_payload_sync())) return(FALSE)
     sig <- payload_signature(payload)
     if (is.na(sig)) return(FALSE)
     sig_state <- get_step1_signature_state()
@@ -1131,6 +1192,7 @@
       checkboxGroupInput("fit_params", NULL, choices = choices, selected = valid_selection, inline = TRUE)
     )
   })
+  safe_output_options("dynamic_fit_params_ui", suspend_when_hidden = FALSE)
   
   # [新增] 全选拟合参数
   observeEvent(input$select_all_fit_params, {
@@ -1925,4 +1987,937 @@
       fit_slider_pending_restore(NULL)
     }
   }, ignoreInit = TRUE)
-  
+
+  normalize_step2_sleep_restore_scalar_chr <- function(value, default = "") {
+    out <- as.character(value %||% "")[1]
+    out <- trimws(out)
+    if (nzchar(out)) out else default
+  }
+
+  normalize_step2_sleep_restore_scalar_num <- function(value, default = NA_real_) {
+    out <- suppressWarnings(as.numeric(value)[1])
+    if (is.finite(out)) out else default
+  }
+
+  normalize_step2_sleep_restore_scalar_lgl <- function(value, default = FALSE) {
+    out <- suppressWarnings(as.logical(value)[1])
+    if (isTRUE(is.na(out))) return(isTRUE(default))
+    isTRUE(out)
+  }
+
+  normalize_step2_sleep_restore_num_vec <- function(value, max_len = Inf) {
+    out <- suppressWarnings(as.numeric(value))
+    out <- out[is.finite(out)]
+    if (length(out) < 1L) return(numeric(0))
+    if (is.finite(max_len) && max_len >= 0L && length(out) > max_len) out <- out[seq_len(max_len)]
+    out
+  }
+
+  normalize_step2_sleep_restore_chr_vec <- function(value) {
+    out <- trimws(as.character(value %||% character(0)))
+    out <- unique(out[nzchar(out)])
+    if (length(out) < 1L) character(0) else out
+  }
+
+  normalize_step2_sleep_restore_df <- function(value) {
+    if (is.null(value)) return(NULL)
+    if (is.data.frame(value)) return(as.data.frame(value, stringsAsFactors = FALSE))
+    if (is.matrix(value)) return(as.data.frame(value, stringsAsFactors = FALSE))
+    if (is.list(value) && length(value) > 0L) {
+      out <- tryCatch(as.data.frame(value, stringsAsFactors = FALSE), error = function(e) NULL)
+      if (is.data.frame(out)) return(out)
+    }
+    vec_num <- suppressWarnings(as.numeric(value))
+    vec_num <- vec_num[is.finite(vec_num)]
+    if (length(vec_num) > 0L) return(data.frame(value = vec_num, stringsAsFactors = FALSE))
+    vec_chr <- normalize_step2_sleep_restore_chr_vec(value)
+    if (length(vec_chr) > 0L) return(data.frame(value = vec_chr, stringsAsFactors = FALSE))
+    NULL
+  }
+
+  normalize_step2_sleep_restore_sheets <- function(sheets) {
+    if (!is.list(sheets)) return(list())
+    out <- list()
+    keys <- names(sheets)
+    if (is.null(keys)) keys <- character(0)
+    if (length(keys) != length(sheets)) keys <- rep("", length(sheets))
+    for (i in seq_along(sheets)) {
+      key <- normalize_step2_sleep_restore_scalar_chr(keys[[i]], default = "")
+      if (!nzchar(key)) key <- sprintf("sheet_%03d", i)
+      value <- normalize_step2_sleep_restore_df(sheets[[i]])
+      if (is.null(value)) next
+      out[[key]] <- value
+    }
+    out
+  }
+
+  normalize_step2_sleep_restore_params <- function(params) {
+    if (!is.list(params)) return(list())
+    out <- list()
+
+    path_mode <- normalize_step2_sleep_restore_scalar_chr(params$path_view_mode, default = "")
+    if (path_mode %in% c("table", "graph")) out$path_view_mode <- path_mode
+
+    active_paths <- normalize_step2_sleep_restore_chr_vec(params$active_paths)
+    if (length(active_paths) > 0L) out$active_paths <- active_paths
+
+    fit_params <- normalize_step2_sleep_restore_chr_vec(params$fit_params)
+    if (length(fit_params) > 0L || (!is.null(params$fit_params) && length(params$fit_params) == 0L)) {
+      out$fit_params <- fit_params
+    }
+
+    fit_range <- normalize_step2_sleep_restore_num_vec(params$fit_data_range, max_len = 2L)
+    if (length(fit_range) >= 2L) out$fit_data_range <- fit_range[1:2]
+
+    num_ids <- c(
+      "H_cell_0", "G_syringe", "V_cell", "V_inj", "n_inj", "V_pre", "Temp",
+      "logK1", "H1", "logK2", "H2", "logK3", "H3", "logK4", "H4", "logK5", "H5", "logK6", "H6",
+      "factor_H", "factor_G", "V_init_val", "heat_offset", "huber_delta"
+    )
+    for (id in num_ids) {
+      value <- normalize_step2_sleep_restore_scalar_num(params[[id]], default = NA_real_)
+      if (is.finite(value)) out[[id]] <- value
+    }
+
+    flag_ids <- c("enable_error_analysis", "use_weighted_fitting", "use_robust_fitting")
+    for (id in flag_ids) {
+      if (is.null(params[[id]])) next
+      out[[id]] <- normalize_step2_sleep_restore_scalar_lgl(params[[id]], default = FALSE)
+    }
+
+    residual_subtab <- normalize_step2_sleep_restore_scalar_chr(params$residual_subtab, default = "")
+    if (residual_subtab %in% c("res1", "res2", "res3", "res4")) out$residual_subtab <- residual_subtab
+
+    out
+  }
+
+  normalize_step2_sleep_restore_fit_bounds <- function(bounds) {
+    if (!is.list(bounds)) return(list())
+    out <- list()
+    for (nm in FIT_BOUND_PARAM_IDS) {
+      pair <- bounds[[nm]]
+      if (is.null(pair)) next
+      lower <- NA_real_
+      upper <- NA_real_
+      if (is.list(pair)) {
+        lower <- suppressWarnings(as.numeric(pair$lower)[1])
+        upper <- suppressWarnings(as.numeric(pair$upper)[1])
+      } else {
+        pair_num <- suppressWarnings(as.numeric(pair))
+        if (length(pair_num) >= 1L) lower <- pair_num[1]
+        if (length(pair_num) >= 2L) upper <- pair_num[2]
+      }
+      if (!is.finite(lower) || !is.finite(upper)) next
+      if (lower > upper) {
+        tmp <- lower
+        lower <- upper
+        upper <- tmp
+      }
+      out[[nm]] <- list(lower = lower, upper = upper)
+    }
+    out
+  }
+
+  normalize_step2_sleep_restore_snapshot_table <- function(snapshot_table) {
+    if (!is.list(snapshot_table)) return(list())
+    out <- list()
+    rows_df <- normalize_step2_sleep_restore_df(snapshot_table$rows)
+    if (is.data.frame(rows_df) && nrow(rows_df) > 0L) out$rows <- rows_df
+
+    checked_ids <- normalize_step2_sleep_restore_chr_vec(snapshot_table$checked_ids)
+    if (length(checked_ids) > 0L) out$checked_ids <- checked_ids
+
+    active_row_id <- normalize_step2_sleep_restore_scalar_chr(snapshot_table$active_row_id, default = "")
+    if (nzchar(active_row_id)) out$active_row_id <- active_row_id
+
+    row_seq <- suppressWarnings(as.integer(snapshot_table$row_seq)[1])
+    if (!is.finite(row_seq) || row_seq < 0L) row_seq <- 0L
+    out$row_seq <- as.integer(row_seq)
+    out
+  }
+
+  normalize_step2_sleep_restore_diagnostics <- function(diagnostics) {
+    if (!is.list(diagnostics)) return(list())
+    out <- list()
+
+    error_analysis <- normalize_step2_sleep_restore_df(diagnostics$error_analysis)
+    if (is.data.frame(error_analysis) && nrow(error_analysis) > 0L) out$error_analysis <- error_analysis
+
+    error_info_raw <- diagnostics$error_analysis_info
+    if (is.list(error_info_raw)) {
+      error_info <- list()
+      for (nm in names(error_info_raw)) {
+        key <- normalize_step2_sleep_restore_scalar_chr(nm, default = "")
+        if (!nzchar(key)) next
+        value <- error_info_raw[[nm]]
+        value_num <- normalize_step2_sleep_restore_scalar_num(value, default = NA_real_)
+        if (is.finite(value_num)) {
+          error_info[[key]] <- value_num
+        } else {
+          value_chr <- normalize_step2_sleep_restore_scalar_chr(value, default = "")
+          if (nzchar(value_chr)) error_info[[key]] <- value_chr
+        }
+      }
+      if (length(error_info) > 0L) out$error_analysis_info <- error_info
+    }
+
+    residuals_data <- normalize_step2_sleep_restore_df(diagnostics$residuals_data)
+    if (is.data.frame(residuals_data) && nrow(residuals_data) > 0L) out$residuals_data <- residuals_data
+
+    correlation_matrix <- normalize_step2_sleep_restore_df(diagnostics$correlation_matrix)
+    if (is.data.frame(correlation_matrix) && nrow(correlation_matrix) > 0L) out$correlation_matrix <- correlation_matrix
+
+    residual_subtab <- normalize_step2_sleep_restore_scalar_chr(diagnostics$residual_subtab, default = "")
+    if (residual_subtab %in% c("res1", "res2", "res3", "res4")) out$residual_subtab <- residual_subtab
+
+    current_report <- normalize_step2_sleep_restore_scalar_chr(diagnostics$current_report, default = "")
+    if (nzchar(current_report)) out$current_report <- current_report
+
+    out
+  }
+
+  normalize_step2_sleep_restore_snapshot <- function(snapshot) {
+    if (!is.list(snapshot)) return(NULL)
+    source_path <- normalize_step2_path(snapshot$source_path)
+    file_name <- normalize_step2_sleep_restore_scalar_chr(snapshot$file_name, default = "")
+    source_kind <- normalize_step2_sleep_restore_scalar_chr(snapshot$source_kind, default = "none")
+    if (!source_kind %in% c("import", "step1_bridge", "sim_to_exp", "none")) source_kind <- "none"
+    sheets <- normalize_step2_sleep_restore_sheets(snapshot$sheets)
+    manual_exp_data <- normalize_step2_sleep_restore_df(snapshot$manual_exp_data)
+    exp_data_disabled <- normalize_step2_sleep_restore_scalar_lgl(snapshot$exp_data_disabled, default = FALSE)
+    params <- normalize_step2_sleep_restore_params(snapshot$params)
+    fit_bounds <- normalize_step2_sleep_restore_fit_bounds(snapshot$fit_bounds)
+    snapshot_table <- normalize_step2_sleep_restore_snapshot_table(snapshot$snapshot_table)
+    diagnostics <- normalize_step2_sleep_restore_diagnostics(snapshot$diagnostics)
+    was_fitting <- normalize_step2_sleep_restore_scalar_lgl(snapshot$was_fitting, default = FALSE)
+
+    has_payload <- nzchar(source_path) ||
+      nzchar(file_name) ||
+      length(sheets) > 0L ||
+      (is.data.frame(manual_exp_data) && nrow(manual_exp_data) > 0L) ||
+      isTRUE(exp_data_disabled) ||
+      length(params) > 0L ||
+      length(fit_bounds) > 0L ||
+      length(snapshot_table) > 0L ||
+      length(diagnostics) > 0L ||
+      isTRUE(was_fitting) ||
+      !identical(source_kind, "none")
+    if (!isTRUE(has_payload)) return(NULL)
+
+    out <- list(
+      source_path = source_path,
+      file_name = file_name,
+      source_kind = source_kind,
+      exp_data_disabled = exp_data_disabled,
+      params = params,
+      fit_bounds = fit_bounds,
+      snapshot_table = snapshot_table,
+      diagnostics = diagnostics,
+      was_fitting = was_fitting
+    )
+    if (length(sheets) > 0L) out$sheets <- sheets
+    if (is.data.frame(manual_exp_data) && nrow(manual_exp_data) > 0L) out$manual_exp_data <- manual_exp_data
+    out
+  }
+
+  notify_step2_sleep_restore <- function(message_en, message_zh = message_en, type = "warning", duration = 5) {
+    lang_now <- tryCatch(lang(), error = function(e) "en")
+    msg <- if (identical(lang_now, "zh")) message_zh else message_en
+    showNotification(msg, type = type, duration = duration)
+  }
+
+  step2_sleep_restore_log <- function(level = "INFO", payload = list(), err = NULL) {
+    fn <- if (exists("telemetry_log", mode = "function", inherits = TRUE)) get("telemetry_log", inherits = TRUE) else NULL
+    if (!is.function(fn)) return(invisible(FALSE))
+    ok <- tryCatch({
+      fn(event = "step2.sleep_restore", level = level, payload = payload, err = err)
+      TRUE
+    }, error = function(e) FALSE)
+    invisible(ok)
+  }
+
+  step2_sleep_restore_ui_ready <- function() {
+    required_ids <- c(
+      "fit_data_range",
+      "H_cell_0",
+      "logK1",
+      "factor_H",
+      "factor_G",
+      "heat_offset",
+      "V_init_val"
+    )
+    isTRUE(tryCatch(shiny::isolate({
+      all(vapply(required_ids, function(id) !is.null(input[[id]]), logical(1)))
+    }), error = function(e) FALSE))
+  }
+
+  step2_sleep_restore_infer_n_inj <- function(sheets = list(), manual_exp_data = NULL, params = list()) {
+    if (is.data.frame(manual_exp_data) && nrow(manual_exp_data) > 0L) {
+      return(as.integer(nrow(manual_exp_data)))
+    }
+    preferred_int <- tryCatch(get_preferred_integration_sheet(sheets), error = function(e) NULL)
+    if (is.data.frame(preferred_int) && nrow(preferred_int) > 0L) {
+      return(as.integer(nrow(preferred_int)))
+    }
+    simulation_df <- sheets[["simulation"]]
+    if (is.data.frame(simulation_df) && nrow(simulation_df) > 0L) {
+      return(as.integer(nrow(simulation_df)))
+    }
+    n_inj_param <- normalize_step2_sleep_restore_scalar_num(params$n_inj, default = NA_real_)
+    if (is.finite(n_inj_param) && n_inj_param >= 1L) return(as.integer(round(n_inj_param)))
+    n_inj_input <- suppressWarnings(as.integer(round(as.numeric(safe_input_get("n_inj"))[1])))
+    if (is.finite(n_inj_input) && n_inj_input >= 1L) return(as.integer(n_inj_input))
+    as.integer(UI_DEFAULTS$n_inj_default)
+  }
+
+  apply_step2_sleep_restore_manual_context <- function(snapshot) {
+    source_path <- normalize_step2_path(snapshot$source_path)
+    source_kind <- normalize_step2_sleep_restore_scalar_chr(snapshot$source_kind, default = "none")
+    file_name <- normalize_step2_sleep_restore_scalar_chr(snapshot$file_name, default = "")
+    if (!nzchar(file_name) && nzchar(source_path)) file_name <- basename(source_path)
+    sheets <- normalize_step2_sleep_restore_sheets(snapshot$sheets)
+    manual_exp_data <- normalize_step2_sleep_restore_df(snapshot$manual_exp_data)
+    exp_data_disabled <- normalize_step2_sleep_restore_scalar_lgl(snapshot$exp_data_disabled, default = FALSE)
+
+    if (isTRUE(exp_data_disabled)) {
+      values$manual_exp_data <- NULL
+      values$manual_exp_source <- NULL
+      values$imported_xlsx_sheets <- NULL
+      values$imported_xlsx_file_path <- NULL
+      values$imported_xlsx_base_name <- NULL
+      values$imported_xlsx_filename <- NULL
+      values$exp_data_disabled <- TRUE
+      fit_slider_pending_restore(NULL)
+      return(TRUE)
+    }
+
+    default_n_inj <- step2_sleep_restore_infer_n_inj(
+      sheets = sheets,
+      manual_exp_data = manual_exp_data,
+      params = snapshot$params
+    )
+    reset_step2_ui_for_new_dataset(default_n_inj = default_n_inj, apply_first_injection_default = FALSE)
+
+    values$manual_exp_data <- if (is.data.frame(manual_exp_data) && nrow(manual_exp_data) > 0L) {
+      as.data.frame(manual_exp_data, stringsAsFactors = FALSE)
+    } else {
+      NULL
+    }
+    values$manual_exp_source <- if (!is.null(values$manual_exp_data) && source_kind %in% c("step1_bridge", "sim_to_exp")) {
+      source_kind
+    } else {
+      NULL
+    }
+    values$imported_xlsx_sheets <- if (length(sheets) > 0L) sheets else NULL
+    values$imported_xlsx_file_path <- if (nzchar(source_path)) source_path else NULL
+    values$imported_xlsx_filename <- if (nzchar(file_name)) file_name else NULL
+    values$imported_xlsx_base_name <- if (nzchar(file_name)) tools::file_path_sans_ext(basename(file_name)) else NULL
+    values$exp_data_disabled <- FALSE
+    fit_slider_pending_restore(NULL)
+    TRUE
+  }
+
+  apply_step2_sleep_restore_source_context <- function(snapshot) {
+    source_path <- normalize_step2_path(snapshot$source_path)
+    source_kind <- normalize_step2_sleep_restore_scalar_chr(snapshot$source_kind, default = "none")
+    file_name <- normalize_step2_sleep_restore_scalar_chr(snapshot$file_name, default = "")
+    if (!nzchar(file_name) && nzchar(source_path)) file_name <- basename(source_path)
+    exp_data_disabled <- normalize_step2_sleep_restore_scalar_lgl(snapshot$exp_data_disabled, default = FALSE)
+    snapshot_sheets <- normalize_step2_sleep_restore_sheets(snapshot$sheets)
+    has_snapshot_sheets <- length(snapshot_sheets) > 0L
+    source_is_file <- nzchar(source_path) && !startsWith(tolower(source_path), "bridge://")
+    source_exists <- isTRUE(source_is_file && file.exists(source_path))
+
+    if (isTRUE(exp_data_disabled)) {
+      return(isTRUE(apply_step2_sleep_restore_manual_context(snapshot)))
+    }
+
+    if (identical(source_kind, "import")) {
+      if (isTRUE(source_exists)) {
+        source_sheets <- tryCatch(read_xlsx_sheets(source_path), error = function(e) NULL)
+        if (is.list(source_sheets) && length(source_sheets) > 0L) {
+          ok <- isTRUE(apply_imported_xlsx_state(
+            sheets = source_sheets,
+            filepath = source_path,
+            file_name = if (nzchar(file_name)) file_name else basename(source_path),
+            notify_messages = FALSE
+          ))
+          if (isTRUE(ok)) return(TRUE)
+        }
+      }
+
+      if (isTRUE(has_snapshot_sheets)) {
+        ok <- isTRUE(apply_imported_xlsx_state(
+          sheets = snapshot_sheets,
+          filepath = source_path,
+          file_name = if (nzchar(file_name)) file_name else if (nzchar(source_path)) basename(source_path) else "step2_snapshot.xlsx",
+          notify_messages = FALSE
+        ))
+        if (isTRUE(ok)) {
+          if (isTRUE(source_is_file) && !isTRUE(source_exists)) {
+            notify_step2_sleep_restore(
+              "Step2 source file is missing; restored from local sleep snapshot data.",
+              "Step2 源文件缺失；已使用本地待机快照数据恢复。",
+              type = "warning",
+              duration = 5
+            )
+          } else if (isTRUE(source_exists)) {
+            notify_step2_sleep_restore(
+              "Step2 source file read failed; restored from local sleep snapshot data.",
+              "Step2 源文件读取失败；已使用本地待机快照数据恢复。",
+              type = "warning",
+              duration = 5
+            )
+          }
+          return(TRUE)
+        }
+      }
+
+      notify_step2_sleep_restore(
+        "Step2 restore failed: source data unavailable and no valid sleep snapshot fallback.",
+        "Step2 恢复失败：源数据不可用且无可用待机快照兜底。",
+        type = "warning",
+        duration = 6
+      )
+      return(FALSE)
+    }
+
+    if (source_kind %in% c("step1_bridge", "sim_to_exp")) {
+      ok_manual <- isTRUE(apply_step2_sleep_restore_manual_context(snapshot))
+      if (isTRUE(ok_manual)) return(TRUE)
+      notify_step2_sleep_restore(
+        "Step2 restore failed: bridge/manual source is unavailable.",
+        "Step2 恢复失败：桥接/手动数据源不可用。",
+        type = "warning",
+        duration = 6
+      )
+      return(FALSE)
+    }
+
+    if (isTRUE(source_exists)) {
+      source_sheets <- tryCatch(read_xlsx_sheets(source_path), error = function(e) NULL)
+      if (is.list(source_sheets) && length(source_sheets) > 0L) {
+        ok <- isTRUE(apply_imported_xlsx_state(
+          sheets = source_sheets,
+          filepath = source_path,
+          file_name = if (nzchar(file_name)) file_name else basename(source_path),
+          notify_messages = FALSE
+        ))
+        if (isTRUE(ok)) return(TRUE)
+      }
+    }
+
+    if (isTRUE(has_snapshot_sheets)) {
+      ok <- isTRUE(apply_imported_xlsx_state(
+        sheets = snapshot_sheets,
+        filepath = source_path,
+        file_name = if (nzchar(file_name)) file_name else "step2_snapshot.xlsx",
+        notify_messages = FALSE
+      ))
+      if (isTRUE(ok)) return(TRUE)
+    }
+
+    if (nzchar(source_path) && source_is_file && !source_exists) {
+      notify_step2_sleep_restore(
+        "Step2 restore failed: source file is missing.",
+        "Step2 恢复失败：源文件不存在。",
+        type = "warning",
+        duration = 5
+      )
+      return(FALSE)
+    }
+
+    TRUE
+  }
+
+  apply_step2_sleep_restore_params <- function(params) {
+    params_norm <- normalize_step2_sleep_restore_params(params)
+    if (length(params_norm) < 1L) return(invisible(FALSE))
+
+    update_slider_if_present <- function(id, value) {
+      if (is.null(safe_input_get(id))) return(invisible(FALSE))
+      value_num <- suppressWarnings(as.numeric(value)[1])
+      if (!is.finite(value_num)) return(invisible(FALSE))
+      updateSliderInput(session, id, value = value_num)
+      invisible(TRUE)
+    }
+
+    path_view_mode <- normalize_step2_sleep_restore_scalar_chr(params_norm$path_view_mode, default = "")
+    if (path_view_mode %in% c("table", "graph") && !is.null(safe_input_get("path_view_mode"))) {
+      tryCatch(updateRadioButtons(session, "path_view_mode", selected = path_view_mode), error = function(e) NULL)
+    }
+
+    active_paths <- normalize_step2_sleep_restore_chr_vec(params_norm$active_paths)
+    if (!is.null(params_norm$active_paths)) {
+      tryCatch(update_active_paths_normalized(active_paths), error = function(e) NULL)
+    }
+
+    fit_params <- normalize_step2_sleep_restore_chr_vec(params_norm$fit_params)
+    if (!is.null(params_norm$fit_params)) {
+      tryCatch(updateCheckboxGroupInput(session, "fit_params", selected = fit_params), error = function(e) NULL)
+      session$onFlushed(function() {
+        tryCatch(updateCheckboxGroupInput(session, "fit_params", selected = fit_params), error = function(e) NULL)
+      }, once = TRUE)
+    }
+
+    num_input_ids <- c("H_cell_0", "G_syringe", "V_cell", "V_inj", "n_inj", "V_pre", "Temp", "factor_H", "factor_G", "V_init_val", "huber_delta")
+    for (id in num_input_ids) {
+      update_numeric_if_present(id, params_norm[[id]])
+    }
+
+    slider_ids <- c("logK1", "H1", "logK2", "H2", "logK3", "H3", "logK4", "H4", "logK5", "H5", "logK6", "H6", "heat_offset")
+    for (id in slider_ids) {
+      update_slider_if_present(id, params_norm[[id]])
+    }
+
+    update_checkbox_if_present("enable_error_analysis", params_norm$enable_error_analysis)
+    update_checkbox_if_present("use_weighted_fitting", params_norm$use_weighted_fitting)
+    update_checkbox_if_present("use_robust_fitting", params_norm$use_robust_fitting)
+
+    fit_range <- normalize_step2_sleep_restore_num_vec(params_norm$fit_data_range, max_len = 2L)
+    if (length(fit_range) >= 2L && exists("apply_saved_fit_data_range", mode = "function", inherits = TRUE)) {
+      apply_saved_fit_data_range(
+        saved_start = fit_range[1],
+        saved_end = fit_range[2],
+        saved_n_inj = normalize_step2_sleep_restore_scalar_num(params_norm$n_inj, default = NA_real_),
+        preferred_max = normalize_step2_sleep_restore_scalar_num(params_norm$n_inj, default = NA_real_),
+        defer_until_data_ready = TRUE
+      )
+    }
+
+    residual_subtab <- normalize_step2_sleep_restore_scalar_chr(params_norm$residual_subtab, default = "")
+    if (residual_subtab %in% c("res1", "res2", "res3", "res4")) {
+      values$residual_subtab <- residual_subtab
+    }
+
+    invisible(TRUE)
+  }
+
+  replay_step2_sleep_restore_ui_state <- function(snapshot_norm, passes = 8L) {
+    pass_n <- suppressWarnings(as.integer(passes)[1])
+    if (!is.finite(pass_n) || pass_n < 1L) return(invisible(FALSE))
+    if (is.null(snapshot_norm) || !is.list(snapshot_norm)) return(invisible(FALSE))
+
+    session$onFlushed(function() {
+      tryCatch(apply_step2_sleep_restore_fit_bounds(snapshot_norm$fit_bounds), error = function(e) NULL)
+      tryCatch(apply_step2_sleep_restore_params(snapshot_norm$params), error = function(e) NULL)
+      if (pass_n > 1L) {
+        replay_step2_sleep_restore_ui_state(snapshot_norm, passes = pass_n - 1L)
+      }
+    }, once = TRUE)
+    invisible(TRUE)
+  }
+
+  apply_step2_sleep_restore_fit_bounds <- function(bounds) {
+    bounds_norm <- normalize_step2_sleep_restore_fit_bounds(bounds)
+    if (length(bounds_norm) < 1L) return(invisible(FALSE))
+    for (nm in FIT_BOUND_PARAM_IDS) {
+      pair <- bounds_norm[[nm]]
+      if (!is.list(pair)) next
+      lower <- suppressWarnings(as.numeric(pair$lower)[1])
+      upper <- suppressWarnings(as.numeric(pair$upper)[1])
+      if (!is.finite(lower) || !is.finite(upper)) next
+      tryCatch(
+        update_fit_param_bound(param_name = nm, lower_in = lower, upper_in = upper, update_ui_inputs = TRUE),
+        error = function(e) NULL
+      )
+    }
+    invisible(TRUE)
+  }
+
+  apply_step2_sleep_restore_snapshot_table_state <- function(snapshot_table) {
+    st <- normalize_step2_sleep_restore_snapshot_table(snapshot_table)
+    rows_df <- st$rows
+    rowid_col <- if (exists("snapshot_rowid_col", mode = "character", inherits = TRUE)) {
+      get("snapshot_rowid_col", inherits = TRUE)
+    } else {
+      "row_id"
+    }
+
+    if (is.data.frame(rows_df) && exists("normalize_snapshot_table", mode = "function", inherits = TRUE)) {
+      rows_df <- tryCatch(normalize_snapshot_table(rows_df, add_row_id = TRUE), error = function(e) rows_df)
+    } else if (!is.data.frame(rows_df)) {
+      rows_df <- data.frame(stringsAsFactors = FALSE)
+    }
+
+    values$param_list <- rows_df
+
+    valid_ids <- if (is.data.frame(rows_df) && rowid_col %in% names(rows_df)) {
+      normalize_step2_sleep_restore_chr_vec(rows_df[[rowid_col]])
+    } else {
+      character(0)
+    }
+    checked_ids <- normalize_step2_sleep_restore_chr_vec(st$checked_ids)
+    checked_ids <- checked_ids[checked_ids %in% valid_ids]
+    values$param_checked_ids <- checked_ids
+
+    active_row_id <- normalize_step2_sleep_restore_scalar_chr(st$active_row_id, default = "")
+    if (!nzchar(active_row_id) || !active_row_id %in% valid_ids) active_row_id <- NA_character_
+    values$param_active_row_id <- active_row_id
+
+    saved_row_seq <- suppressWarnings(as.integer(st$row_seq)[1])
+    if (!is.finite(saved_row_seq) || saved_row_seq < 0L) saved_row_seq <- 0L
+    max_id_seq <- suppressWarnings(as.integer(sub("^snap_", "", valid_ids)))
+    max_id_seq <- max_id_seq[is.finite(max_id_seq)]
+    if (length(max_id_seq) > 0L) saved_row_seq <- max(saved_row_seq, max(max_id_seq))
+    values$snapshot_row_seq <- as.integer(saved_row_seq)
+
+    tryCatch(DT::selectRows(DT::dataTableProxy("param_table"), NULL), error = function(e) NULL)
+    invisible(TRUE)
+  }
+
+  apply_step2_sleep_restore_diagnostics_state <- function(diagnostics) {
+    diag_norm <- normalize_step2_sleep_restore_diagnostics(diagnostics)
+
+    values$error_analysis <- if (is.data.frame(diag_norm$error_analysis) && nrow(diag_norm$error_analysis) > 0L) {
+      as.data.frame(diag_norm$error_analysis, stringsAsFactors = FALSE)
+    } else {
+      NULL
+    }
+
+    values$error_analysis_info <- if (is.list(diag_norm$error_analysis_info) && length(diag_norm$error_analysis_info) > 0L) {
+      diag_norm$error_analysis_info
+    } else {
+      NULL
+    }
+
+    values$residuals_data <- if (is.data.frame(diag_norm$residuals_data) && nrow(diag_norm$residuals_data) > 0L) {
+      as.data.frame(diag_norm$residuals_data, stringsAsFactors = FALSE)
+    } else {
+      NULL
+    }
+
+    coerce_correlation_matrix <- function(value) {
+      if (is.null(value)) return(NULL)
+      if (is.matrix(value)) {
+        mat <- suppressWarnings(matrix(as.numeric(value), nrow = nrow(value), ncol = ncol(value)))
+        if (!is.matrix(mat) || nrow(mat) < 1L || ncol(mat) < 1L) return(NULL)
+        if (any(!is.finite(mat))) return(NULL)
+        rownames(mat) <- rownames(value)
+        colnames(mat) <- colnames(value)
+        return(mat)
+      }
+      if (!is.data.frame(value)) return(NULL)
+      df <- as.data.frame(value, stringsAsFactors = FALSE)
+      if (nrow(df) < 1L || ncol(df) < 1L) return(NULL)
+      row_names <- NULL
+      if ("Parameter" %in% names(df) && ncol(df) >= 2L) {
+        row_names <- as.character(df$Parameter)
+        df$Parameter <- NULL
+      }
+      mat <- suppressWarnings(data.matrix(df))
+      if (!is.matrix(mat) || nrow(mat) < 1L || ncol(mat) < 1L) return(NULL)
+      if (any(!is.finite(mat))) return(NULL)
+      if (!is.null(row_names) && length(row_names) == nrow(mat)) rownames(mat) <- row_names
+      if (!is.null(colnames(df)) && length(colnames(df)) == ncol(mat)) colnames(mat) <- colnames(df)
+      if (is.null(rownames(mat)) && nrow(mat) == ncol(mat) && !is.null(colnames(mat))) rownames(mat) <- colnames(mat)
+      mat
+    }
+
+    values$correlation_matrix <- coerce_correlation_matrix(diag_norm$correlation_matrix)
+
+    residual_subtab <- normalize_step2_sleep_restore_scalar_chr(diag_norm$residual_subtab, default = "")
+    if (residual_subtab %in% c("res1", "res2", "res3", "res4")) values$residual_subtab <- residual_subtab
+
+    current_report <- normalize_step2_sleep_restore_scalar_chr(diag_norm$current_report, default = "")
+    values$current_report <- if (nzchar(current_report)) current_report else NULL
+
+    invisible(TRUE)
+  }
+
+  apply_step2_sleep_restore_snapshot_now <- function(snapshot) {
+    snapshot_norm <- normalize_step2_sleep_restore_snapshot(snapshot)
+    if (is.null(snapshot_norm)) return(FALSE)
+    step2_sleep_restore_last_snapshot(snapshot_norm)
+
+    source_ok <- isTRUE(tryCatch(
+      apply_step2_sleep_restore_source_context(snapshot_norm),
+      error = function(e) FALSE
+    ))
+    if (!isTRUE(source_ok)) {
+      step2_sleep_restore_log(
+        level = "WARN",
+        payload = list(
+          stage = "apply_now",
+          outcome = "error",
+          reason = "source_context_unavailable"
+        )
+      )
+      return(FALSE)
+    }
+
+    tryCatch(apply_step2_sleep_restore_fit_bounds(snapshot_norm$fit_bounds), error = function(e) NULL)
+    tryCatch(apply_step2_sleep_restore_params(snapshot_norm$params), error = function(e) NULL)
+    replay_step2_sleep_restore_ui_state(snapshot_norm, passes = 8L)
+    tryCatch(apply_step2_sleep_restore_snapshot_table_state(snapshot_norm$snapshot_table), error = function(e) NULL)
+    tryCatch(apply_step2_sleep_restore_diagnostics_state(snapshot_norm$diagnostics), error = function(e) NULL)
+
+    values$is_fitting <- FALSE
+    if (isTRUE(snapshot_norm$was_fitting)) {
+      notify_step2_sleep_restore(
+        "Step2 resumed to a stable state; in-progress fitting was not resumed.",
+        "Step2 已恢复到稳定状态；进行中的拟合任务未继续执行。",
+        type = "warning",
+        duration = 5
+      )
+    }
+    step2_sleep_restore_pending_snapshot(NULL)
+    step2_sleep_restore_log(
+      level = "INFO",
+      payload = list(
+        stage = "apply_now",
+        outcome = "ok",
+        source_kind = normalize_step2_sleep_restore_scalar_chr(snapshot_norm$source_kind, default = "none"),
+        source_path = normalize_step2_path(snapshot_norm$source_path)
+      )
+    )
+    TRUE
+  }
+
+  consume_pending_step2_sleep_restore <- function(trigger = "manual") {
+    pending <- tryCatch(step2_sleep_restore_pending_snapshot(), error = function(e) NULL)
+    if (is.null(pending) || !is.list(pending)) return(FALSE)
+    if (!isTRUE(step2_sleep_restore_ui_ready())) {
+      step2_sleep_restore_log(
+        level = "INFO",
+        payload = list(
+          stage = "pending_apply",
+          outcome = "defer",
+          trigger = as.character(trigger %||% "manual")[1],
+          reason = "ui_not_ready"
+        )
+      )
+      return(FALSE)
+    }
+
+    ok <- isTRUE(tryCatch(apply_step2_sleep_restore_snapshot_now(pending), error = function(e) FALSE))
+    if (isTRUE(ok)) {
+      step2_sleep_restore_pending_snapshot(NULL)
+      step2_sleep_restore_log(
+        level = "INFO",
+        payload = list(
+          stage = "pending_apply",
+          outcome = "ok",
+          trigger = as.character(trigger %||% "manual")[1]
+        )
+      )
+      return(TRUE)
+    }
+    step2_sleep_restore_log(
+      level = "WARN",
+      payload = list(
+        stage = "pending_apply",
+        outcome = "error",
+        trigger = as.character(trigger %||% "manual")[1]
+      )
+    )
+    FALSE
+  }
+
+  apply_step2_sleep_restore_snapshot <- function(snapshot) {
+    snapshot_norm <- normalize_step2_sleep_restore_snapshot(snapshot)
+    if (is.null(snapshot_norm)) return(FALSE)
+    step2_sleep_restore_last_snapshot(snapshot_norm)
+
+    if (!isTRUE(step2_sleep_restore_ui_ready())) {
+      step2_sleep_restore_pending_snapshot(snapshot_norm)
+      session$onFlushed(function() {
+        tryCatch(consume_pending_step2_sleep_restore(trigger = "on_flushed"), error = function(e) NULL)
+      }, once = TRUE)
+      step2_sleep_restore_log(
+        level = "INFO",
+        payload = list(
+          stage = "queued",
+          reason = "ui_not_ready",
+          source_kind = normalize_step2_sleep_restore_scalar_chr(snapshot_norm$source_kind, default = "none")
+        )
+      )
+      return(TRUE)
+    }
+
+    ok_now <- isTRUE(apply_step2_sleep_restore_snapshot_now(snapshot_norm))
+    if (!isTRUE(ok_now)) {
+      step2_sleep_restore_pending_snapshot(snapshot_norm)
+      step2_sleep_restore_log(
+        level = "WARN",
+        payload = list(stage = "queued", reason = "apply_now_failed")
+      )
+    }
+    ok_now
+  }
+
+  collect_step2_sleep_restore_snapshot <- function() {
+    pending_snapshot <- tryCatch(step2_sleep_restore_pending_snapshot(), error = function(e) NULL)
+    pending_norm <- normalize_step2_sleep_restore_snapshot(pending_snapshot)
+    if (!is.null(pending_norm)) {
+      step2_sleep_restore_last_snapshot(pending_norm)
+      return(pending_norm)
+    }
+    last_snapshot <- tryCatch(step2_sleep_restore_last_snapshot(), error = function(e) NULL)
+    last_norm <- normalize_step2_sleep_restore_snapshot(last_snapshot)
+
+    source_path <- normalize_step2_path(values$imported_xlsx_file_path %||% "")
+    file_name <- normalize_step2_sleep_restore_scalar_chr(values$imported_xlsx_filename %||% "", default = "")
+    if (!nzchar(file_name) && nzchar(source_path)) file_name <- basename(source_path)
+
+    manual_source <- normalize_step2_sleep_restore_scalar_chr(values$manual_exp_source %||% "", default = "")
+    source_kind <- if (manual_source %in% c("step1_bridge", "sim_to_exp")) {
+      manual_source
+    } else if (nzchar(source_path) && !startsWith(tolower(source_path), "bridge://")) {
+      "import"
+    } else if (startsWith(tolower(source_path), "bridge://")) {
+      "step1_bridge"
+    } else {
+      "none"
+    }
+
+    sheets <- normalize_step2_sleep_restore_sheets(values$imported_xlsx_sheets)
+    manual_exp_data <- normalize_step2_sleep_restore_df(values$manual_exp_data)
+    exp_data_disabled <- isTRUE(values$exp_data_disabled)
+
+    params <- normalize_step2_sleep_restore_params(list(
+      path_view_mode = safe_input_get("path_view_mode"),
+      active_paths = safe_input_get("active_paths"),
+      fit_params = safe_input_get("fit_params"),
+      fit_data_range = safe_input_get("fit_data_range"),
+      H_cell_0 = safe_input_get("H_cell_0"),
+      G_syringe = safe_input_get("G_syringe"),
+      V_cell = safe_input_get("V_cell"),
+      V_inj = safe_input_get("V_inj"),
+      n_inj = safe_input_get("n_inj"),
+      V_pre = safe_input_get("V_pre"),
+      Temp = safe_input_get("Temp"),
+      logK1 = safe_input_get("logK1"),
+      H1 = safe_input_get("H1"),
+      logK2 = safe_input_get("logK2"),
+      H2 = safe_input_get("H2"),
+      logK3 = safe_input_get("logK3"),
+      H3 = safe_input_get("H3"),
+      logK4 = safe_input_get("logK4"),
+      H4 = safe_input_get("H4"),
+      logK5 = safe_input_get("logK5"),
+      H5 = safe_input_get("H5"),
+      logK6 = safe_input_get("logK6"),
+      H6 = safe_input_get("H6"),
+      factor_H = safe_input_get("factor_H"),
+      factor_G = safe_input_get("factor_G"),
+      V_init_val = safe_input_get("V_init_val"),
+      heat_offset = safe_input_get("heat_offset"),
+      enable_error_analysis = safe_input_get("enable_error_analysis"),
+      use_weighted_fitting = safe_input_get("use_weighted_fitting"),
+      use_robust_fitting = safe_input_get("use_robust_fitting"),
+      huber_delta = safe_input_get("huber_delta"),
+      residual_subtab = values$residual_subtab
+    ))
+
+    fit_bounds <- normalize_step2_sleep_restore_fit_bounds(safe_rv_get(fit_param_bounds, default = list()))
+
+    rowid_col <- if (exists("snapshot_rowid_col", mode = "character", inherits = TRUE)) {
+      get("snapshot_rowid_col", inherits = TRUE)
+    } else {
+      "row_id"
+    }
+    snapshot_rows <- if (exists("normalize_snapshot_table", mode = "function", inherits = TRUE)) {
+      tryCatch(normalize_snapshot_table(values$param_list, add_row_id = TRUE), error = function(e) {
+        normalize_step2_sleep_restore_df(values$param_list)
+      })
+    } else {
+      normalize_step2_sleep_restore_df(values$param_list)
+    }
+    checked_ids <- normalize_step2_sleep_restore_chr_vec(values$param_checked_ids)
+    if (is.data.frame(snapshot_rows) && rowid_col %in% names(snapshot_rows)) {
+      valid_ids <- normalize_step2_sleep_restore_chr_vec(snapshot_rows[[rowid_col]])
+      checked_ids <- checked_ids[checked_ids %in% valid_ids]
+    } else {
+      checked_ids <- character(0)
+    }
+    snapshot_table <- normalize_step2_sleep_restore_snapshot_table(list(
+      rows = snapshot_rows,
+      checked_ids = checked_ids,
+      active_row_id = values$param_active_row_id,
+      row_seq = values$snapshot_row_seq
+    ))
+
+    corr_df <- NULL
+    if (is.matrix(values$correlation_matrix) && nrow(values$correlation_matrix) > 0L) {
+      corr_df <- data.frame(
+        Parameter = rownames(values$correlation_matrix) %||% as.character(seq_len(nrow(values$correlation_matrix))),
+        as.data.frame(values$correlation_matrix, check.names = FALSE),
+        stringsAsFactors = FALSE,
+        row.names = NULL
+      )
+    } else if (is.data.frame(values$correlation_matrix) && nrow(values$correlation_matrix) > 0L) {
+      corr_df <- as.data.frame(values$correlation_matrix, stringsAsFactors = FALSE)
+    }
+
+    diagnostics <- normalize_step2_sleep_restore_diagnostics(list(
+      error_analysis = values$error_analysis,
+      error_analysis_info = values$error_analysis_info,
+      residuals_data = values$residuals_data,
+      correlation_matrix = corr_df,
+      residual_subtab = values$residual_subtab,
+      current_report = values$current_report
+    ))
+
+    diagnostics_effective <- diagnostics
+    if (is.list(diagnostics_effective)) {
+      diag_names <- names(diagnostics_effective)
+      if (is.null(diag_names)) diag_names <- character(0)
+      only_residual_subtab <- length(diag_names) == 1L && identical(diag_names[[1]], "residual_subtab")
+      if (isTRUE(only_residual_subtab)) diagnostics_effective <- list()
+    }
+
+    source_context <- nzchar(source_path) ||
+      nzchar(file_name) ||
+      !identical(source_kind, "none") ||
+      length(sheets) > 0L ||
+      (is.data.frame(manual_exp_data) && nrow(manual_exp_data) > 0L) ||
+      isTRUE(exp_data_disabled)
+    table_context <- is.data.frame(snapshot_rows) && nrow(snapshot_rows) > 0L
+    diagnostics_context <- is.list(diagnostics_effective) && length(diagnostics_effective) > 0L
+
+    has_payload <- isTRUE(source_context || table_context || diagnostics_context)
+    if (!isTRUE(has_payload)) {
+      if (!is.null(last_norm)) return(last_norm)
+      return(NULL)
+    }
+
+    out <- list(
+      source_path = source_path,
+      file_name = file_name,
+      source_kind = source_kind,
+      exp_data_disabled = exp_data_disabled,
+      params = params,
+      fit_bounds = fit_bounds,
+      snapshot_table = snapshot_table,
+      diagnostics = diagnostics,
+      was_fitting = isTRUE(values$is_fitting)
+    )
+    if (length(sheets) > 0L) out$sheets <- sheets
+    if (is.data.frame(manual_exp_data) && nrow(manual_exp_data) > 0L) out$manual_exp_data <- manual_exp_data
+    step2_sleep_restore_last_snapshot(out)
+    out
+  }
+
+  observeEvent(input$main_tabs, {
+    if (!is_step2_tab_selected(input$main_tabs)) return(invisible(FALSE))
+    consume_pending_step2_sleep_restore(trigger = "tab_selected")
+  }, ignoreInit = FALSE)
+
+  observe({
+    pending <- tryCatch(step2_sleep_restore_pending_snapshot(), error = function(e) NULL)
+    if (is.null(pending) || !is.list(pending) || length(pending) < 1L) return(invisible(NULL))
+    if (!is_step2_tab_selected(safe_input_get("main_tabs"))) return(invisible(NULL))
+    invalidateLater(400, session)
+    tryCatch(consume_pending_step2_sleep_restore(trigger = "pending_poll"), error = function(e) NULL)
+  })
+
+  step2_sleep_restore_registered <- isTRUE(sleep_restore_register(
+    "step2",
+    collect_fn = collect_step2_sleep_restore_snapshot,
+    apply_fn = apply_step2_sleep_restore_snapshot
+  ))
+  step2_sleep_restore_log(
+    level = if (isTRUE(step2_sleep_restore_registered)) "INFO" else "WARN",
+    payload = list(stage = "register", outcome = if (isTRUE(step2_sleep_restore_registered)) "ok" else "error")
+  )
