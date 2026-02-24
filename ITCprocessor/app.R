@@ -442,6 +442,47 @@ server <- function(input, output, session) {
   })
   output$ui_integration_settings <- renderUI({ h4(tr("integration_settings", lang())) })
   output$ui_baseline_integration_notes <- renderUI({
+    note_keys <- c(
+      "param_notes_spline",
+      "param_notes_assumption",
+      "param_notes_window",
+      "param_notes_auto",
+      "param_notes_check",
+      "param_notes_integration",
+      "param_notes_start",
+      "param_notes_end"
+    )
+
+    build_note_item <- function(index, note_text, is_last = FALSE) {
+      note_text <- as.character(note_text %||% "")
+      note_pattern <- "^\\s*([^:：]+[:：])\\s*(.*)$"
+      margin_style <- if (is_last) "margin: 0;" else "margin: 0 0 6px 0;"
+
+      if (grepl(note_pattern, note_text, perl = TRUE)) {
+        lead <- sub(note_pattern, "\\1", note_text, perl = TRUE)
+        body <- sub(note_pattern, "\\2", note_text, perl = TRUE)
+        return(tags$p(
+          tags$strong(paste0(index, ". ", lead, " ")),
+          body,
+          style = margin_style
+        ))
+      }
+
+      tags$p(
+        tags$strong(paste0(index, ". ")),
+        note_text,
+        style = margin_style
+      )
+    }
+
+    note_items <- lapply(seq_along(note_keys), function(i) {
+      build_note_item(
+        index = i,
+        note_text = tr(note_keys[[i]], lang()),
+        is_last = identical(i, length(note_keys))
+      )
+    })
+
     tags$details(
       style = "margin: 0 0 8px 0;",
       tags$summary(
@@ -450,14 +491,7 @@ server <- function(input, output, session) {
       ),
       div(
         style = "margin-top: 8px; padding: 8px; background-color: #f0f8ff; border-left: 3px solid #2980b9; font-size: 0.9em; line-height: 1.6;",
-        tags$p(tr("param_notes_spline", lang()), style = "margin: 0 0 6px 0;"),
-        tags$p(tr("param_notes_assumption", lang()), style = "margin: 0 0 6px 0;"),
-        tags$p(tr("param_notes_window", lang()), style = "margin: 0 0 6px 0;"),
-        tags$p(tr("param_notes_auto", lang()), style = "margin: 0 0 6px 0;"),
-        tags$p(tr("param_notes_check", lang()), style = "margin: 0 0 6px 0;"),
-        tags$p(tr("param_notes_integration", lang()), style = "margin: 0 0 6px 0;"),
-        tags$p(tr("param_notes_start", lang()), style = "margin: 0 0 6px 0;"),
-        tags$p(tr("param_notes_end", lang()), style = "margin: 0;")
+        tagList(note_items)
       )
     )
   })
