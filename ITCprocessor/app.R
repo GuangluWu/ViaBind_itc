@@ -93,40 +93,64 @@ ui <- fluidPage(
       padding-left: 8px;
       padding-right: 8px;
     }
+    .step1-col1-scroll {
+      height: calc(var(--itcsuite-vh, 1vh) * 100 - var(--itcsuite-host-chrome, 140px) + 5px);
+      max-height: calc(var(--itcsuite-vh, 1vh) * 100 - var(--itcsuite-host-chrome, 140px) + 5px);
+      overflow-y: auto;
+      overflow-x: hidden;
+      min-height: 0;
+      padding-right: 5px;
+      overscroll-behavior: contain;
+    }
     @media (min-width: 992px) {
       .step1-sidebar.col-sm-3 { width: 23%; }
       .step1-main.col-sm-9 { width: 77%; }
+      .step1-sidebar {
+        position: sticky;
+        top: 0;
+        align-self: flex-start;
+      }
+    }
+    @media (max-width: 768px) {
+      .step1-col1-scroll {
+        max-height: none;
+        overflow: visible;
+        padding-right: 0;
+      }
     }
   "))),
   fluidRow(
     column(
       3,
       class = "step1-sidebar",
-      div(uiOutput("label_choose_file")),
-      uiOutput("step1_import_input"),
-      uiOutput("step1_import_summary_ui"),
-      uiOutput("ui_view_controls"),
-      checkboxInput("zoom_baseline", tr("zoom_baseline"), value = TRUE),
-      hr(style = "margin: 8px 0;"),
-      uiOutput("ui_baseline_settings"),
-      sliderInput("offset", tr("anchor_offset"), min = 0, max = 10, value = 5, step = 1),
-      sliderInput("duration", tr("anchor_width"), min = 5, max = 60, value = 20, step = 5),
-      sliderInput("spar", tr("spline_spar"), min = 0, max = 1, value = 0.1, step = 0.01),
-      uiOutput("ui_baseline_integration_notes"),
-      hr(style = "margin: 8px 0;"),
-      uiOutput("ui_integration_settings"),
-      numericInput("int_start_offset", tr("start_offset"), value = -3, step = 1),
-      checkboxInput("limit_integration", tr("limit_integration"), value = TRUE),
-      conditionalPanel(
-        condition = "input.limit_integration == true",
-        numericInput("integration_window", tr("end_offset"), min = 1, value = 15, step = 1)
-      ),
-      hr(style = "margin: 8px 0;"),
       div(
-        class = "action-btn-row",
-        style = "width:100%;box-sizing:border-box;overflow:hidden;",
-        div(style = "min-width:0;", actionButton("btn_data_to_fit", tr("data_to_fit"), width = "100%")),
-        div(style = "min-width:0;", uiOutput("download_btn_ui"))
+        class = "step1-col1-scroll",
+        div(uiOutput("label_choose_file")),
+        uiOutput("step1_import_input"),
+        uiOutput("step1_import_summary_ui"),
+        uiOutput("ui_view_controls"),
+        checkboxInput("zoom_baseline", tr("zoom_baseline"), value = TRUE),
+        hr(style = "margin: 8px 0;"),
+        uiOutput("ui_baseline_settings"),
+        sliderInput("offset", tr("anchor_offset"), min = 0, max = 10, value = 5, step = 1),
+        sliderInput("duration", tr("anchor_width"), min = 5, max = 60, value = 20, step = 5),
+        sliderInput("spar", tr("spline_spar"), min = 0, max = 1, value = 0.1, step = 0.01),
+        uiOutput("ui_baseline_integration_notes"),
+        hr(style = "margin: 8px 0;"),
+        uiOutput("ui_integration_settings"),
+        numericInput("int_start_offset", tr("start_offset"), value = -3, step = 1),
+        checkboxInput("limit_integration", tr("limit_integration"), value = TRUE),
+        conditionalPanel(
+          condition = "input.limit_integration == true",
+          numericInput("integration_window", tr("end_offset"), min = 1, value = 15, step = 1)
+        ),
+        hr(style = "margin: 8px 0;"),
+        div(
+          class = "action-btn-row",
+          style = "width:100%;box-sizing:border-box;overflow:hidden;",
+          div(style = "min-width:0;", actionButton("btn_data_to_fit", tr("data_to_fit"), width = "100%")),
+          div(style = "min-width:0;", uiOutput("download_btn_ui"))
+        )
       )
     ),
     column(

@@ -17,12 +17,12 @@ ui <- fluidPage(
       
       /* 中栏：表格容器样式（保持较矮，方便看下面的图） */
       .simfit-root .table-scroll-container {
-        height: 165px; 
+        height: 165px;
         overflow: hidden; /* 改为 hidden，因为 DT 表格自己处理滚动 */
         border: 1px solid #ddd;
         padding: 5px;
         background-color: #fff;
-        margin-bottom: 15px;
+        margin-bottom: 0px;
       }
 
       /* Snapshot 当前激活行高亮 */
@@ -38,6 +38,17 @@ ui <- fluidPage(
         height: 260px;  /* Manual Tuning 滑条区高度（新增 rxn_U 后缩短以节省纵向空间） */
         overflow-y: auto; 
         padding-right: 5px; /* 防止滚动条遮挡内容 */
+      }
+
+      /* Step2 中/右栏：列级独立滚动（对齐 Step3 控制列体验） */
+      .simfit-root .step2-col-scroll {
+        height: calc(var(--itcsuite-vh, 1vh) * 100 - var(--itcsuite-host-chrome, 140px) + 20px);
+        max-height: calc(var(--itcsuite-vh, 1vh) * 100 - var(--itcsuite-host-chrome, 140px) + 20px);
+        overflow-y: auto;
+        overflow-x: hidden;
+        min-height: 0;
+        padding-right: 5px;
+        overscroll-behavior: contain;
       }
       
       /* 紧凑化 */
@@ -643,6 +654,13 @@ ui <- fluidPage(
           width: 100% !important;
         }
 
+        /* 窄屏回退：恢复自然流，避免双重滚动 */
+        .simfit-root .step2-col-scroll {
+          max-height: none;
+          overflow: visible;
+          padding-right: 0;
+        }
+
       }
       
     ")),
@@ -715,6 +733,7 @@ ui <- fluidPage(
     # 2. 中栏 (Width 3): 路径构建和变量手调区
     # ==========================================================
     column(3, class="middle-column",
+           div(class = "step2-col-scroll step2-col2-scroll",
            wellPanel(
              # [UI微调] 标题与说明同一行
              div(style="margin-bottom: 10px; display:flex; justify-content:space-between; align-items:center;",
@@ -883,12 +902,14 @@ ui <- fluidPage(
             ),
              uiOutput("heat_offset_slider")
            )
+           )
     ),
 
     # ==========================================================
     # 3. 右栏 (Width 3): 实验数据与条件和拟合模块
     # ==========================================================
     column(3, class="right-column",
+           div(class = "step2-col-scroll step2-col3-scroll",
            wellPanel(
              # [UI优化] 标题与导入按钮并排显示，响应式布局
              div(class = "header-action-row",
@@ -972,6 +993,7 @@ ui <- fluidPage(
              
              # [新增] 误差分析结果显示
              div(class = "fit-error-wrap", uiOutput("error_analysis_section"))
+           )
            )
     )
   )
