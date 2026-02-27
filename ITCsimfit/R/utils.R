@@ -14,6 +14,26 @@ if (!exists("format_itc_error", mode = "function")) {
   }
 }
 
+append_log_entry_safe <- function(entry, primary_file, fallback_file) {
+  write_entry <- function(path) {
+    dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+    cat(paste0(entry, "\n"), file = path, append = TRUE)
+  }
+
+  ok <- tryCatch({
+    write_entry(primary_file)
+    TRUE
+  }, error = function(e) FALSE)
+
+  if (!isTRUE(ok)) {
+    tryCatch({
+      write_entry(fallback_file)
+    }, error = function(e) {
+      warning("Failed to append log entry: ", e$message, call. = FALSE)
+    })
+  }
+}
+
 if (!exists("itc_log_info", mode = "function")) {
   itc_log_info <- function(message, context = "", log_to_file = TRUE) {
     timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
@@ -22,15 +42,8 @@ if (!exists("itc_log_info", mode = "function")) {
     message(entry)
     if (isTRUE(log_to_file)) {
       log_file <- if (exists("FILE_PATHS")) FILE_PATHS$session_log else "session.log"
-      ok_dir <- tryCatch({
-        dir.create(dirname(log_file), recursive = TRUE, showWarnings = FALSE)
-        dir.exists(dirname(log_file))
-      }, error = function(e) FALSE)
-      if (!isTRUE(ok_dir)) {
-        log_file <- file.path(tempdir(), "itcsuite", "logs", "session.log")
-        try(dir.create(dirname(log_file), recursive = TRUE, showWarnings = FALSE), silent = TRUE)
-      }
-      cat(paste0(entry, "\n"), file = log_file, append = TRUE)
+      fallback_file <- file.path(tempdir(), "itcsuite", "logs", "session.log")
+      append_log_entry_safe(entry, log_file, fallback_file)
     }
     invisible(entry)
   }
@@ -44,15 +57,8 @@ if (!exists("itc_log_warn", mode = "function")) {
     warning(entry, call. = FALSE)
     if (isTRUE(log_to_file)) {
       log_file <- if (exists("FILE_PATHS")) FILE_PATHS$error_log else "error.log"
-      ok_dir <- tryCatch({
-        dir.create(dirname(log_file), recursive = TRUE, showWarnings = FALSE)
-        dir.exists(dirname(log_file))
-      }, error = function(e) FALSE)
-      if (!isTRUE(ok_dir)) {
-        log_file <- file.path(tempdir(), "itcsuite", "logs", "error.log")
-        try(dir.create(dirname(log_file), recursive = TRUE, showWarnings = FALSE), silent = TRUE)
-      }
-      cat(paste0(entry, "\n"), file = log_file, append = TRUE)
+      fallback_file <- file.path(tempdir(), "itcsuite", "logs", "error.log")
+      append_log_entry_safe(entry, log_file, fallback_file)
     }
     invisible(entry)
   }
@@ -66,15 +72,8 @@ if (!exists("itc_log_error", mode = "function")) {
     warning(entry, call. = FALSE)
     if (isTRUE(log_to_file)) {
       log_file <- if (exists("FILE_PATHS")) FILE_PATHS$error_log else "error.log"
-      ok_dir <- tryCatch({
-        dir.create(dirname(log_file), recursive = TRUE, showWarnings = FALSE)
-        dir.exists(dirname(log_file))
-      }, error = function(e) FALSE)
-      if (!isTRUE(ok_dir)) {
-        log_file <- file.path(tempdir(), "itcsuite", "logs", "error.log")
-        try(dir.create(dirname(log_file), recursive = TRUE, showWarnings = FALSE), silent = TRUE)
-      }
-      cat(paste0(entry, "\n"), file = log_file, append = TRUE)
+      fallback_file <- file.path(tempdir(), "itcsuite", "logs", "error.log")
+      append_log_entry_safe(entry, log_file, fallback_file)
     }
     invisible(entry)
   }

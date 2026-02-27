@@ -21,6 +21,16 @@ if (dir.exists(project_lib)) {
 Sys.setenv(ITCSUITE_REPO_ROOT = repo_root)
 on.exit(Sys.unsetenv("ITCSUITE_REPO_ROOT"), add = TRUE)
 
+# Keep legacy tests away from OS-specific user-library permissions (notably macOS CI).
+unit_user_data_dir <- normalizePath(
+  file.path(tempdir(), "itcsuite-unit-data"),
+  winslash = "/",
+  mustWork = FALSE
+)
+dir.create(unit_user_data_dir, recursive = TRUE, showWarnings = FALSE)
+Sys.setenv(ITCSUITE_USER_DATA_DIR = unit_user_data_dir)
+on.exit(Sys.unsetenv("ITCSUITE_USER_DATA_DIR"), add = TRUE)
+
 cat(sprintf("Running unit tests (strict=%s)\n", tolower(as.character(strict_mode))))
 
 results <- list()
