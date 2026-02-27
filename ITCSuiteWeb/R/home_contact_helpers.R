@@ -83,6 +83,40 @@ home_contact_build_viabind_signature <- function(repo_root = getwd(), default_ve
   paste0("ViaBind v", version)
 }
 
+home_contact_build_citation_info <- function(
+  repo_root = getwd(),
+  default_version = "x.x.x"
+) {
+  version <- home_contact_read_viabind_version(
+    repo_root = repo_root,
+    default_version = default_version
+  )
+  line1 <- paste0("Wu, G. ViaBind_ITCSuite (v", version, ")")
+  line2_prefix <- "Zenodo, 2026, doi: "
+  doi_text <- "10.5281/zenodo.18797024"
+  doi_href <- "https://doi.org/10.5281/zenodo.18797024"
+  copy_text <- paste0(line1, "\n", line2_prefix, doi_text)
+
+  list(
+    line1 = line1,
+    line2_prefix = line2_prefix,
+    doi_text = doi_text,
+    doi_href = doi_href,
+    copy_text = copy_text
+  )
+}
+
+home_contact_build_citation_line <- function(
+  repo_root = getwd(),
+  doi_url = "https://doi.org/XXXX",
+  default_version = "x.x.x"
+) {
+  home_contact_build_citation_info(
+    repo_root = repo_root,
+    default_version = default_version
+  )$copy_text
+}
+
 home_contact_resolve_qr_src <- function(
   lang = "en",
   assets_dir = file.path(getwd(), "www", "assets"),

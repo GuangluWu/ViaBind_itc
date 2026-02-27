@@ -15,7 +15,7 @@ path_graph_base_fixed,基础路径 H+G=M 固定激活。,Base path H+G=M is alwa
 section_manual_adjust,变量调节 (dH: cal/mol),Variables (dH: cal/mol),Section,
 section_manual_adjust_desc,拖动滑条，变化曲线 (dH单位: cal/mol),Drag sliders to change curves (dH unit: cal/mol),Description,
 fit_bounds_title,高级参数范围设置（min/max）,Advanced Parameter Bounds (min/max),Section,
-fit_bounds_hint,默认使用系统范围；你可按参数自定义 min/max（仅当前会话）。,"Default uses system bounds; you can customize min/max per parameter (current session only).",Description,
+fit_bounds_hint,默认使用系统范围；您可按参数自定义 min/max（仅当前会话）。,"Default uses system bounds; you can customize min/max per parameter (current session only).",Description,
 fit_bounds_param_col,参数,Param,Table Header,
 fit_bounds_min_col,最小值,Min,Table Header,
 fit_bounds_max_col,最大值,Max,Table Header,

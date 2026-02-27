@@ -8,6 +8,21 @@
 
 ViaBind 是一个面向等温滴定量热（ITC）分析的开源桌面工作流。本仓库包含 Electron 桌面应用，以及用于数据处理、拟合和绘图的底层模块。
 
+## 为什么是 ViaBind
+
+- **端到端 ITC 工作流**：在同一个桌面应用中完成原始数据处理、模型拟合和论文级图形输出。
+- **路径组合建模**：通过反应路径组合来构建和比较模型假设，而不是被固定单模型限制。
+- **双优化策略**：并行提供局部优化（`optim`）和全局搜索（`DEoptim`），兼顾效率与稳健性。
+- **本地优先运行**：Electron 桌面 + 本地 Shiny/R 运行时，支持在本地或离线实验环境下完成分析。
+
+## 三步工作流
+
+1. **Step 1 (ITCprocessor)**：原始 `.itc` 数据解析、基线校正和积分。
+2. **Step 2 (ITCsimfit)**：模型模拟与参数约束拟合，并提供诊断信息。
+3. **Step 3 (ITCgraph)**：生成发表风格图形并导出结构化结果。
+
+更完整的技术背景请参考白皮书：[`PRdocs/ITCSuite_External_Whitepaper.md`](PRdocs/ITCSuite_External_Whitepaper.md)。
+
 ## 下载
 
 - 最新版本下载: [github.com/GuangluWu/ViaBind_itc/releases/latest](https://github.com/GuangluWu/ViaBind_itc/releases/latest)
@@ -21,7 +36,7 @@ ViaBind 是一个面向等温滴定量热（ITC）分析的开源桌面工作流
 ## 首次启动说明
 
 - 由于当前公开版本暂未完成 notarization，macOS 在首次打开时可能会拦截应用。如果出现这种情况，请前往 `系统设置 > 隐私与安全性`，手动允许应用运行。
-- Windows 对未签名安装程序可能会显示 SmartScreen 警告。如果你确认下载来源可信，可点击 `更多信息` 后继续安装。
+- Windows 对未签名安装程序可能会显示 SmartScreen 警告。如果您确认下载来源可信，可点击 `更多信息` 后继续安装。
 
 ## 反馈与支持
 

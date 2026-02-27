@@ -86,6 +86,14 @@ testthat::test_that("home_contact_build_viabind_signature builds expected string
     home_contact_build_viabind_signature(repo_root = sandbox, default_version = "x.x.x"),
     "ViaBind v9.8.7"
   )
+  testthat::expect_equal(
+    home_contact_build_citation_line(repo_root = sandbox, default_version = "x.x.x"),
+    paste0(
+      "Wu, G. ViaBind_ITCSuite (v9.8.7)",
+      "\n",
+      "Zenodo, 2026, doi: 10.5281/zenodo.18797024"
+    )
+  )
 })
 
 testthat::test_that("home_contact_read_viabind_version prefers ITCSUITE_APP_VERSION", {
@@ -106,5 +114,32 @@ testthat::test_that("home_contact_read_viabind_version prefers ITCSUITE_APP_VERS
   testthat::expect_equal(
     home_contact_build_viabind_signature(repo_root = file.path(tempdir(), "missing"), default_version = "x.x.x"),
     "ViaBind v7.7.7"
+  )
+  testthat::expect_equal(
+    home_contact_build_citation_line(repo_root = file.path(tempdir(), "missing"), default_version = "x.x.x"),
+    paste0(
+      "Wu, G. ViaBind_ITCSuite (v7.7.7)",
+      "\n",
+      "Zenodo, 2026, doi: 10.5281/zenodo.18797024"
+    )
+  )
+})
+
+testthat::test_that("home_contact_build_citation_info returns display and copy fields", {
+  info <- home_contact_build_citation_info(
+    repo_root = file.path(tempdir(), "missing"),
+    default_version = "x.x.x"
+  )
+  testthat::expect_equal(info$line1, "Wu, G. ViaBind_ITCSuite (vx.x.x)")
+  testthat::expect_equal(info$line2_prefix, "Zenodo, 2026, doi: ")
+  testthat::expect_equal(info$doi_text, "10.5281/zenodo.18797024")
+  testthat::expect_equal(info$doi_href, "https://doi.org/10.5281/zenodo.18797024")
+  testthat::expect_equal(
+    info$copy_text,
+    paste0(
+      "Wu, G. ViaBind_ITCSuite (vx.x.x)",
+      "\n",
+      "Zenodo, 2026, doi: 10.5281/zenodo.18797024"
+    )
   )
 })

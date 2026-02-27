@@ -280,6 +280,11 @@ host_tr <- function(key, lang) {
       home_contact_email_label = "Email",
       home_contact_website_label = "Website",
       home_contact_version_label = "Version",
+      home_contact_citation_title = "Citation:",
+      home_contact_citation_intro = "If you use this software in published work, please cite:",
+      home_contact_citation_copy_btn = "Copy citation",
+      home_contact_citation_copy_ok = "Citation copied.",
+      home_contact_citation_copy_failed = "Copy failed. Please copy manually.",
       home_contact_donate_title = "Support ViaBind",
       home_contact_donate_link_label = "Buy Me a Coffee",
       home_contact_donate_note_line1 = "If this tool has made your work a little easier, you are welcome to support its continued development.",
@@ -294,7 +299,7 @@ host_tr <- function(key, lang) {
       step2 = "Step 2 模拟 & 拟合",
       step3 = "Step 3 绘图 & 导出",
       home_welcome_title = "欢迎使用 ViaBind",
-      home_welcome_desc = "你可以从 Step 1 开始，或从下方调用最近导入的数据。",
+      home_welcome_desc = "您可以从 Step 1 开始，或从下方调用最近导入的数据。",
       home_start_step1 = "进入 Step 1",
       home_recent_title = "最近导入",
       home_recent_empty = "当前会话暂无最近导入记录。",
@@ -331,6 +336,11 @@ host_tr <- function(key, lang) {
       home_contact_email_label = "邮箱",
       home_contact_website_label = "网址",
       home_contact_version_label = "版本",
+      home_contact_citation_title = "引用：",
+      home_contact_citation_intro = "如果您在发表工作中使用本软件，请引用：",
+      home_contact_citation_copy_btn = "复制引用",
+      home_contact_citation_copy_ok = "引用已复制。",
+      home_contact_citation_copy_failed = "复制失败，请手动复制。",
       home_contact_donate_title = "支持 ViaBind",
       home_contact_donate_link_label = "Buy Me a Coffee",
       home_contact_donate_note_line1 = "功能永久免费。",
@@ -444,20 +454,29 @@ ui <- fluidPage(
       .home-recent-path-missing { color: #b91c1c; font-weight: 600; }\
       .home-empty-note { color: #6b7280; font-size: 13px; }\
       .home-contact-panel { margin-top: 14px; padding: 12px; border: 1px solid #d8e2ef; border-radius: 8px; background: #ffffff; }\
-      .home-contact-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 0.9fr) auto; gap: 10px 8px; align-items: start; }\
+      .home-contact-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(260px, 0.9fr) auto; gap: 10px 8px; align-items: start; }\
       .home-contact-col-title { margin: 0 0 8px; font-size: 15px; font-weight: 600; color: #111827; }\
       .home-contact-lines p { margin: 0 0 6px; color: #1f2937; }\
       .home-contact-lines p:last-child { margin-bottom: 0; }\
       .home-contact-donate-note { margin: 2px 0 6px; color: #374151; }\
       .home-contact-col-dev { justify-self: start; text-align: left; }\
+      .home-contact-col-citation { justify-self: stretch; text-align: left; }\
+      .home-contact-lines p.home-contact-citation-line { font-size: 13px; line-height: 1.35; color: #1f2937; word-break: break-word; margin-left: 18px; }\
+      .home-contact-citation-copy { margin-top: 4px; }\
       .home-contact-col-donate { justify-self: end; text-align: left; max-width: 360px; }\
       .home-contact-col-qr { justify-self: end; text-align: left; align-self: start; }\
       .home-contact-link { word-break: break-all; }\
       .home-contact-qr-wrap { margin-top: 0; }\
       .home-contact-qr { display: block; width: auto; height: auto; max-height: var(--home-contact-qr-max-h, 132px); max-width: 156px; object-fit: contain; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; padding: 4px; }\
       .home-contact-qr-missing { font-size: 12px; color: #6b7280; max-width: 220px; }\
-      @media (max-width: 1100px) { .home-contact-grid { grid-template-columns: 1fr 1fr; } .home-contact-col-donate, .home-contact-col-qr { justify-self: end; } .home-contact-col-qr { grid-column: 2; } }\
-      @media (max-width: 900px) { .home-contact-grid { grid-template-columns: 1fr; } .home-contact-col-donate, .home-contact-col-qr { justify-self: start; max-width: none; } .home-contact-col-qr { grid-column: auto; } }\
+      @media (max-width: 1200px) {\
+        .home-contact-grid { grid-template-columns: 1fr 1fr; }\
+        .home-contact-col-dev { grid-column: 1; grid-row: 1; }\
+        .home-contact-col-citation { grid-column: 2; grid-row: 1; }\
+        .home-contact-col-donate { grid-column: 1; grid-row: 2; justify-self: start; max-width: none; }\
+        .home-contact-col-qr { grid-column: 2; grid-row: 2; justify-self: end; }\
+      }\
+      @media (max-width: 900px) { .home-contact-grid { grid-template-columns: 1fr; } .home-contact-col-donate, .home-contact-col-qr { justify-self: start; max-width: none; } .home-contact-col-dev, .home-contact-col-citation, .home-contact-col-donate, .home-contact-col-qr { grid-column: auto; grid-row: auto; } }\
     ")),
     tags$script(HTML("
       (function() {
@@ -612,6 +631,56 @@ ui <- fluidPage(
             fallback.error = (e && e.message) ? e.message : 'Desktop open file failed.';
             Shiny.setInputValue('itcsuite_desktop_open_file_result', fallback, { priority: 'event' });
           }
+        });
+
+        Shiny.addCustomMessageHandler('itcsuite_copy_to_clipboard', async function(msg) {
+          var payload = msg || {};
+          var text = (payload.text || '').toString();
+          var resultInputId = (payload.result_input_id || 'itcsuite_copy_citation_result').toString();
+          var result = { ok: false, ts: Date.now(), error: '' };
+
+          if (!text) {
+            result.error = 'No text provided.';
+            Shiny.setInputValue(resultInputId, result, { priority: 'event' });
+            return;
+          }
+
+          try {
+            if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+              await navigator.clipboard.writeText(text);
+              result.ok = true;
+              Shiny.setInputValue(resultInputId, result, { priority: 'event' });
+              return;
+            }
+          } catch (e) {
+            result.error = (e && e.message) ? e.message : 'Clipboard API failed.';
+          }
+
+          var textarea = null;
+          try {
+            textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.setAttribute('readonly', '');
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            textarea.style.left = '-9999px';
+            textarea.style.top = '0';
+            document.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+            var copied = document.execCommand('copy');
+            if (!copied) throw new Error('execCommand returned false');
+            result.ok = true;
+            result.error = '';
+          } catch (e2) {
+            if (!result.error) {
+              result.error = (e2 && e2.message) ? e2.message : 'Fallback copy failed.';
+            }
+          } finally {
+            if (textarea && textarea.parentNode) textarea.parentNode.removeChild(textarea);
+          }
+
+          Shiny.setInputValue(resultInputId, result, { priority: 'event' });
         });
 
         $(document).on('shiny:connected', function() {
@@ -2108,6 +2177,7 @@ server <- function(input, output, session) {
     home_contact_email_href <- home_contact_mailto_href(home_contact_email)
     home_contact_site <- home_contact_scalar_chr(home_contact_profile$website, default = "")
     home_contact_version <- home_contact_build_viabind_signature(repo_root = repo_root)
+    home_contact_citation <- home_contact_build_citation_info(repo_root = repo_root)
     home_contact_qr <- home_contact_resolve_qr_src(
       lang = l,
       assets_dir = home_contact_assets_dir,
@@ -2203,6 +2273,24 @@ server <- function(input, output, session) {
               )
             ),
             div(
+              class = "home-contact-lines home-contact-col home-contact-col-citation",
+              tags$h5(class = "home-contact-col-title", host_tr("home_contact_citation_title", l)),
+              tags$p(host_tr("home_contact_citation_intro", l)),
+              tags$p(class = "home-contact-citation-line", home_contact_citation$line1),
+              tags$p(
+                class = "home-contact-citation-line",
+                home_contact_citation$line2_prefix,
+                tags$a(
+                  href = home_contact_citation$doi_href,
+                  target = "_blank",
+                  rel = "noopener noreferrer",
+                  class = "home-contact-link",
+                  home_contact_citation$doi_text
+                )
+              ),
+              actionButton("home_copy_citation", host_tr("home_contact_citation_copy_btn", l), class = "btn btn-default btn-xs home-contact-citation-copy")
+            ),
+            div(
               class = "home-contact-lines home-contact-col home-contact-col-donate",
               tags$h5(class = "home-contact-col-title", host_tr("home_contact_donate_title", l)),
               home_contact_donate_note,
@@ -2243,6 +2331,24 @@ server <- function(input, output, session) {
 
   observeEvent(input$home_start_step1, {
     updateTabsetPanel(session, "main_tabs", selected = "step1")
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$home_copy_citation, {
+    citation_line <- home_contact_build_citation_info(repo_root = repo_root)$copy_text
+    session$sendCustomMessage("itcsuite_copy_to_clipboard", list(
+      text = citation_line,
+      result_input_id = "itcsuite_copy_citation_result"
+    ))
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$itcsuite_copy_citation_result, {
+    result <- input$itcsuite_copy_citation_result
+    ok <- isTRUE(result$ok)
+    showNotification(
+      if (ok) host_tr("home_contact_citation_copy_ok", host_lang()) else host_tr("home_contact_citation_copy_failed", host_lang()),
+      type = if (ok) "message" else "warning",
+      duration = if (ok) 2.5 else 4
+    )
   }, ignoreInit = TRUE)
 
   telemetry_log_event(

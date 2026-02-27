@@ -8,6 +8,21 @@
 
 ViaBind is an open-source desktop workflow for isothermal titration calorimetry (ITC) analysis. The repository includes the Electron desktop shell and the underlying ITC processing, fitting, and plotting modules used by the app.
 
+## Why ViaBind
+
+- **End-to-end ITC workflow**: parse raw data, fit mechanistic models, and generate publication-ready figures in one desktop app.
+- **Path-combination modeling**: build and compare model hypotheses by reaction-path combinations instead of being limited to a single fixed model.
+- **Dual optimization strategies**: use local optimization (`optim`) and global search (`DEoptim`) as complementary routes for speed and robustness.
+- **Local-first operation**: Electron desktop + local Shiny/R runtime keeps analysis on local machines, including offline lab environments.
+
+## 3-Step Workflow
+
+1. **Step 1 (ITCprocessor)**: raw `.itc` parsing, baseline correction, and integration.
+2. **Step 2 (ITCsimfit)**: simulation and constrained parameter fitting with diagnostics.
+3. **Step 3 (ITCgraph)**: publication-style plotting and structured export.
+
+For deeper technical background, see the external whitepaper: [`PRdocs/ITCSuite_External_Whitepaper.md`](PRdocs/ITCSuite_External_Whitepaper.md).
+
 ## Download
 
 - Latest release: [github.com/GuangluWu/ViaBind_itc/releases/latest](https://github.com/GuangluWu/ViaBind_itc/releases/latest)

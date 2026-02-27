@@ -7,7 +7,7 @@ testthat::test_that("step2 column scroll css is defined for independent vertical
   )
 
   required_rules <- c(
-    "max-height:\\s*calc\\(var\\(--itcsuite-vh,\\s*1vh\\)\\s*\\*\\s*100\\s*-\\s*var\\(--itcsuite-host-chrome,\\s*140px\\)\\)",
+    "max-height:\\s*calc\\(var\\(--itcsuite-vh,\\s*1vh\\)\\s*\\*\\s*100\\s*-\\s*var\\(--itcsuite-host-chrome,\\s*140px\\)(?:\\s*\\+\\s*20px)?\\)",
     "overflow-y:\\s*auto",
     "overflow-x:\\s*hidden",
     "min-height:\\s*0",

@@ -160,7 +160,7 @@ solve_equi_modular <- function(G_tot, H_tot, p, active_paths, last_guess) {
       # 溢出保护
       if(any(y > 700)) return(c(1e10, 1e10)) 
       # 如果求解器"猜"了一个荒谬的大数值（比如 ln C = 1000），
-      # 代码直接返回一个巨大的误差值 (1e10)，告诉求解器："你走错路了，赶紧回头！"
+      # 代码直接返回一个巨大的误差值 (1e10)，告诉求解器："您走错路了，赶紧回头！"
       
       lnG <- y[1]; lnH <- y[2]
       G <- exp(lnG); H <- exp(lnH)

@@ -145,7 +145,7 @@ Step2 分层依赖方向（必须遵守）：
 
 ### 5.3 调整最近导入（Recent Imports）行为
 
-你需要改的主要是 `ITCSuiteWeb`：
+您需要改的主要是 `ITCSuiteWeb`：
 
 - 类型识别：`ITCSuiteWeb/R/home_recent_helpers.R`
 - 持久化读写：`ITCSuiteWeb/R/home_recent_store.R`
