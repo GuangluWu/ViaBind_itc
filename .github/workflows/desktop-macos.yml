@@ -2,6 +2,12 @@ name: ITCSuite Desktop macOS
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
 
 jobs:
   desktop-macos:
@@ -51,6 +57,7 @@ jobs:
         if: steps.signing.outputs.enabled == 'true'
         working-directory: desktop
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.MACOS_CERT_P12_BASE64 }}
           CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -61,6 +68,8 @@ jobs:
       - name: Build macOS artifacts (unsigned fallback)
         if: steps.signing.outputs.enabled != 'true'
         working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist -- --config.mac.identity=null
 
       - name: Warn when artifacts are unsigned

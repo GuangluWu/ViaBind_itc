@@ -1,7 +1,14 @@
-name: ITCSuite Desktop Windows
+name: ViaBind Desktop Windows
+run-name: ViaBind ${{ github.ref_type == 'tag' && github.ref_name || github.ref_name }} Windows
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
 
 jobs:
   desktop-windows:
@@ -35,6 +42,8 @@ jobs:
 
       - name: Build Windows artifacts
         working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist:win
 
       - name: Upload desktop artifacts
