@@ -128,14 +128,13 @@ ui <- fluidPage(
         div(uiOutput("label_choose_file")),
         uiOutput("step1_import_input"),
         uiOutput("step1_import_summary_ui"),
-        uiOutput("ui_view_controls"),
         checkboxInput("zoom_baseline", tr("zoom_baseline"), value = TRUE),
         hr(style = "margin: 8px 0;"),
         uiOutput("ui_baseline_settings"),
         sliderInput("offset", tr("anchor_offset"), min = 0, max = 10, value = 5, step = 1),
         sliderInput("duration", tr("anchor_width"), min = 5, max = 60, value = 20, step = 5),
         sliderInput("spar", tr("spline_spar"), min = 0, max = 1, value = 0.1, step = 0.01),
-        uiOutput("ui_baseline_integration_notes"),
+        uiOutput("anchor_bounds_editor"),
         hr(style = "margin: 8px 0;"),
         uiOutput("ui_integration_settings"),
         numericInput("int_start_offset", tr("start_offset"), value = -3, step = 1),
@@ -144,13 +143,14 @@ ui <- fluidPage(
           condition = "input.limit_integration == true",
           numericInput("integration_window", tr("end_offset"), min = 1, value = 15, step = 1)
         ),
-        hr(style = "margin: 8px 0;"),
         div(
           class = "action-btn-row",
           style = "width:100%;box-sizing:border-box;overflow:hidden;",
           div(style = "min-width:0;", actionButton("btn_data_to_fit", tr("data_to_fit"), width = "100%")),
           div(style = "min-width:0;", uiOutput("download_btn_ui"))
-        )
+        ),
+        hr(style = "margin: 10px 0;"),
+        uiOutput("ui_baseline_integration_notes")
       )
     ),
     column(
@@ -435,6 +435,149 @@ server <- function(input, output, session) {
   output$ui_title <- renderUI({ h3(tr("app_title", lang())) })
   output$lang_switch_ui <- renderUI(NULL)
   baseline_defaults <- reactiveValues(duration = 20, offset = 5, spar = 0.1, ready = FALSE)
+  safe_step1_input_get <- function(id) {
+    tryCatch(shiny::isolate(input[[id]]), error = function(e) NULL)
+  }
+
+  ANCHOR_BOUND_PARAM_IDS <- c("offset", "duration")
+  ANCHOR_BOUND_STEPS <- c(offset = 1, duration = 5)
+
+  get_default_anchor_bound <- function(param_name) {
+    if (identical(param_name, "offset")) return(c(lower = 0, upper = 10))
+    if (identical(param_name, "duration")) return(c(lower = 5, upper = 60))
+    c(lower = 0, upper = 10)
+  }
+
+  build_default_anchor_param_bounds <- function() {
+    out <- vector("list", length(ANCHOR_BOUND_PARAM_IDS))
+    names(out) <- ANCHOR_BOUND_PARAM_IDS
+    for (nm in ANCHOR_BOUND_PARAM_IDS) {
+      out[[nm]] <- get_default_anchor_bound(nm)
+    }
+    out
+  }
+
+  anchor_param_bounds <- reactiveVal(build_default_anchor_param_bounds())
+  anchor_bounds_editor_open <- reactiveVal(FALSE)
+
+  get_anchor_bound_for_ui <- function(param_name) {
+    bounds_now <- anchor_param_bounds()
+    b <- bounds_now[[param_name]]
+    if (is.null(b)) b <- get_default_anchor_bound(param_name)
+    c(lower = as.numeric(b["lower"]), upper = as.numeric(b["upper"]))
+  }
+
+  sanitize_anchor_bound_pair <- function(lower_in, upper_in, old_lower, old_upper, step = 1) {
+    lower_num <- suppressWarnings(as.numeric(lower_in)[1])
+    upper_num <- suppressWarnings(as.numeric(upper_in)[1])
+    if (!is.finite(lower_num)) lower_num <- old_lower
+    if (!is.finite(upper_num)) upper_num <- old_upper
+
+    if (!is.finite(lower_num)) lower_num <- 0
+    if (!is.finite(upper_num)) upper_num <- lower_num + step
+
+    lower_num <- max(0, lower_num)
+    upper_num <- max(0, upper_num)
+
+    if (lower_num > upper_num) {
+      tmp <- lower_num
+      lower_num <- upper_num
+      upper_num <- tmp
+    }
+
+    min_span <- suppressWarnings(as.numeric(step)[1])
+    if (!is.finite(min_span) || min_span <= 0) min_span <- 1
+    if (abs(upper_num - lower_num) < .Machine$double.eps^0.5) {
+      upper_num <- lower_num + min_span
+    }
+
+    c(lower = lower_num, upper = upper_num)
+  }
+
+  clamp_to_anchor_bound <- function(value, bound, default) {
+    lower_num <- suppressWarnings(as.numeric(bound["lower"])[1])
+    upper_num <- suppressWarnings(as.numeric(bound["upper"])[1])
+    if (!is.finite(lower_num)) lower_num <- 0
+    lower_num <- max(0, lower_num)
+    if (!is.finite(upper_num) || upper_num < lower_num) upper_num <- lower_num + 1
+
+    val_num <- suppressWarnings(as.numeric(value)[1])
+    if (!is.finite(val_num)) val_num <- suppressWarnings(as.numeric(default)[1])
+    if (!is.finite(val_num)) val_num <- lower_num
+    min(max(val_num, lower_num), upper_num)
+  }
+
+  get_default_anchor_value <- function(param_name) {
+    if (identical(param_name, "duration")) return(20)
+    if (identical(param_name, "offset")) return(5)
+    0
+  }
+
+  apply_anchor_bound_to_slider <- function(param_name, bound) {
+    slider_id <- param_name
+    current_val <- safe_step1_input_get(slider_id)
+    default_val <- get_default_anchor_value(param_name)
+    clamped_val <- clamp_to_anchor_bound(current_val, bound, default = default_val)
+    min_num <- suppressWarnings(as.numeric(bound["lower"])[1])
+    max_num <- suppressWarnings(as.numeric(bound["upper"])[1])
+    if (!is.finite(min_num)) min_num <- 0
+    if (!is.finite(max_num) || max_num < min_num) max_num <- min_num + 1
+    updateSliderInput(
+      session,
+      slider_id,
+      min = min_num,
+      max = max_num,
+      value = clamped_val
+    )
+    invisible(TRUE)
+  }
+
+  apply_all_anchor_bounds_to_sliders <- function() {
+    bounds_now <- anchor_param_bounds()
+    for (nm in ANCHOR_BOUND_PARAM_IDS) {
+      b <- bounds_now[[nm]]
+      if (is.null(b)) next
+      apply_anchor_bound_to_slider(nm, b)
+    }
+    invisible(TRUE)
+  }
+
+  update_anchor_param_bound <- function(param_name, lower_in, upper_in, update_ui_inputs = TRUE) {
+    current_bounds <- anchor_param_bounds()
+    old_bound <- current_bounds[[param_name]]
+    if (is.null(old_bound)) old_bound <- get_default_anchor_bound(param_name)
+
+    step_val <- ANCHOR_BOUND_STEPS[[param_name]]
+    if (!is.finite(step_val) || step_val <= 0) step_val <- 1
+
+    sanitized <- sanitize_anchor_bound_pair(
+      lower_in = lower_in,
+      upper_in = upper_in,
+      old_lower = as.numeric(old_bound["lower"]),
+      old_upper = as.numeric(old_bound["upper"]),
+      step = step_val
+    )
+    current_bounds[[param_name]] <- sanitized
+    anchor_param_bounds(current_bounds)
+
+    if (isTRUE(update_ui_inputs)) {
+      min_id <- paste0("anchor_bound_", param_name, "_min")
+      max_id <- paste0("anchor_bound_", param_name, "_max")
+      cur_min <- suppressWarnings(as.numeric(safe_step1_input_get(min_id))[1])
+      cur_max <- suppressWarnings(as.numeric(safe_step1_input_get(max_id))[1])
+      lower_num <- suppressWarnings(as.numeric(sanitized["lower"])[1])
+      upper_num <- suppressWarnings(as.numeric(sanitized["upper"])[1])
+      if (!is.finite(cur_min) || !isTRUE(all.equal(cur_min, lower_num, tolerance = 1e-10))) {
+        updateNumericInput(session, min_id, value = lower_num)
+      }
+      if (!is.finite(cur_max) || !isTRUE(all.equal(cur_max, upper_num, tolerance = 1e-10))) {
+        updateNumericInput(session, max_id, value = upper_num)
+      }
+    }
+
+    apply_anchor_bound_to_slider(param_name, sanitized)
+    invisible(TRUE)
+  }
 
   output$label_choose_file <- renderUI({ strong(tr("choose_file", lang())) })
   output$step1_import_input <- renderUI({
@@ -455,7 +598,6 @@ server <- function(input, output, session) {
       placeholder = "No file selected"
     )
   })
-  output$ui_view_controls <- renderUI({ h4(tr("view_controls", lang())) })
   output$ui_baseline_settings <- renderUI({
     div(
       class = "control-header",
@@ -463,6 +605,62 @@ server <- function(input, output, session) {
       h4(tr("baseline_settings", lang())),
       actionButton("reset_baseline", tr("reset", lang()), class = "btn btn-default btn-xs", width = "70px")
     )
+  })
+  output$anchor_bounds_editor <- renderUI({
+    header_row <- div(
+      style = "display:flex; gap:8px; align-items:center; margin: 6px 0 4px 0; font-size:12px; font-weight:bold;",
+      div(style = "flex: 0 0 72px;", tr("anchor_bounds_param_col", lang())),
+      div(style = "flex: 1 1 120px;", tr("anchor_bounds_min_col", lang())),
+      div(style = "flex: 1 1 120px;", tr("anchor_bounds_max_col", lang()))
+    )
+
+    rows <- lapply(ANCHOR_BOUND_PARAM_IDS, function(param_name) {
+      bound <- get_anchor_bound_for_ui(param_name)
+      min_id <- paste0("anchor_bound_", param_name, "_min")
+      max_id <- paste0("anchor_bound_", param_name, "_max")
+      step_val <- suppressWarnings(as.numeric(ANCHOR_BOUND_STEPS[[param_name]])[1])
+      if (!is.finite(step_val) || step_val <= 0) step_val <- 1
+
+      min_val <- isolate({
+        v <- suppressWarnings(as.numeric(input[[min_id]])[1])
+        if (is.finite(v)) v else as.numeric(bound["lower"])
+      })
+      max_val <- isolate({
+        v <- suppressWarnings(as.numeric(input[[max_id]])[1])
+        if (is.finite(v)) v else as.numeric(bound["upper"])
+      })
+
+      div(
+        style = "display:flex; gap:8px; align-items:center; margin-bottom: 4px;",
+        div(style = "flex: 0 0 72px; font-family: monospace; font-size: 12px;", param_name),
+        div(style = "flex: 1 1 120px;", numericInput(min_id, NULL, value = min_val, step = step_val, width = "100%")),
+        div(style = "flex: 1 1 120px;", numericInput(max_id, NULL, value = max_val, step = step_val, width = "100%"))
+      )
+    })
+
+    details_tag <- tags$details(
+      id = "anchor_bounds_details",
+      ontoggle = "Shiny.setInputValue('anchor_bounds_editor_open', this.open, {priority: 'event'})",
+      style = "margin: 6px 0 8px 0;",
+      tags$summary(
+        style = "cursor: pointer; color: #2980b9; font-size: 12px;",
+        tr("anchor_bounds_title", lang())
+      ),
+      div(
+        style = "margin-top: 6px; padding: 8px; border: 1px solid #e3e3e3; border-radius: 4px; background:#fafafa;",
+        div(style = "font-size: 12px; color: #666; margin-bottom: 4px;", tr("anchor_bounds_hint", lang())),
+        header_row,
+        rows,
+        div(
+          style = "margin-top: 6px;",
+          actionButton("reset_anchor_bounds", tr("anchor_bounds_reset_btn", lang()), class = "btn-default btn-xs")
+        )
+      )
+    )
+    if (isTRUE(anchor_bounds_editor_open())) {
+      details_tag <- tagAppendAttributes(details_tag, open = "open")
+    }
+    details_tag
   })
   output$ui_integration_settings <- renderUI({ h4(tr("integration_settings", lang())) })
   output$ui_baseline_integration_notes <- renderUI({
@@ -610,10 +808,6 @@ server <- function(input, output, session) {
 
   home_register_restore("step1", restore_step1_home_payload)
 
-  safe_step1_input_get <- function(id) {
-    tryCatch(shiny::isolate(input[[id]]), error = function(e) NULL)
-  }
-
   normalize_step1_sleep_scalar_chr <- function(value, default = "") {
     out <- as.character(value %||% "")[1]
     out <- trimws(out)
@@ -754,6 +948,46 @@ server <- function(input, output, session) {
     collect_fn = collect_step1_sleep_restore_snapshot,
     apply_fn = apply_step1_sleep_restore_snapshot
   )
+
+  for (param_name in ANCHOR_BOUND_PARAM_IDS) {
+    local({
+      nm <- param_name
+      min_id <- paste0("anchor_bound_", nm, "_min")
+      max_id <- paste0("anchor_bound_", nm, "_max")
+      observeEvent(
+        {
+          input[[min_id]]
+          input[[max_id]]
+        },
+        {
+          update_anchor_param_bound(
+            param_name = nm,
+            lower_in = input[[min_id]],
+            upper_in = input[[max_id]],
+            update_ui_inputs = TRUE
+          )
+        },
+        ignoreInit = TRUE
+      )
+    })
+  }
+
+  observeEvent(input$reset_anchor_bounds, {
+    default_bounds <- build_default_anchor_param_bounds()
+    anchor_param_bounds(default_bounds)
+
+    for (nm in ANCHOR_BOUND_PARAM_IDS) {
+      b <- default_bounds[[nm]]
+      updateNumericInput(session, paste0("anchor_bound_", nm, "_min"), value = as.numeric(b["lower"])[1])
+      updateNumericInput(session, paste0("anchor_bound_", nm, "_max"), value = as.numeric(b["upper"])[1])
+    }
+    apply_all_anchor_bounds_to_sliders()
+    showNotification(tr("anchor_bounds_reset_done", lang()), type = "message", duration = 3)
+  }, ignoreInit = TRUE)
+
+  observeEvent(input$anchor_bounds_editor_open, {
+    anchor_bounds_editor_open(isTRUE(input$anchor_bounds_editor_open))
+  }, ignoreInit = TRUE)
 
   observeEvent(input$file1, {
     if (is.null(input$file1) || is.null(input$file1$datapath)) return()
@@ -927,14 +1161,19 @@ server <- function(input, output, session) {
         v <- max(5, min(100, v))
         v <- round(v / 5) * 5
         duration_init <- v
-        updateSliderInput(session, "duration", value = v)
 
         off <- v / 10
         off <- max(0, min(50, off))
         off <- round(off)
         offset_init <- off
-        updateSliderInput(session, "offset", value = off)
       }
+
+      duration_bound <- get_anchor_bound_for_ui("duration")
+      offset_bound <- get_anchor_bound_for_ui("offset")
+      duration_init <- clamp_to_anchor_bound(duration_init, duration_bound, default = baseline_defaults$duration %||% 20)
+      offset_init <- clamp_to_anchor_bound(offset_init, offset_bound, default = baseline_defaults$offset %||% 5)
+      updateSliderInput(session, "duration", value = duration_init)
+      updateSliderInput(session, "offset", value = offset_init)
 
       # 根据注射点之间的典型点数间隔，自动建议积分终点偏移（以点数计）
       injections <- rawData()$injections
@@ -997,8 +1236,20 @@ server <- function(input, output, session) {
 
   observeEvent(input$reset_baseline, {
     if (!isTRUE(baseline_defaults$ready)) return()
-    updateSliderInput(session, "duration", value = baseline_defaults$duration)
-    updateSliderInput(session, "offset", value = baseline_defaults$offset)
+    duration_reset <- clamp_to_anchor_bound(
+      baseline_defaults$duration,
+      get_anchor_bound_for_ui("duration"),
+      default = 20
+    )
+    offset_reset <- clamp_to_anchor_bound(
+      baseline_defaults$offset,
+      get_anchor_bound_for_ui("offset"),
+      default = 5
+    )
+    baseline_defaults$duration <- duration_reset
+    baseline_defaults$offset <- offset_reset
+    updateSliderInput(session, "duration", value = duration_reset)
+    updateSliderInput(session, "offset", value = offset_reset)
     updateSliderInput(session, "spar", value = baseline_defaults$spar)
   }, ignoreInit = TRUE)
 
