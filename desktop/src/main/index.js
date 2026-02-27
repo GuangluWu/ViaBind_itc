@@ -50,6 +50,15 @@ let latestPowerEventPayload = null;
 const RECOVERY_COOLDOWN_MS = 10000;
 const UNRESPONSIVE_RECOVERY_DELAY_MS = 3000;
 const POWER_EVENT_REPLAY_WINDOW_MS = 3 * 60 * 1000;
+const WINDOWS_SCROLLBAR_HIDE_CSS = `
+  * {
+    scrollbar-width: none !important;
+  }
+  *::-webkit-scrollbar {
+    width: 0 !important;
+    height: 0 !important;
+  }
+`;
 
 function useBundledRuntimeInDev() {
   return process.env.ITCSUITE_USE_BUNDLED_R === "1";
@@ -1194,6 +1203,19 @@ function configureDownloadBehavior() {
   });
 }
 
+async function applyWindowsScrollbarPolicy() {
+  if (process.platform !== "win32") return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+
+  try {
+    await mainWindow.webContents.insertCSS(WINDOWS_SCROLLBAR_HIDE_CSS);
+  } catch (error) {
+    appendMainLog("windows_scrollbar_policy_failed", {
+      error: trimScalar(error && error.message, "insertCSS failed")
+    });
+  }
+}
+
 function createMainWindow() {
   if (unresponsiveRecoveryTimer) {
     clearTimeout(unresponsiveRecoveryTimer);
@@ -1290,6 +1312,8 @@ function createMainWindow() {
   });
 
   mainWindow.webContents.on("did-finish-load", async () => {
+    await applyWindowsScrollbarPolicy();
+
     const currentUrl = mainWindow.webContents.getURL();
     if (allowedUrlPrefix && currentUrl.startsWith(allowedUrlPrefix)) {
       replayLatestPowerEventToRenderer("did-finish-load").catch(() => {});
