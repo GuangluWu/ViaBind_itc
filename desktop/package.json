@@ -2,6 +2,16 @@
   "name": "viabind-desktop",
   "version": "0.4.2",
   "description": "ViaBind powered by Electron + local Shiny backend",
+  "author": "Guanglu Wu",
+  "license": "MIT",
+  "homepage": "https://github.com/GuangluWu/ViaBind_itc/releases/latest",
+  "bugs": {
+    "url": "https://github.com/GuangluWu/ViaBind_itc/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GuangluWu/ViaBind_itc.git"
+  },
   "main": "src/main/index.js",
   "engines": {
     "node": ">=20 <21 || >=22 <23 || >=24 <25"
