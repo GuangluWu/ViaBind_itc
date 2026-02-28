@@ -12,7 +12,7 @@ permissions:
 jobs:
   desktop-macos:
     name: desktop-macos
-    runs-on: macos-latest
+    runs-on: macos-14
 
     steps:
       - uses: actions/checkout@v4
@@ -63,7 +63,36 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run dist
+        run: |
+          set -euo pipefail
+          max_attempts=3
+          attempt=1
+          while (( attempt <= max_attempts )); do
+            echo "Signed/notarized build attempt ${attempt}/${max_attempts}"
+            set +e
+            npm run dist 2>&1 | tee "${RUNNER_TEMP}/dist-macos-attempt-${attempt}.log"
+            status=${PIPESTATUS[0]}
+            set -e
+
+            if [[ "${status}" -eq 0 ]]; then
+              exit 0
+            fi
+
+            if grep -Eq "NSURLErrorDomain Code=-1009|No network route|The Internet connection appears to be offline|Failed to notarize via notarytool" "${RUNNER_TEMP}/dist-macos-attempt-${attempt}.log"; then
+              if (( attempt < max_attempts )); then
+                sleep_seconds=$(( attempt * 60 ))
+                echo "Transient notarization/network failure detected, retrying in ${sleep_seconds}s..."
+                sleep "${sleep_seconds}"
+                attempt=$(( attempt + 1 ))
+                continue
+              fi
+            fi
+
+            exit "${status}"
+          done
+
+          echo "Build failed after ${max_attempts} attempts."
+          exit 1
 
       - name: Build macOS artifacts (unsigned fallback)
         if: steps.signing.outputs.enabled != 'true'
