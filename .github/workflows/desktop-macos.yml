@@ -53,13 +53,9 @@ jobs:
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build macOS artifacts (signed + notarized)
+      - name: Preflight Apple notary connectivity
         if: steps.signing.outputs.enabled == 'true'
-        working-directory: desktop
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ secrets.MACOS_CERT_P12_BASE64 }}
-          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -68,20 +64,24 @@ jobs:
           max_attempts=3
           attempt=1
           while (( attempt <= max_attempts )); do
-            echo "Signed/notarized build attempt ${attempt}/${max_attempts}"
+            echo "Notary connectivity probe ${attempt}/${max_attempts}"
             set +e
-            npm run dist 2>&1 | tee "${RUNNER_TEMP}/dist-macos-attempt-${attempt}.log"
-            status=${PIPESTATUS[0]}
+            xcrun notarytool history \
+              --apple-id "${APPLE_ID}" \
+              --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
+              --team-id "${APPLE_TEAM_ID}" \
+              --output-format json >/dev/null 2>"${RUNNER_TEMP}/notary-probe-attempt-${attempt}.log"
+            status=$?
             set -e
 
             if [[ "${status}" -eq 0 ]]; then
               exit 0
             fi
 
-            if grep -Eq "NSURLErrorDomain Code=-1009|No network route|The Internet connection appears to be offline|Failed to notarize via notarytool" "${RUNNER_TEMP}/dist-macos-attempt-${attempt}.log"; then
+            if grep -Eq "NSURLErrorDomain Code=-1009|No network route|The Internet connection appears to be offline|timed out|Could not resolve host|network" "${RUNNER_TEMP}/notary-probe-attempt-${attempt}.log"; then
               if (( attempt < max_attempts )); then
-                sleep_seconds=$(( attempt * 60 ))
-                echo "Transient notarization/network failure detected, retrying in ${sleep_seconds}s..."
+                sleep_seconds=$(( attempt * 20 ))
+                echo "Transient network failure detected, retrying in ${sleep_seconds}s..."
                 sleep "${sleep_seconds}"
                 attempt=$(( attempt + 1 ))
                 continue
@@ -91,8 +91,87 @@ jobs:
             exit "${status}"
           done
 
-          echo "Build failed after ${max_attempts} attempts."
+          echo "Notary connectivity probe failed after ${max_attempts} attempts."
           exit 1
+
+      - name: Build macOS artifacts (signed; notarization deferred)
+        if: steps.signing.outputs.enabled == 'true'
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run dist -- --config.mac.notarize=false
+
+      - name: Notarize built macOS artifacts (retry only notarization)
+        if: steps.signing.outputs.enabled == 'true'
+        working-directory: desktop
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          artifacts=(dist/*.dmg dist/*-mac.zip)
+          if (( ${#artifacts[@]} == 0 )); then
+            echo "No macOS artifacts found for notarization."
+            exit 1
+          fi
+
+          for artifact in "${artifacts[@]}"; do
+            echo "Submitting for notarization: ${artifact}"
+            max_attempts=4
+            attempt=1
+            while (( attempt <= max_attempts )); do
+              log_file="${RUNNER_TEMP}/notary-$(basename "${artifact}")-attempt-${attempt}.log"
+              set +e
+              xcrun notarytool submit "${artifact}" \
+                --apple-id "${APPLE_ID}" \
+                --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
+                --team-id "${APPLE_TEAM_ID}" \
+                --wait 2>&1 | tee "${log_file}"
+              status=${PIPESTATUS[0]}
+              set -e
+
+              if [[ "${status}" -eq 0 ]]; then
+                echo "Notarization succeeded: ${artifact}"
+                break
+              fi
+
+              if grep -Eq "NSURLErrorDomain Code=-1009|No network route|The Internet connection appears to be offline|timed out|Could not resolve host|network" "${log_file}"; then
+                if (( attempt < max_attempts )); then
+                  sleep_seconds=$(( attempt * 60 ))
+                  echo "Transient network failure during notarization, retrying in ${sleep_seconds}s..."
+                  sleep "${sleep_seconds}"
+                  attempt=$(( attempt + 1 ))
+                  continue
+                fi
+              fi
+
+              exit "${status}"
+            done
+          done
+
+      - name: Staple notarized DMG artifacts
+        if: steps.signing.outputs.enabled == 'true'
+        working-directory: desktop
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=(dist/*.dmg)
+          if (( ${#dmgs[@]} == 0 )); then
+            echo "No DMG files to staple."
+            exit 1
+          fi
+          for dmg in "${dmgs[@]}"; do
+            echo "Stapling: ${dmg}"
+            xcrun stapler staple "${dmg}"
+            xcrun stapler validate "${dmg}"
+          done
 
       - name: Build macOS artifacts (unsigned fallback)
         if: steps.signing.outputs.enabled != 'true'
