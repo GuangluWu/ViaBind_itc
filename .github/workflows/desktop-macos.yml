@@ -13,7 +13,7 @@ jobs:
   desktop-macos:
     name: desktop-macos
     runs-on: macos-14
-    timeout-minutes: 180
+    timeout-minutes: 360
 
     steps:
       - uses: actions/checkout@v4
@@ -111,7 +111,7 @@ jobs:
 
       - name: Notarize built macOS artifacts (retry only notarization)
         if: steps.signing.outputs.enabled == 'true'
-        timeout-minutes: 75
+        timeout-minutes: 300
         working-directory: desktop
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -126,38 +126,87 @@ jobs:
             exit 1
           fi
 
+          poll_interval_seconds=45
+          poll_timeout_seconds=14400
+          progress_notice_seconds=7200
+
           for artifact in "${artifacts[@]}"; do
+            artifact_base="$(basename "${artifact}")"
+            submit_log="${RUNNER_TEMP}/notary-submit-${artifact_base}.log"
+            info_json="${RUNNER_TEMP}/notary-info-${artifact_base}.json"
+            invalid_log="${RUNNER_TEMP}/notary-invalid-${artifact_base}.log"
+
             echo "Submitting for notarization: ${artifact}"
-            max_attempts=3
-            attempt=1
-            while (( attempt <= max_attempts )); do
-              log_file="${RUNNER_TEMP}/notary-$(basename "${artifact}")-attempt-${attempt}.log"
-              set +e
-              xcrun notarytool submit "${artifact}" \
+            set +e
+            xcrun notarytool submit "${artifact}" \
+              --apple-id "${APPLE_ID}" \
+              --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
+              --team-id "${APPLE_TEAM_ID}" \
+              --output-format json 2>&1 | tee "${submit_log}"
+            submit_status=${PIPESTATUS[0]}
+            set -e
+            if [[ "${submit_status}" -ne 0 ]]; then
+              echo "Notary submission failed before polling."
+              exit "${submit_status}"
+            fi
+
+            submission_id="$(
+              sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F-]\{36\}\)".*/\1/p' "${submit_log}" | head -n1
+            )"
+            if [[ -z "${submission_id}" ]]; then
+              echo "Unable to parse notarization submission id from output."
+              cat "${submit_log}"
+              exit 1
+            fi
+
+            echo "Notary submission id: ${submission_id}"
+            start_epoch=$(date +%s)
+            deadline=$(( start_epoch + poll_timeout_seconds ))
+            progress_notice_emitted=0
+
+            while true; do
+              now_epoch=$(date +%s)
+              if (( now_epoch > deadline )); then
+                echo "Timed out while polling notarization status (${poll_timeout_seconds}s)."
+                echo "Submission id: ${submission_id}"
+                exit 124
+              fi
+
+              xcrun notarytool info "${submission_id}" \
                 --apple-id "${APPLE_ID}" \
                 --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
                 --team-id "${APPLE_TEAM_ID}" \
-                --wait \
-                --timeout 20m 2>&1 | tee "${log_file}"
-              status=${PIPESTATUS[0]}
-              set -e
+                --output-format json > "${info_json}"
 
-              if [[ "${status}" -eq 0 ]]; then
+              status="$(tr -d '\n' < "${info_json}" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+              if [[ -z "${status}" ]]; then
+                echo "Could not parse notarization status, raw response:"
+                cat "${info_json}"
+                exit 1
+              fi
+
+              echo "Submission ${submission_id} status: ${status}"
+              elapsed_seconds=$(( now_epoch - start_epoch ))
+              if [[ "${status}" == "In Progress" ]] && (( elapsed_seconds >= progress_notice_seconds )) && (( progress_notice_emitted == 0 )); then
+                elapsed_minutes=$(( elapsed_seconds / 60 ))
+                echo "Notice: notarization has been In Progress for ${elapsed_minutes} minutes; continuing to poll."
+                progress_notice_emitted=1
+              fi
+              if [[ "${status}" == "Accepted" ]]; then
                 echo "Notarization succeeded: ${artifact}"
                 break
               fi
-
-              if grep -Eq "NSURLErrorDomain Code=-1009|No network route|The Internet connection appears to be offline|timed out|Could not resolve host|network" "${log_file}"; then
-                if (( attempt < max_attempts )); then
-                  sleep_seconds=$(( attempt * 60 ))
-                  echo "Transient network failure during notarization, retrying in ${sleep_seconds}s..."
-                  sleep "${sleep_seconds}"
-                  attempt=$(( attempt + 1 ))
-                  continue
-                fi
+              if [[ "${status}" == "Invalid" ]]; then
+                echo "Notarization invalid for ${artifact}; fetching log..."
+                xcrun notarytool log "${submission_id}" \
+                  --apple-id "${APPLE_ID}" \
+                  --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
+                  --team-id "${APPLE_TEAM_ID}" > "${invalid_log}" || true
+                cat "${invalid_log}"
+                exit 1
               fi
 
-              exit "${status}"
+              sleep "${poll_interval_seconds}"
             done
           done
 
