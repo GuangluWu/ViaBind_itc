@@ -13,6 +13,7 @@ jobs:
   desktop-macos:
     name: desktop-macos
     runs-on: macos-14
+    timeout-minutes: 180
 
     steps:
       - uses: actions/checkout@v4
@@ -104,10 +105,13 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run dist -- --config.mac.notarize=false
+        run: |
+          npm run ensure:r-runtime
+          ./node_modules/.bin/electron-builder --mac dmg --config.mac.notarize=false
 
       - name: Notarize built macOS artifacts (retry only notarization)
         if: steps.signing.outputs.enabled == 'true'
+        timeout-minutes: 75
         working-directory: desktop
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -116,7 +120,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          artifacts=(dist/*.dmg dist/*-mac.zip)
+          artifacts=(dist/*.dmg)
           if (( ${#artifacts[@]} == 0 )); then
             echo "No macOS artifacts found for notarization."
             exit 1
@@ -124,7 +128,7 @@ jobs:
 
           for artifact in "${artifacts[@]}"; do
             echo "Submitting for notarization: ${artifact}"
-            max_attempts=4
+            max_attempts=3
             attempt=1
             while (( attempt <= max_attempts )); do
               log_file="${RUNNER_TEMP}/notary-$(basename "${artifact}")-attempt-${attempt}.log"
@@ -133,7 +137,8 @@ jobs:
                 --apple-id "${APPLE_ID}" \
                 --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
                 --team-id "${APPLE_TEAM_ID}" \
-                --wait 2>&1 | tee "${log_file}"
+                --wait \
+                --timeout 20m 2>&1 | tee "${log_file}"
               status=${PIPESTATUS[0]}
               set -e
 
@@ -178,7 +183,9 @@ jobs:
         working-directory: desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run dist -- --config.mac.identity=null
+        run: |
+          npm run ensure:r-runtime
+          ./node_modules/.bin/electron-builder --mac dmg --config.mac.identity=null --config.mac.notarize=false
 
       - name: Warn when artifacts are unsigned
         if: steps.signing.outputs.enabled != 'true'
@@ -189,7 +196,7 @@ jobs:
         working-directory: desktop
         run: |
           shopt -s nullglob
-          files=(dist/*.dmg dist/*.zip)
+          files=(dist/*.dmg)
           if (( ${#files[@]} == 0 )); then
             echo "No macOS artifacts generated under desktop/dist"
             exit 1
@@ -203,5 +210,4 @@ jobs:
           compression-level: 0
           path: |
             desktop/dist/*.dmg
-            desktop/dist/*.zip
             desktop/dist/SHA256SUMS.txt

@@ -111,6 +111,9 @@ const PRUNE_DIR_NAMES = new Set([
   "man"
 ]);
 
+const DEFAULT_RUNTIME_WARN_MAX_MB = 260;
+const DEFAULT_RUNTIME_WARN_MAX_FILES = 8000;
+
 function usage() {
   console.log(`Usage:
   ${path.basename(__filename)} [out_dir] [options]
@@ -188,6 +191,14 @@ function parseArgs(argv) {
     symbolsOut: symbolsOut ? resolveInputPath(symbolsOut) : "",
     rBin: process.env.R_BIN || "R"
   };
+}
+
+function readPositiveIntEnv(name, fallback) {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return parsed;
 }
 
 function runCommand(command, args, options = {}) {
@@ -396,6 +407,40 @@ async function archiveSymbols(runtimeRoot, symbolsOut) {
   }
 }
 
+function countFiles(target) {
+  if (!fs.existsSync(target)) return 0;
+  const stack = [target];
+  let total = 0;
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    let stat;
+    try {
+      stat = fs.lstatSync(current);
+    } catch (_) {
+      continue;
+    }
+
+    if (stat.isSymbolicLink()) continue;
+    if (stat.isDirectory()) {
+      let children;
+      try {
+        children = fs.readdirSync(current);
+      } catch (_) {
+        continue;
+      }
+      for (const child of children) {
+        stack.push(path.join(current, child));
+      }
+      continue;
+    }
+
+    total += 1;
+  }
+
+  return total;
+}
+
 function getPathSizeBytes(target) {
   if (!fs.existsSync(target)) return 0;
   const stack = [target];
@@ -479,12 +524,16 @@ function mb1(bytes) {
 
 async function main() {
   const cfg = parseArgs(process.argv.slice(2));
+  const runtimeWarnMaxMb = readPositiveIntEnv("ITCSUITE_RUNTIME_WARN_MAX_MB", DEFAULT_RUNTIME_WARN_MAX_MB);
+  const runtimeWarnMaxFiles = readPositiveIntEnv("ITCSUITE_RUNTIME_WARN_MAX_FILES", DEFAULT_RUNTIME_WARN_MAX_FILES);
 
   console.log(`[build-r-runtime] desktop: ${desktopDir}`);
   console.log(`[build-r-runtime] out: ${cfg.outDir}`);
   console.log(`[build-r-runtime] profile: ${cfg.profile}`);
   console.log(`[build-r-runtime] manifest: ${cfg.manifestPath}`);
   console.log(`[build-r-runtime] strict manifest: ${cfg.strictRuntimeManifest ? 1 : 0}`);
+  console.log(`[build-r-runtime] warn max size: ${runtimeWarnMaxMb}MB`);
+  console.log(`[build-r-runtime] warn max files: ${runtimeWarnMaxFiles}`);
 
   const rHomeResult = await runCommand(cfg.rBin, ["RHOME"], { capture: true });
   const rHomeDir = rHomeResult.stdout.trim();
@@ -567,9 +616,23 @@ async function main() {
   }
 
   const postPruneBytes = getPathSizeBytes(cfg.outDir);
+  const postPruneFileCount = countFiles(cfg.outDir);
   const savedBytes = Math.max(0, prePruneBytes - postPruneBytes);
+  const sizeWarnExceeded = cfg.profile === "release" && postPruneBytes > runtimeWarnMaxMb * 1024 * 1024;
+  const fileWarnExceeded = cfg.profile === "release" && postPruneFileCount > runtimeWarnMaxFiles;
   const reportPath = path.join(cfg.outDir, "runtime-size-report.txt");
   const topPaths = collectTopPaths(cfg.outDir, 2, 80);
+
+  if (sizeWarnExceeded) {
+    console.warn(
+      `[build-r-runtime] WARN: runtime size ${mb1(postPruneBytes)}MB exceeds warning threshold ${runtimeWarnMaxMb}MB`
+    );
+  }
+  if (fileWarnExceeded) {
+    console.warn(
+      `[build-r-runtime] WARN: runtime file count ${postPruneFileCount} exceeds warning threshold ${runtimeWarnMaxFiles}`
+    );
+  }
 
   const reportLines = [
     `profile=${cfg.profile}`,
@@ -578,6 +641,11 @@ async function main() {
     `size_before_prune_mb=${mb1(prePruneBytes)}`,
     `size_after_prune_mb=${mb1(postPruneBytes)}`,
     `size_saved_mb=${mb1(savedBytes)}`,
+    `file_count=${postPruneFileCount}`,
+    `warn_runtime_max_mb=${runtimeWarnMaxMb}`,
+    `warn_runtime_max_files=${runtimeWarnMaxFiles}`,
+    `warn_size_exceeded=${sizeWarnExceeded ? 1 : 0}`,
+    `warn_file_count_exceeded=${fileWarnExceeded ? 1 : 0}`,
     "",
     "top_paths:"
   ];
