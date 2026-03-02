@@ -113,6 +113,16 @@ const PRUNE_DIR_NAMES = new Set([
 
 const DEFAULT_RUNTIME_WARN_MAX_MB = 260;
 const DEFAULT_RUNTIME_WARN_MAX_FILES = 8000;
+const HOST_R_FRAMEWORK_RESOURCES_RE = /^\/Library\/Frameworks\/R\.framework\/Versions\/[^/]+\/Resources(?:\/(.*))?$/;
+const PORTABLE_RSCRIPT_LAUNCHER_NAME = "itcsuite-rscript";
+const MACH_O_MAGIC_NUMBERS = new Set([
+  0xfeedface,
+  0xcefaedfe,
+  0xfeedfacf,
+  0xcffaedfe,
+  0xcafebabe,
+  0xbebafeca
+]);
 
 function usage() {
   console.log(`Usage:
@@ -252,6 +262,382 @@ function runCommand(command, args, options = {}) {
       reject(new Error(`${command} ${normalizedArgs.join(" ")} exited with code ${code}${suffix}`));
     });
   });
+}
+
+function normalizePrefix(prefix) {
+  if (!prefix) return "";
+  return prefix.endsWith(path.sep) ? prefix.slice(0, -1) : prefix;
+}
+
+function toPosixPath(value) {
+  return value.split(path.sep).join("/");
+}
+
+function isHostRFrameworkReference(value) {
+  return HOST_R_FRAMEWORK_RESOURCES_RE.test(value);
+}
+
+function getRuntimeRelativePath(reference, sourcePrefixes) {
+  for (const rawPrefix of sourcePrefixes) {
+    const prefix = normalizePrefix(rawPrefix);
+    if (!prefix) continue;
+    if (reference === prefix) return "";
+    if (reference.startsWith(`${prefix}/`)) {
+      return reference.slice(prefix.length + 1);
+    }
+  }
+
+  const match = reference.match(HOST_R_FRAMEWORK_RESOURCES_RE);
+  if (!match) return null;
+  return match[1] || "";
+}
+
+function resolveMappedRuntimeTarget(reference, runtimeRoot, sourcePrefixes) {
+  const rel = getRuntimeRelativePath(reference, sourcePrefixes);
+  if (rel === null) return "";
+  if (!rel) return runtimeRoot;
+  return path.join(runtimeRoot, rel);
+}
+
+function toLoaderPath(fromDir, targetPath) {
+  let rel = path.relative(fromDir, targetPath);
+  if (!rel || rel === ".") {
+    rel = path.basename(targetPath);
+  }
+  return `@loader_path/${toPosixPath(rel)}`;
+}
+
+function parseOtoolLinkedLibraries(output) {
+  const refs = [];
+  const lines = output.split(/\r?\n/).slice(1);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const match = trimmed.match(/^(.+?)\s+\(/);
+    if (match && match[1]) {
+      refs.push(match[1]);
+    }
+  }
+  return refs;
+}
+
+function parseOtoolInstallName(output) {
+  const lines = output
+    .split(/\r?\n/)
+    .slice(1)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length < 1) return "";
+  return lines[0];
+}
+
+function readMagicNumber(filePath) {
+  const fd = fs.openSync(filePath, "r");
+  const buffer = Buffer.alloc(4);
+  try {
+    const bytesRead = fs.readSync(fd, buffer, 0, 4, 0);
+    if (bytesRead < 4) return null;
+    const be = buffer.readUInt32BE(0);
+    const le = buffer.readUInt32LE(0);
+    if (MACH_O_MAGIC_NUMBERS.has(be)) return be;
+    if (MACH_O_MAGIC_NUMBERS.has(le)) return le;
+    return null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function isMachOBinary(filePath) {
+  try {
+    return readMagicNumber(filePath) !== null;
+  } catch (_) {
+    return false;
+  }
+}
+
+function walkRuntime(root, onEntry) {
+  if (!fs.existsSync(root)) return;
+  const stack = [root];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    let entries = [];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch (_) {
+      continue;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(current, entry.name);
+      onEntry(fullPath, entry);
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        stack.push(fullPath);
+      }
+    }
+  }
+}
+
+function collectMachOBinaries(root) {
+  const files = [];
+  walkRuntime(root, (fullPath, entry) => {
+    if (!entry.isFile()) return;
+    if (isMachOBinary(fullPath)) {
+      files.push(fullPath);
+    }
+  });
+  return files;
+}
+
+function collectSymlinks(root) {
+  const links = [];
+  walkRuntime(root, (fullPath, entry) => {
+    if (entry.isSymbolicLink()) {
+      links.push(fullPath);
+    }
+  });
+  return links;
+}
+
+async function relocateMacRuntimeReferences(runtimeRoot, sourcePrefixes) {
+  if (process.platform !== "darwin") {
+    return {
+      rewrittenFiles: 0,
+      rewrittenReferences: 0,
+      rewrittenInstallNames: 0,
+      rewrittenSymlinks: 0
+    };
+  }
+
+  const binaries = collectMachOBinaries(runtimeRoot);
+  const unresolved = [];
+  let rewrittenFiles = 0;
+  let rewrittenReferences = 0;
+  let rewrittenInstallNames = 0;
+
+  for (const binaryPath of binaries) {
+    let deps = [];
+    try {
+      const linked = await runCommand("otool", ["-L", binaryPath], { capture: true });
+      deps = parseOtoolLinkedLibraries(linked.stdout);
+    } catch (_) {
+      continue;
+    }
+
+    const changes = new Map();
+    for (const dep of deps) {
+      if (!dep.startsWith("/")) continue;
+      const mapped = resolveMappedRuntimeTarget(dep, runtimeRoot, sourcePrefixes);
+      if (!mapped) continue;
+      if (!fs.existsSync(mapped)) {
+        unresolved.push(`${path.relative(runtimeRoot, binaryPath)} -> ${dep}`);
+        continue;
+      }
+      const replacement = toLoaderPath(path.dirname(binaryPath), mapped);
+      if (replacement !== dep) {
+        changes.set(dep, replacement);
+      }
+    }
+
+    let rewrittenInstallName = "";
+    try {
+      const installNameRaw = await runCommand("otool", ["-D", binaryPath], { capture: true });
+      const installName = parseOtoolInstallName(installNameRaw.stdout);
+      if (installName && installName.startsWith("/")) {
+        const mapped = resolveMappedRuntimeTarget(installName, runtimeRoot, sourcePrefixes);
+        if (mapped && fs.existsSync(mapped)) {
+          const replacement = toLoaderPath(path.dirname(binaryPath), mapped);
+          if (replacement !== installName) {
+            rewrittenInstallName = replacement;
+          }
+        } else if (isHostRFrameworkReference(installName)) {
+          unresolved.push(`${path.relative(runtimeRoot, binaryPath)} -> ${installName}`);
+        }
+      }
+    } catch (_) {
+      // Executables generally don't have LC_ID_DYLIB.
+    }
+
+    if (changes.size < 1 && !rewrittenInstallName) {
+      continue;
+    }
+
+    const args = [];
+    if (rewrittenInstallName) {
+      args.push("-id", rewrittenInstallName);
+    }
+    for (const [from, to] of changes.entries()) {
+      args.push("-change", from, to);
+    }
+    args.push(binaryPath);
+    await runCommand("install_name_tool", args);
+
+    rewrittenFiles += 1;
+    rewrittenReferences += changes.size;
+    if (rewrittenInstallName) {
+      rewrittenInstallNames += 1;
+    }
+  }
+
+  let rewrittenSymlinks = 0;
+  const symlinks = collectSymlinks(runtimeRoot);
+  for (const linkPath of symlinks) {
+    let target;
+    try {
+      target = fs.readlinkSync(linkPath);
+    } catch (_) {
+      continue;
+    }
+    if (!path.isAbsolute(target)) continue;
+    const mapped = resolveMappedRuntimeTarget(target, runtimeRoot, sourcePrefixes);
+    if (!mapped) continue;
+    if (!fs.existsSync(mapped)) {
+      unresolved.push(`${path.relative(runtimeRoot, linkPath)} -> ${target}`);
+      continue;
+    }
+    const relativeTarget = path.relative(path.dirname(linkPath), mapped) || path.basename(mapped);
+    fs.rmSync(linkPath, { force: true });
+    fs.symlinkSync(relativeTarget, linkPath);
+    rewrittenSymlinks += 1;
+  }
+
+  if (unresolved.length > 0) {
+    const sample = unresolved.slice(0, 12).join("\n  ");
+    throw new Error(
+      `[relocate-runtime] unresolved host R references (${unresolved.length}):\n  ${sample}`
+    );
+  }
+
+  return {
+    rewrittenFiles,
+    rewrittenReferences,
+    rewrittenInstallNames,
+    rewrittenSymlinks
+  };
+}
+
+async function assertNoHostRReferences(runtimeRoot) {
+  if (process.platform !== "darwin") {
+    return;
+  }
+
+  const offenders = [];
+  const binaries = collectMachOBinaries(runtimeRoot);
+
+  for (const binaryPath of binaries) {
+    if (offenders.length >= 12) break;
+
+    try {
+      const linked = await runCommand("otool", ["-L", binaryPath], { capture: true });
+      const deps = parseOtoolLinkedLibraries(linked.stdout);
+      for (const dep of deps) {
+        if (isHostRFrameworkReference(dep)) {
+          offenders.push(`${path.relative(runtimeRoot, binaryPath)} -> ${dep}`);
+          if (offenders.length >= 12) break;
+        }
+      }
+    } catch (_) {
+      // Ignore non-dylib files.
+    }
+
+    if (offenders.length >= 12) break;
+
+    try {
+      const installNameRaw = await runCommand("otool", ["-D", binaryPath], { capture: true });
+      const installName = parseOtoolInstallName(installNameRaw.stdout);
+      if (installName && isHostRFrameworkReference(installName)) {
+        offenders.push(`${path.relative(runtimeRoot, binaryPath)} -> ${installName}`);
+      }
+    } catch (_) {
+      // Ignore non-dylib files.
+    }
+  }
+
+  if (offenders.length < 12) {
+    const symlinks = collectSymlinks(runtimeRoot);
+    for (const linkPath of symlinks) {
+      if (offenders.length >= 12) break;
+      let target;
+      try {
+        target = fs.readlinkSync(linkPath);
+      } catch (_) {
+        continue;
+      }
+      if (target && isHostRFrameworkReference(target)) {
+        offenders.push(`${path.relative(runtimeRoot, linkPath)} -> ${target}`);
+      }
+    }
+  }
+
+  if (offenders.length > 0) {
+    throw new Error(
+      `[relocate-runtime] non-relocatable host R references remain:\n  ${offenders.join("\n  ")}`
+    );
+  }
+}
+
+function writePortableRscriptLauncher(runtimeRoot) {
+  if (process.platform === "win32") {
+    return "";
+  }
+
+  const binDir = path.join(runtimeRoot, "bin");
+  const execR = path.join(binDir, "exec", "R");
+  if (!fs.existsSync(execR)) {
+    throw new Error(`cannot create ${PORTABLE_RSCRIPT_LAUNCHER_NAME}: missing ${execR}`);
+  }
+
+  const launcherPath = path.join(binDir, PORTABLE_RSCRIPT_LAUNCHER_NAME);
+  const launcherScript = [
+    "#!/bin/sh",
+    "set -e",
+    "SCRIPT_DIR=\"$(CDPATH= cd -- \"$(dirname \"$0\")\" && pwd)\"",
+    "R_HOME_DIR=\"$(CDPATH= cd -- \"${SCRIPT_DIR}/..\" && pwd)\"",
+    "R_ARCH=\"${R_ARCH:-}\"",
+    "R_EXEC=\"${R_HOME_DIR}/bin/exec${R_ARCH}/R\"",
+    "",
+    "if [ ! -x \"${R_EXEC}\" ]; then",
+    "  echo \"R launcher error: executable not found: ${R_EXEC}\" >&2",
+    "  exit 127",
+    "fi",
+    "",
+    "export R_HOME=\"${R_HOME_DIR}\"",
+    "export R_SHARE_DIR=\"${R_HOME_DIR}/share\"",
+    "export R_INCLUDE_DIR=\"${R_HOME_DIR}/include\"",
+    "export R_DOC_DIR=\"${R_HOME_DIR}/doc\"",
+    "",
+    "LDPATHS=\"${R_HOME_DIR}/etc${R_ARCH}/ldpaths\"",
+    "if [ -f \"${LDPATHS}\" ]; then",
+    "  # shellcheck disable=SC1090",
+    "  . \"${LDPATHS}\"",
+    "fi",
+    "",
+    "if [ \"$#\" -eq 0 ]; then",
+    "  exec \"${R_EXEC}\" --no-echo --no-restore",
+    "fi",
+    "",
+    "case \"$1\" in",
+    "  --help|-h)",
+    "    echo \"Usage: ${0##*/} [R options] file [args]\"",
+    "    echo \"       ${0##*/} [R options] -e expr [-e expr2 ...] [args]\"",
+    "    exit 0",
+    "    ;;",
+    "  --version)",
+    "    exec \"${R_EXEC}\" --version",
+    "    ;;",
+    "esac",
+    "",
+    "if [ \"$1\" = \"-e\" ] || [ \"$1\" = \"--args\" ] || [ \"${1#--default-packages=}\" != \"$1\" ]; then",
+    "  exec \"${R_EXEC}\" --no-echo --no-restore \"$@\"",
+    "fi",
+    "",
+    "SCRIPT_FILE=\"$1\"",
+    "shift",
+    "exec \"${R_EXEC}\" --no-echo --no-restore \"--file=${SCRIPT_FILE}\" --args \"$@\"",
+    ""
+  ].join("\n");
+
+  fs.writeFileSync(launcherPath, launcherScript, "utf8");
+  fs.chmodSync(launcherPath, 0o755);
+  return launcherPath;
 }
 
 function readManifestPackages(manifestPath) {
@@ -613,6 +999,20 @@ async function main() {
         fs.rmSync(path.join(libDir, entry.name), { recursive: true, force: true });
       }
     }
+  }
+
+  const relocationSummary = await relocateMacRuntimeReferences(cfg.outDir, [rHomeRealDir, rHomeDir]);
+  if (process.platform === "darwin") {
+    console.log(
+      `[build-r-runtime] relocated refs: files=${relocationSummary.rewrittenFiles}, refs=${relocationSummary.rewrittenReferences}, ids=${relocationSummary.rewrittenInstallNames}, symlinks=${relocationSummary.rewrittenSymlinks}`
+    );
+    await assertNoHostRReferences(cfg.outDir);
+    console.log("[build-r-runtime] relocation verification: OK");
+  }
+
+  const launcherPath = writePortableRscriptLauncher(cfg.outDir);
+  if (launcherPath) {
+    console.log(`[build-r-runtime] portable launcher: ${launcherPath}`);
   }
 
   const postPruneBytes = getPathSizeBytes(cfg.outDir);

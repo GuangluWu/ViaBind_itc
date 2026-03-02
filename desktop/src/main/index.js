@@ -135,6 +135,7 @@ class BackendController extends EventEmitter {
     }
 
     const bundledCandidates = [
+      ...(app.isPackaged ? [path.join(runtimeRoot, "bin", "itcsuite-rscript")] : []),
       path.join(runtimeRoot, "bin", "Rscript.exe"),
       path.join(runtimeRoot, "bin", "x64", "Rscript.exe"),
       path.join(runtimeRoot, "bin", "Rscript"),
