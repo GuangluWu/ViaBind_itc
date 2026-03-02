@@ -1,6 +1,6 @@
 {
   "name": "viabind-desktop",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "ViaBind powered by Electron + local Shiny backend",
   "author": "Guanglu Wu",
   "license": "MIT",
@@ -25,8 +25,9 @@
     "test:main": "node tests/diagnostics.test.mjs",
     "ensure:r-runtime": "node scripts/ensure-r-runtime.mjs",
     "ensure:r-runtime:check": "node scripts/ensure-r-runtime.mjs --check-only",
-    "pack:dir": "electron-builder --mac dir",
-    "dist:mac": "npm run ensure:r-runtime && electron-builder --mac dmg zip",
+    "pack:dir": "electron-builder --mac dir --publish never --config.mac.identity=null --config.mac.notarize=false",
+    "dist:mac": "npm run ensure:r-runtime && electron-builder --mac dmg --publish never --config.mac.identity=null --config.mac.notarize=false",
+    "dist:mac:ci": "npm run ensure:r-runtime && electron-builder --mac dmg zip",
     "dist:win": "npm run ensure:r-runtime && electron-builder --win nsis --x64",
     "dist": "npm run dist:mac"
   },
