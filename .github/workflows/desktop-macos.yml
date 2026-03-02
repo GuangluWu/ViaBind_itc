@@ -55,7 +55,7 @@ jobs:
           fi
 
       - name: Preflight Apple notary connectivity
-        if: steps.signing.outputs.enabled == 'true'
+        if: ${{ false }}
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -95,7 +95,7 @@ jobs:
           echo "Notary connectivity probe failed after ${max_attempts} attempts."
           exit 1
 
-      - name: Build macOS artifacts (signed; notarization deferred)
+      - name: Build macOS artifacts (signed; notarization disabled temporarily)
         if: steps.signing.outputs.enabled == 'true'
         working-directory: desktop
         env:
@@ -110,7 +110,7 @@ jobs:
           ./node_modules/.bin/electron-builder --mac dmg --config.mac.notarize=false
 
       - name: Notarize built macOS artifacts (retry only notarization)
-        if: steps.signing.outputs.enabled == 'true'
+        if: ${{ false }}
         timeout-minutes: 300
         working-directory: desktop
         env:
@@ -211,7 +211,7 @@ jobs:
           done
 
       - name: Staple notarized DMG artifacts
-        if: steps.signing.outputs.enabled == 'true'
+        if: ${{ false }}
         working-directory: desktop
         run: |
           set -euo pipefail
@@ -240,6 +240,11 @@ jobs:
         if: steps.signing.outputs.enabled != 'true'
         run: |
           echo "::warning::macOS artifacts are unsigned/unnotarized. Downloaded app may show 'damaged' or be blocked by Gatekeeper."
+
+      - name: Warn when notarization is temporarily disabled
+        if: steps.signing.outputs.enabled == 'true'
+        run: |
+          echo "::warning::Apple notarization is temporarily disabled in this workflow. macOS artifacts are signed but NOT notarized."
 
       - name: Generate checksums
         working-directory: desktop

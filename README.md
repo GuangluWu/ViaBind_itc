@@ -35,8 +35,26 @@ Release assets are published on the GitHub Releases page:
 
 ## First Launch Notes
 
-- macOS may block the app on first launch because early public releases are not notarized yet. If that happens, open `System Settings > Privacy & Security` and allow the app to run.
+- Temporary notice (macOS): Due to heavy Apple notarization service load, the current macOS release is not notarized yet and requires manual allow on first launch.
 - Windows may show a SmartScreen warning for unsigned installers. Use `More info` and then continue if you trust the release source.
+
+### macOS manual allow guide (temporary)
+
+1. Open the `.dmg` and drag `ViaBind.app` to `Applications`.
+2. In `Applications`, right-click `ViaBind.app` and choose `Open`.
+3. If blocked, go to `System Settings > Privacy & Security`, click `Open Anyway`, then open the app again.
+4. If macOS still reports the app is damaged, run:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/ViaBind.app"
+open "/Applications/ViaBind.app"
+```
+
+Optional (advanced users): verify checksum with `SHA256SUMS.txt`:
+
+```bash
+shasum -a 256 ~/Downloads/ViaBind-0.4.5-arm64.dmg
+```
 
 ## Feedback And Support
 
