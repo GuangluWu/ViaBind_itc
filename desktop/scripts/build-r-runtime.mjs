@@ -35,13 +35,31 @@ const FALLBACK_PKGS = [
 const INSTALL_SCRIPT = `
 lib_dir <- Sys.getenv("ITCSUITE_LIB_DIR")
 pkg_csv <- Sys.getenv("ITCSUITE_PKG_CSV")
+cran_repo <- Sys.getenv("ITCSUITE_CRAN_REPO", unset = "https://cloud.r-project.org")
 if (!nzchar(lib_dir) || !nzchar(pkg_csv)) stop("missing env")
 if (!dir.exists(lib_dir)) dir.create(lib_dir, recursive = TRUE, showWarnings = FALSE)
 .libPaths(c(lib_dir, .libPaths()))
-pkgs <- strsplit(pkg_csv, ",", fixed = TRUE)[[1]]
-missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
-if (length(missing) > 0) {
-  install.packages(missing, repos = "https://cloud.r-project.org", lib = lib_dir)
+options(timeout = max(600L, getOption("timeout")))
+options(repos = c(CRAN = cran_repo))
+if (.Platform$OS.type == "windows") {
+  options(pkgType = "binary")
+}
+pkgs <- unique(strsplit(pkg_csv, ",", fixed = TRUE)[[1]])
+pkgs <- pkgs[nzchar(pkgs)]
+
+max_attempts <- 3L
+for (attempt in seq_len(max_attempts)) {
+  missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+  if (length(missing) < 1L) break
+  cat(sprintf("Install attempt %d/%d for %d package(s): %s\\n", attempt, max_attempts, length(missing), paste(missing, collapse = ", ")))
+  tryCatch({
+    install.packages(missing, lib = lib_dir, Ncpus = 1)
+  }, error = function(err) {
+    message(sprintf("install attempt %d error: %s", attempt, conditionMessage(err)))
+  })
+  remaining <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+  if (length(remaining) < 1L) break
+  if (attempt < max_attempts) Sys.sleep(attempt * 10)
 }
 remaining <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
 if (length(remaining) > 0) {
