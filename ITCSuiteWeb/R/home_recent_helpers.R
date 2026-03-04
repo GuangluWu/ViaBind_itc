@@ -20,7 +20,7 @@ home_detect_import_type <- function(file_name = NULL, sheets = NULL, fallback = 
   if (!fallback_norm %in% allowed) fallback_norm <- "processed_xlsx"
 
   file_norm <- tolower(normalize_home_scalar_chr(file_name, default = ""))
-  if (grepl("\\.(itc|txt)$", file_norm)) return("itc")
+  if (grepl("\\.(itc|txt|nitc|csc|xml)$", file_norm)) return("itc")
   if (grepl("_processed_\\d{8}_\\d{4}\\.xlsx$", file_norm)) return("processed_xlsx")
   if (grepl("_fitted_\\d{8}_\\d{4}\\.xlsx$", file_norm)) return("fitted_xlsx")
 

@@ -731,7 +731,7 @@ function sanitizeOpenFileExtensions(extensions) {
 function sanitizeOpenFileFilters(filters, purpose) {
   if (!Array.isArray(filters)) {
     if (purpose === "step1_import") {
-      return [{ name: "ITC Data", extensions: ["itc", "txt"] }];
+      return [{ name: "ITC/TA Data", extensions: ["itc", "txt", "nitc", "csc", "xml"] }];
     }
     return [{ name: "Spreadsheet", extensions: ["xlsx"] }];
   }
@@ -754,7 +754,7 @@ function sanitizeOpenFilePayload(rawPayload) {
   const requestId = trimScalar(payload.request_id, "");
   let purpose = trimScalar(payload.purpose, "");
   if (!OPEN_FILE_PURPOSES.has(purpose)) purpose = "step2_import";
-  const fallbackTitle = purpose === "step1_import" ? "Select ITC File" : "Select Data File";
+  const fallbackTitle = purpose === "step1_import" ? "Select ITC/TA Data File" : "Select Data File";
   const titleRaw = trimScalar(payload.title, fallbackTitle);
   const title = titleRaw.slice(0, 160);
   const filters = sanitizeOpenFileFilters(payload.filters, purpose);

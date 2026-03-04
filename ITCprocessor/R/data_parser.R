@@ -2,7 +2,8 @@
 # [COMMENT_STD][MODULE_HEADER]
 # 模块职责：解析 ITC 原始文本中的元数据、注射事件与时序功率数据。
 # 依赖：base R 字符串与向量处理函数。
-# 对外接口：parse_itc_metadata()、read_itc()。
+# 对外接口：parse_itc_metadata()、read_itc()、detect_step1_source_type()、
+# read_step1_input()、convert_ta_to_xlsx()、read_ta_extract_xlsx()。
 # 副作用：读取文件内容；返回结构化 list/data.frame，不写外部状态。
 # 变更历史：2026-02-12 - 增加 Phase 4 注释规范样板。
 
@@ -246,4 +247,373 @@ read_itc <- function(file_path) {
     injection_volumes_ul = injection_volumes_ul,
     params = params
   ))
+}
+
+`%||%` <- function(x, y) if (is.null(x)) y else x
+
+to_num1 <- function(x) {
+  out <- suppressWarnings(as.numeric(x)[1])
+  if (is.finite(out)) out else NA_real_
+}
+
+normalize_scalar_chr <- function(x, default = "") {
+  out <- as.character(x %||% "")[1]
+  out <- trimws(out)
+  if (nzchar(out)) out else default
+}
+
+extract_ext <- function(path_like) {
+  x <- tolower(normalize_scalar_chr(path_like, default = ""))
+  if (!nzchar(x)) return("")
+  ext <- tolower(tools::file_ext(x))
+  if (!nzchar(ext)) return("")
+  paste0(".", ext)
+}
+
+detect_step1_source_type <- function(file_path, display_name = NULL) {
+  ext_display <- extract_ext(display_name)
+  ext_path <- extract_ext(file_path)
+  ext <- if (nzchar(ext_display)) ext_display else ext_path
+
+  if (ext %in% c(".itc", ".txt")) return("itc")
+  if (ext == ".nitc") return("ta_nitc")
+  if (ext == ".csc") return("ta_csc")
+  if (ext == ".xml") return("ta_xml")
+  if (ext == ".xlsx") return("xlsx")
+  "unknown"
+}
+
+resolve_ta_script <- function(source_type, app_dir) {
+  script_name <- switch(
+    source_type,
+    ta_nitc = "nitc_to_xlsx.R",
+    ta_csc = "csc_to_xlsx.R",
+    ta_xml = "xml_to_xlsx.R",
+    NULL
+  )
+  if (is.null(script_name)) {
+    stop(sprintf("Unsupported TA source type: %s", source_type), call. = FALSE)
+  }
+  script_path <- file.path(app_dir, "R", script_name)
+  if (!file.exists(script_path)) {
+    stop(sprintf("TA converter script not found: %s", script_path), call. = FALSE)
+  }
+  script_path
+}
+
+build_ta_xlsx_path <- function(source_path, source_type) {
+  suffix <- switch(
+    source_type,
+    ta_nitc = "_nitc_extract.xlsx",
+    ta_csc = "_csc_extract.xlsx",
+    ta_xml = "_xml_extract.xlsx",
+    stop(sprintf("Unsupported TA source type: %s", source_type), call. = FALSE)
+  )
+  file.path(
+    dirname(source_path),
+    paste0(tools::file_path_sans_ext(basename(source_path)), suffix)
+  )
+}
+
+convert_ta_to_xlsx <- function(source_path, source_type, app_dir, overwrite = TRUE) {
+  src <- normalizePath(path.expand(source_path), winslash = "/", mustWork = FALSE)
+  if (!file.exists(src)) {
+    stop(sprintf("Source file not found: %s", src), call. = FALSE)
+  }
+
+  out_xlsx <- build_ta_xlsx_path(src, source_type)
+  if (!isTRUE(overwrite) && file.exists(out_xlsx)) {
+    return(normalizePath(out_xlsx, winslash = "/", mustWork = TRUE))
+  }
+
+  script_path <- resolve_ta_script(source_type, app_dir = app_dir)
+  rscript_bin <- Sys.which("Rscript")
+  if (!nzchar(rscript_bin)) {
+    stop("Rscript executable not found in PATH.", call. = FALSE)
+  }
+
+  dir.create(dirname(out_xlsx), recursive = TRUE, showWarnings = FALSE)
+  timeout_sec <- 90
+  run_out <- tryCatch(
+    system2(
+      command = rscript_bin,
+      # system2() does not safely preserve spaces in args on all hosts; quote file paths explicitly.
+      args = c(shQuote(script_path), shQuote(src), "-o", shQuote(out_xlsx)),
+      stdout = TRUE,
+      stderr = TRUE,
+      timeout = timeout_sec
+    ),
+    error = function(e) e
+  )
+  if (inherits(run_out, "error")) {
+    stop(
+      sprintf("TA convert failed for %s: %s", basename(src), conditionMessage(run_out)),
+      call. = FALSE
+    )
+  }
+  status <- attr(run_out, "status")
+  if (!is.null(status) && is.finite(status) && status != 0) {
+    if (status == 124) {
+      stop(
+        sprintf(
+          "TA convert timed out after %ds for %s. Please retry or convert via command line.",
+          timeout_sec,
+          basename(src)
+        ),
+        call. = FALSE
+      )
+    }
+    msg <- paste(run_out, collapse = "\n")
+    if (!nzchar(trimws(msg))) msg <- sprintf("Rscript exited with status %s", status)
+    stop(
+      sprintf("TA convert failed for %s:\n%s", basename(src), msg),
+      call. = FALSE
+    )
+  }
+
+  if (!file.exists(out_xlsx)) {
+    stop(
+      sprintf("TA convert did not produce output xlsx: %s", out_xlsx),
+      call. = FALSE
+    )
+  }
+  normalizePath(out_xlsx, winslash = "/", mustWork = TRUE)
+}
+
+find_col <- function(df, candidates = character(), contains = character()) {
+  nms <- names(df)
+  if (length(nms) == 0) return(NA_character_)
+  nms_low <- tolower(nms)
+  for (cand in candidates) {
+    idx <- which(nms_low == tolower(cand))
+    if (length(idx) > 0) return(nms[[idx[1]]])
+  }
+  if (length(contains) > 0) {
+    hit <- vapply(nms_low, function(nm) all(vapply(contains, grepl, logical(1), x = nm, fixed = TRUE)), logical(1))
+    idx <- which(hit)
+    if (length(idx) > 0) return(nms[[idx[1]]])
+  }
+  NA_character_
+}
+
+read_sheet_df <- function(xlsx_path, sheet_name) {
+  as.data.frame(
+    readxl::read_excel(xlsx_path, sheet = sheet_name),
+    stringsAsFactors = FALSE
+  )
+}
+
+extract_exp_kv <- function(exp_df) {
+  key_col <- find_col(exp_df, candidates = c("key"))
+  val_col <- find_col(exp_df, candidates = c("value"))
+  if (is.na(key_col) || is.na(val_col)) {
+    return(data.frame(key = character(), value = character(), stringsAsFactors = FALSE))
+  }
+  key <- trimws(as.character(exp_df[[key_col]]))
+  value <- as.character(exp_df[[val_col]])
+  keep <- nzchar(key)
+  data.frame(
+    key = key[keep],
+    value = value[keep],
+    stringsAsFactors = FALSE
+  )
+}
+
+pick_exp_numeric <- function(exp_kv, keys) {
+  if (nrow(exp_kv) == 0 || length(keys) == 0) return(NA_real_)
+  key_low <- tolower(exp_kv$key)
+  for (k in keys) {
+    idx <- which(key_low == tolower(k))
+    if (length(idx) == 0) next
+    for (i in idx) {
+      val <- to_num1(exp_kv$value[[i]])
+      if (is.finite(val)) return(val)
+    }
+  }
+  NA_real_
+}
+
+resolve_heatflow_cols <- function(heat_df) {
+  time_col <- find_col(
+    heat_df,
+    candidates = c("Time (seconds)", "Time_s", "time", "time_seconds")
+  )
+  ucal_col <- find_col(
+    heat_df,
+    candidates = c("Raw Heat Rate (µcal / s)", "Raw Heat Rate (μcal / s)", "Raw Heat Rate (ucal / s)")
+  )
+  uj_col <- find_col(
+    heat_df,
+    candidates = c("Raw Heat Rate (µJ / s)", "Raw Heat Rate (μJ / s)", "Raw Heat Rate (uJ / s)")
+  )
+  list(time = time_col, ucal = ucal_col, uj = uj_col)
+}
+
+map_times_to_indices <- function(time_vec, starts) {
+  vapply(starts, function(x) {
+    which.min(abs(time_vec - x))
+  }, integer(1))
+}
+
+read_ta_extract_xlsx <- function(xlsx_path, source_label = "") {
+  if (!requireNamespace("readxl", quietly = TRUE)) {
+    stop("Missing package 'readxl'. Install with: install.packages('readxl')", call. = FALSE)
+  }
+  path <- normalizePath(path.expand(xlsx_path), winslash = "/", mustWork = TRUE)
+  sheets <- readxl::excel_sheets(path)
+  needed <- c("experiment_parameters", "titration_points", "heatflow")
+  miss <- setdiff(needed, sheets)
+  if (length(miss) > 0) {
+    stop(sprintf("TA extract xlsx missing sheets: %s", paste(miss, collapse = ", ")), call. = FALSE)
+  }
+
+  exp_df <- read_sheet_df(path, "experiment_parameters")
+  tp_df <- read_sheet_df(path, "titration_points")
+  heat_df <- read_sheet_df(path, "heatflow")
+
+  cols <- resolve_heatflow_cols(heat_df)
+  if (is.na(cols$time)) {
+    stop("TA extract xlsx 'heatflow' missing time column.", call. = FALSE)
+  }
+  if (is.na(cols$ucal) && is.na(cols$uj)) {
+    stop("TA extract xlsx 'heatflow' missing power columns (µcal/s or µJ/s).", call. = FALSE)
+  }
+
+  time <- suppressWarnings(as.numeric(heat_df[[cols$time]]))
+  if (!is.na(cols$ucal)) {
+    power <- suppressWarnings(as.numeric(heat_df[[cols$ucal]]))
+  } else {
+    power_uj <- suppressWarnings(as.numeric(heat_df[[cols$uj]]))
+    power <- power_uj / 4.184
+  }
+  keep <- is.finite(time) & is.finite(power)
+  time <- time[keep]
+  power <- power[keep]
+  # TA exported heatflow sign convention is opposite to Step1 expectation.
+  power <- -1 * power
+  if (length(time) < 2) {
+    stop("TA extract xlsx heatflow has insufficient valid points.", call. = FALSE)
+  }
+  if (any(diff(time) < 0, na.rm = TRUE)) {
+    stop("TA extract xlsx heatflow time column is not non-decreasing.", call. = FALSE)
+  }
+
+  start_col <- find_col(tp_df, candidates = c("start_s"))
+  width_col <- find_col(tp_df, candidates = c("original_width_s"))
+  vol_col <- find_col(tp_df, candidates = c("inj_volume_uL"))
+  inj_num_col <- find_col(tp_df, candidates = c("inj_num"))
+  if (is.na(start_col)) {
+    stop("TA extract xlsx 'titration_points' missing start_s column.", call. = FALSE)
+  }
+
+  starts <- suppressWarnings(as.numeric(tp_df[[start_col]]))
+  inj_num <- if (!is.na(inj_num_col)) suppressWarnings(as.numeric(tp_df[[inj_num_col]])) else seq_along(starts)
+  width <- if (!is.na(width_col)) suppressWarnings(as.numeric(tp_df[[width_col]])) else rep(NA_real_, length(starts))
+  vols <- if (!is.na(vol_col)) suppressWarnings(as.numeric(tp_df[[vol_col]])) else rep(NA_real_, length(starts))
+
+  valid_tp <- is.finite(starts)
+  starts <- starts[valid_tp]
+  inj_num <- inj_num[valid_tp]
+  width <- width[valid_tp]
+  vols <- vols[valid_tp]
+  if (length(starts) < 1) {
+    stop("TA extract xlsx has no valid injection starts.", call. = FALSE)
+  }
+
+  exp_kv <- extract_exp_kv(exp_df)
+  default_vol <- pick_exp_numeric(exp_kv, c("DefaultInjVolume"))
+  vols_filled <- vols
+  if (is.finite(default_vol)) {
+    vols_filled[!is.finite(vols_filled)] <- default_vol
+  }
+
+  inj_idx <- map_times_to_indices(time, starts)
+  injections <- as.integer(c(1L, inj_idx))
+  injection_times <- c(time[[1]], starts)
+  injection_volumes_ul <- c(NA_real_, vols_filled)
+
+  n_inj <- suppressWarnings(max(inj_num[is.finite(inj_num)], na.rm = TRUE))
+  if (!is.finite(n_inj)) n_inj <- length(starts)
+  n_inj <- as.integer(round(n_inj))
+
+  temp_c <- pick_exp_numeric(exp_kv, c("Temperature", "raw::tempsetpoint"))
+  syringe_mM <- pick_exp_numeric(exp_kv, c("Titrant", "raw::syringeconcentration"))
+  cell_mM <- pick_exp_numeric(exp_kv, c("Titrate", "raw::cellconcentration"))
+  cell_vol <- pick_exp_numeric(exp_kv, c("raw::cellvolume", "InitalTitrateVolume"))
+  if (is.finite(cell_vol) && cell_vol > 10) {
+    cell_vol <- cell_vol / 1000
+  }
+
+  v_pre <- if (length(vols_filled) >= 1 && is.finite(vols_filled[[1]])) vols_filled[[1]] else default_vol
+  if (length(vols_filled) >= 2) {
+    tail_vol <- vols_filled[2:length(vols_filled)]
+    tail_vol <- tail_vol[is.finite(tail_vol)]
+  } else {
+    tail_vol <- numeric(0)
+  }
+  v_inj <- if (length(tail_vol) > 0) stats::median(tail_vol) else v_pre
+
+  interval_s <- if (any(is.finite(width))) stats::median(width[is.finite(width)]) else NA_real_
+  if (!is.finite(interval_s) && length(starts) >= 2) {
+    ds <- diff(starts)
+    ds <- ds[is.finite(ds)]
+    if (length(ds) > 0) interval_s <- stats::median(ds)
+  }
+
+  out_label <- normalize_scalar_chr(source_label, default = basename(path))
+  list(
+    data = data.frame(Time = as.numeric(time), Power = as.numeric(power)),
+    injections = injections,
+    injection_times = as.numeric(injection_times),
+    injection_volumes_ul = as.numeric(injection_volumes_ul),
+    params = list(
+      n_injections = n_inj,
+      temperature_C = temp_c,
+      syringe_conc_mM = syringe_mM,
+      cell_conc_mM = cell_mM,
+      cell_volume_mL = cell_vol,
+      V_pre_ul = v_pre,
+      V_inj_ul = v_inj,
+      titration_interval_s = interval_s,
+      injection_volumes_ul = vols_filled
+    ),
+    source = list(
+      type = "ta_xlsx",
+      xlsx_path = path,
+      label = out_label
+    )
+  )
+}
+
+read_step1_input <- function(file_path, display_name = NULL, app_dir = getwd(), overwrite_ta_xlsx = TRUE) {
+  fp <- normalizePath(path.expand(file_path), winslash = "/", mustWork = FALSE)
+  if (!file.exists(fp)) {
+    stop(sprintf("Input file not found: %s", fp), call. = FALSE)
+  }
+
+  source_type <- detect_step1_source_type(fp, display_name = display_name)
+  if (source_type == "itc") {
+    return(read_itc(fp))
+  }
+  if (source_type %in% c("ta_nitc", "ta_csc", "ta_xml")) {
+    xlsx_path <- convert_ta_to_xlsx(
+      source_path = fp,
+      source_type = source_type,
+      app_dir = app_dir,
+      overwrite = overwrite_ta_xlsx
+    )
+    label <- normalize_scalar_chr(display_name, default = basename(fp))
+    return(read_ta_extract_xlsx(xlsx_path, source_label = label))
+  }
+  if (source_type == "xlsx") {
+    stop("Direct .xlsx import is not supported in Step1. Please import .itc/.txt/.nitc/.csc/.xml.", call. = FALSE)
+  }
+
+  stop(
+    sprintf(
+      "Unsupported file type for Step1 import: %s (supported: .itc/.txt/.nitc/.csc/.xml)",
+      basename(fp)
+    ),
+    call. = FALSE
+  )
 }

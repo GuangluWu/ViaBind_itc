@@ -17,6 +17,11 @@ source("R/integration.R")
 source("R/i18n.R")
 source("R/guide_annotations.R")
 
+ITCPROCESSOR_APP_DIR <- tryCatch(
+  normalizePath(getwd(), winslash = "/", mustWork = TRUE),
+  error = function(e) normalizePath(getwd(), winslash = "/", mustWork = FALSE)
+)
+
 if (!exists("load_guide_annotations", mode = "function")) {
   stop("Failed to load guide annotation module from R/guide_annotations.R", call. = FALSE)
 }
@@ -593,7 +598,7 @@ server <- function(input, output, session) {
     fileInput(
       "file1",
       "",
-      accept = c(".itc", ".txt"),
+      accept = c(".itc", ".txt", ".nitc", ".csc", ".xml"),
       buttonLabel = "Browse...",
       placeholder = "No file selected"
     )
@@ -761,6 +766,69 @@ server <- function(input, output, session) {
     normalize_step1_path(tryCatch(input$file1$datapath, error = function(e) ""))
   }
 
+  resolve_ta_source_ext <- function(filepath, display_name = NULL) {
+    st <- detect_step1_source_type(filepath, display_name = display_name)
+    switch(
+      st,
+      ta_nitc = ".nitc",
+      ta_csc = ".csc",
+      ta_xml = ".xml",
+      ""
+    )
+  }
+
+  notify_ta_parse_hint <- function(filepath, display_name = NULL) {
+    ext <- resolve_ta_source_ext(filepath, display_name = display_name)
+    if (!nzchar(ext)) return(invisible(FALSE))
+    showNotification(
+      sprintf(tr("ta_parse_hint", lang()), ext),
+      type = "message",
+      duration = 6
+    )
+    invisible(TRUE)
+  }
+
+  resolve_baseline_injection_series <- function(rd) {
+    if (is.null(rd) || !is.list(rd)) {
+      return(list(injections = numeric(0), injection_times = numeric(0)))
+    }
+    df <- rd$data %||% data.frame(Time = numeric(0))
+    injections <- as.integer(rd$injections %||% numeric(0))
+    injection_times <- rd$injection_times
+
+    # TA path always inserts a pseudo injection at t=0 only to keep integration indexing.
+    # Some .itc files also contain @0 pseudo injection (len(injections)=n_inj+1).
+    # Baseline anchor search should always start from the first real injection.
+    is_ta <- is.list(rd$source) && identical(as.character(rd$source$type %||% "")[1], "ta_xlsx")
+    n_inj_param <- suppressWarnings(as.integer((rd$params %||% list())$n_injections)[1])
+    has_extra_zero <- is.finite(n_inj_param) && length(injections) == (n_inj_param + 1L)
+    has_pseudo_zero <- length(injections) >= 2L && injections[1L] == 1L && (is_ta || has_extra_zero)
+
+    if (has_pseudo_zero) {
+      injections <- injections[-1L]
+      if (!is.null(injection_times) && length(injection_times) >= 2L) {
+        injection_times <- injection_times[-1L]
+      }
+    }
+
+    if (length(injections) < 1L) {
+      return(list(injections = numeric(0), injection_times = numeric(0)))
+    }
+
+    if (is.null(injection_times) || length(injection_times) != length(injections)) {
+      if (nrow(df) >= max(injections)) {
+        injection_times <- df$Time[injections]
+      } else {
+        injection_times <- numeric(0)
+      }
+    }
+
+    list(
+      injections = as.integer(injections),
+      injection_times = as.numeric(injection_times)
+    )
+  }
+
   import_step1_path <- function(filepath, display_name = NULL, source_kind = "desktop_native", mark_restore = FALSE) {
     path_norm <- normalize_step1_path(filepath)
     if (!nzchar(path_norm) || !file.exists(path_norm)) return(FALSE)
@@ -771,6 +839,7 @@ server <- function(input, output, session) {
     if (!identical(as.character(source_kind %||% "")[1], "sleep_restore")) {
       step1_sleep_restore_pending_params(NULL)
     }
+    notify_ta_parse_hint(path_norm, display_name = name_norm)
 
     home_restore_inflight(isTRUE(mark_restore))
     restored_step1_path(path_norm)
@@ -794,7 +863,7 @@ server <- function(input, output, session) {
 
     display_name <- as.character(record$display_name %||% "")[1]
     display_name <- trimws(display_name)
-    if (!nzchar(display_name) || !grepl("\\.(itc|txt)$", tolower(display_name))) {
+    if (!nzchar(display_name) || !grepl("\\.(itc|txt|nitc|csc|xml)$", tolower(display_name))) {
       display_name <- basename(path)
     }
 
@@ -992,6 +1061,7 @@ server <- function(input, output, session) {
   observeEvent(input$file1, {
     if (is.null(input$file1) || is.null(input$file1$datapath)) return()
     step1_sleep_restore_pending_params(NULL)
+    notify_ta_parse_hint(input$file1$datapath, display_name = input$file1$name)
     restored_step1_path(NULL)
     restored_step1_name(NULL)
     step1_active_source_path(normalize_step1_path(input$file1$datapath))
@@ -1018,8 +1088,8 @@ server <- function(input, output, session) {
 
     fn(
       purpose = "step1_import",
-      title = if (identical(lang_now, "zh")) "选择 ITC 文件" else "Select ITC File",
-      filters = list(list(name = "ITC Data", extensions = c("itc", "txt"))),
+      title = if (identical(lang_now, "zh")) "选择 ITC/TA 数据文件" else "Select ITC/TA Data File",
+      filters = list(list(name = "ITC/TA Data", extensions = c("itc", "txt", "nitc", "csc", "xml"))),
       on_selected = function(result) {
         result_path <- normalize_step1_path(result$file_path %||% "")
         result_name <- as.character(result$file_name %||% "")[1]
@@ -1095,12 +1165,29 @@ server <- function(input, output, session) {
 
   # 反应式存储读取的数据
   rawData <- reactive({
+    read_step1 <- function(path, display_name = NULL) {
+      read_step1_input(
+        file_path = path,
+        display_name = display_name,
+        app_dir = ITCPROCESSOR_APP_DIR,
+        overwrite_ta_xlsx = TRUE
+      )
+    }
+
     restored_path <- normalize_step1_path(restored_step1_path())
     if (nzchar(restored_path)) {
       req(file.exists(restored_path))
       return(tryCatch({
-        read_itc(restored_path)
+        read_step1(
+          path = restored_path,
+          display_name = normalize_step1_sleep_scalar_chr(restored_step1_name(), default = basename(restored_path))
+        )
       }, error = function(e) {
+        showNotification(
+          as.character(conditionMessage(e) %||% "Step1 import failed."),
+          type = "error",
+          duration = 8
+        )
         started <- suppressWarnings(as.numeric(step1_import_started_at())[1])
         elapsed_ms <- if (is.finite(started)) as.numeric(Sys.time()) * 1000 - started * 1000 else NA_real_
         telemetry_log(
@@ -1120,8 +1207,16 @@ server <- function(input, output, session) {
 
     req(input$file1)
     tryCatch({
-      read_itc(input$file1$datapath)
+      read_step1(
+        path = input$file1$datapath,
+        display_name = normalize_step1_sleep_scalar_chr(input$file1$name, default = basename(input$file1$datapath))
+      )
     }, error = function(e) {
+      showNotification(
+        as.character(conditionMessage(e) %||% "Step1 import failed."),
+        type = "error",
+        duration = 8
+      )
       started <- suppressWarnings(as.numeric(step1_import_started_at())[1])
       elapsed_ms <- if (is.finite(started)) as.numeric(Sys.time()) * 1000 - started * 1000 else NA_real_
       telemetry_log(
@@ -1295,8 +1390,9 @@ server <- function(input, output, session) {
   baselineData <- reactive({
     req(rawData())
     df <- rawData()$data
-    injections <- rawData()$injections
-    inj_times <- rawData()$injection_times
+    baseline_series <- resolve_baseline_injection_series(rawData())
+    injections <- baseline_series$injections
+    inj_times <- baseline_series$injection_times
     
     base <- SegmentedBaseline(df$Time, df$Power, injections,
                               injection_times = inj_times,
@@ -1551,8 +1647,9 @@ server <- function(input, output, session) {
     
     df <- rawData()$data
     base <- baselineData()
-    injections <- rawData()$injections
-    raw_inj_times <- rawData()$injection_times
+    baseline_series <- resolve_baseline_injection_series(rawData())
+    injections <- baseline_series$injections
+    raw_inj_times <- baseline_series$injection_times
     time_min <- df$Time / 60
     
     inj_times <- if (length(injections) > 0) {
@@ -1706,8 +1803,9 @@ server <- function(input, output, session) {
     layout_args <- list()
     
     if (input$zoom_baseline) {
-       injections <- rawData()$injections
-       raw_inj_times <- rawData()$injection_times
+       baseline_series <- resolve_baseline_injection_series(rawData())
+       injections <- baseline_series$injections
+       raw_inj_times <- baseline_series$injection_times
        inj_times <- if (length(injections) > 0) {
           if (!is.null(raw_inj_times)) raw_inj_times else df$Time[injections]
        } else numeric(0)

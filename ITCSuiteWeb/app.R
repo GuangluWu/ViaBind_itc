@@ -842,9 +842,9 @@ server <- function(input, output, session) {
     p <- home_desktop_scalar_chr(purpose, default = "step2_import")
     if (identical(p, "step1_import")) {
       return(home_desktop_sanitize_filters(
-        list(list(name = "ITC Data", extensions = c("itc", "txt"))),
-        fallback_name = "ITC Data",
-        fallback_exts = c("itc", "txt")
+        list(list(name = "ITC/TA Data", extensions = c("itc", "txt", "nitc", "csc", "xml"))),
+        fallback_name = "ITC/TA Data",
+        fallback_exts = c("itc", "txt", "nitc", "csc", "xml")
       ))
     }
     home_desktop_sanitize_filters(
