@@ -17,9 +17,16 @@ ViaBind 是一个面向等温滴定量热（ITC）分析的开源桌面工作流
 
 ## 三步工作流
 
-1. **Step 1 (ITCprocessor)**：原始 `.itc` 数据解析、基线校正和积分。
+1. **Step 1 (ITCprocessor)**：原始 `.itc/.txt/.nitc/.csc/.xml` 数据解析、基线校正和积分。
 2. **Step 2 (ITCsimfit)**：模型模拟与参数约束拟合，并提供诊断信息。
 3. **Step 3 (ITCgraph)**：生成发表风格图形并导出结构化结果。
+
+Step 1 当前支持以下输入文件类型：
+
+- 标准 ITC 格式：`.itc`、`.txt`
+- 新增 TA/原始格式：`.nitc`、`.csc`、`.xml`
+
+说明：新增的三种格式（`.nitc`、`.csc`、`.xml`）导入可能会更慢，因为 ViaBind 在分析前需要先进行解码和转换。
 
 更完整的技术背景请参考白皮书：[`PRdocs/ITCSuite_External_Whitepaper.md`](PRdocs/ITCSuite_External_Whitepaper.md)。
 

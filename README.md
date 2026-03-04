@@ -17,9 +17,16 @@ ViaBind is an open-source desktop workflow for isothermal titration calorimetry 
 
 ## 3-Step Workflow
 
-1. **Step 1 (ITCprocessor)**: raw `.itc` parsing, baseline correction, and integration.
+1. **Step 1 (ITCprocessor)**: raw `.itc/.txt/.nitc/.csc/.xml` parsing, baseline correction, and integration.
 2. **Step 2 (ITCsimfit)**: simulation and constrained parameter fitting with diagnostics.
 3. **Step 3 (ITCgraph)**: publication-style plotting and structured export.
+
+Step 1 currently supports these input file types:
+
+- Standard ITC formats: `.itc`, `.txt`
+- Newly added TA/raw formats: `.nitc`, `.csc`, `.xml`
+
+Note: the three newly added formats (`.nitc`, `.csc`, `.xml`) may import more slowly, because ViaBind needs to decode and convert them before analysis.
 
 For deeper technical background, see the external whitepaper: [`PRdocs/ITCSuite_External_Whitepaper.md`](PRdocs/ITCSuite_External_Whitepaper.md).
 
