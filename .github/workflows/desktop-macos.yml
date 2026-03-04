@@ -95,7 +95,7 @@ jobs:
           echo "Notary connectivity probe failed after ${max_attempts} attempts."
           exit 1
 
-      - name: Build macOS artifacts (signed; notarization disabled temporarily)
+      - name: Build macOS artifacts (signed; notarized via follow-up step)
         if: steps.signing.outputs.enabled == 'true'
         working-directory: desktop
         env:
@@ -109,8 +109,16 @@ jobs:
           npm run ensure:r-runtime
           ./node_modules/.bin/electron-builder --mac dmg --config.mac.notarize=false
 
+      - name: Restore notarization submission state
+        if: steps.signing.outputs.enabled == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: ViaBind_ITCSuite-notary-state-${{ github.run_id }}
+          path: ${{ runner.temp }}/notary-state
+
       - name: Notarize built macOS artifacts (retry only notarization)
-        if: ${{ false }}
+        if: steps.signing.outputs.enabled == 'true'
         timeout-minutes: 300
         working-directory: desktop
         env:
@@ -129,34 +137,58 @@ jobs:
           poll_interval_seconds=45
           poll_timeout_seconds=14400
           progress_notice_seconds=7200
+          state_dir="${RUNNER_TEMP}/notary-state"
+          state_file="${state_dir}/submission-ids.tsv"
+          mkdir -p "${state_dir}"
+          touch "${state_file}"
 
           for artifact in "${artifacts[@]}"; do
             artifact_base="$(basename "${artifact}")"
+            artifact_sha="$(shasum -a 256 "${artifact}" | awk '{print $1}')"
             submit_log="${RUNNER_TEMP}/notary-submit-${artifact_base}.log"
             info_json="${RUNNER_TEMP}/notary-info-${artifact_base}.json"
             invalid_log="${RUNNER_TEMP}/notary-invalid-${artifact_base}.log"
-
-            echo "Submitting for notarization: ${artifact}"
-            set +e
-            xcrun notarytool submit "${artifact}" \
-              --apple-id "${APPLE_ID}" \
-              --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
-              --team-id "${APPLE_TEAM_ID}" \
-              --output-format json 2>&1 | tee "${submit_log}"
-            submit_status=${PIPESTATUS[0]}
-            set -e
-            if [[ "${submit_status}" -ne 0 ]]; then
-              echo "Notary submission failed before polling."
-              exit "${submit_status}"
-            fi
-
             submission_id="$(
-              sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F-]\{36\}\)".*/\1/p' "${submit_log}" | head -n1
+              awk -F '\t' -v name="${artifact_base}" -v sha="${artifact_sha}" '$1 == name && $2 == sha {print $3; exit}' "${state_file}"
             )"
-            if [[ -z "${submission_id}" ]]; then
-              echo "Unable to parse notarization submission id from output."
-              cat "${submit_log}"
-              exit 1
+
+            if [[ -n "${submission_id}" ]]; then
+              echo "Reusing notarization submission id for ${artifact_base}: ${submission_id}"
+            else
+              previous_sha="$(
+                awk -F '\t' -v name="${artifact_base}" '$1 == name {print $2; exit}' "${state_file}"
+              )"
+              if [[ -n "${previous_sha}" && "${previous_sha}" != "${artifact_sha}" ]]; then
+                echo "::warning::Found prior submission state for ${artifact_base}, but artifact hash changed; creating a fresh submission."
+              fi
+
+              echo "Submitting for notarization: ${artifact}"
+              set +e
+              xcrun notarytool submit "${artifact}" \
+                --apple-id "${APPLE_ID}" \
+                --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
+                --team-id "${APPLE_TEAM_ID}" \
+                --output-format json 2>&1 | tee "${submit_log}"
+              submit_status=${PIPESTATUS[0]}
+              set -e
+              if [[ "${submit_status}" -ne 0 ]]; then
+                echo "Notary submission failed before polling."
+                exit "${submit_status}"
+              fi
+
+              submission_id="$(
+                sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F-]\{36\}\)".*/\1/p' "${submit_log}" | head -n1
+              )"
+              if [[ -z "${submission_id}" ]]; then
+                echo "Unable to parse notarization submission id from output."
+                cat "${submit_log}"
+                exit 1
+              fi
+
+              tmp_state="${state_file}.tmp"
+              awk -F '\t' -v name="${artifact_base}" '$1 != name' "${state_file}" > "${tmp_state}" || true
+              mv "${tmp_state}" "${state_file}"
+              printf '%s\t%s\t%s\n' "${artifact_base}" "${artifact_sha}" "${submission_id}" >> "${state_file}"
             fi
 
             echo "Notary submission id: ${submission_id}"
@@ -169,6 +201,7 @@ jobs:
               if (( now_epoch > deadline )); then
                 echo "Timed out while polling notarization status (${poll_timeout_seconds}s)."
                 echo "Submission id: ${submission_id}"
+                echo "::warning::Notarization remained In Progress too long. Re-run failed jobs to continue polling the same submission id."
                 exit 124
               fi
 
@@ -210,8 +243,19 @@ jobs:
             done
           done
 
+      - name: Persist notarization submission state
+        if: ${{ always() && steps.signing.outputs.enabled == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ViaBind_ITCSuite-notary-state-${{ github.run_id }}
+          compression-level: 0
+          if-no-files-found: ignore
+          overwrite: true
+          path: |
+            ${{ runner.temp }}/notary-state/submission-ids.tsv
+
       - name: Staple notarized DMG artifacts
-        if: ${{ false }}
+        if: steps.signing.outputs.enabled == 'true'
         working-directory: desktop
         run: |
           set -euo pipefail
@@ -240,11 +284,6 @@ jobs:
         if: steps.signing.outputs.enabled != 'true'
         run: |
           echo "::warning::macOS artifacts are unsigned/unnotarized. Downloaded app may show 'damaged' or be blocked by Gatekeeper."
-
-      - name: Warn when notarization is temporarily disabled
-        if: steps.signing.outputs.enabled == 'true'
-        run: |
-          echo "::warning::Apple notarization is temporarily disabled in this workflow. macOS artifacts are signed but NOT notarized."
 
       - name: Generate checksums
         working-directory: desktop
