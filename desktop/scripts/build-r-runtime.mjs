@@ -35,13 +35,61 @@ const FALLBACK_PKGS = [
 const INSTALL_SCRIPT = `
 lib_dir <- Sys.getenv("ITCSUITE_LIB_DIR")
 pkg_csv <- Sys.getenv("ITCSUITE_PKG_CSV")
+repo <- Sys.getenv("ITCSUITE_R_REPO", unset = "https://cloud.r-project.org")
+pkg_type <- Sys.getenv("ITCSUITE_R_PKG_TYPE", unset = "")
+timeout_secs <- suppressWarnings(as.integer(Sys.getenv("ITCSUITE_R_TIMEOUT", unset = "600")))
+retry_count <- suppressWarnings(as.integer(Sys.getenv("ITCSUITE_R_RETRY", unset = "2")))
 if (!nzchar(lib_dir) || !nzchar(pkg_csv)) stop("missing env")
+if (!nzchar(repo)) repo <- "https://cloud.r-project.org"
+if (!is.finite(timeout_secs) || is.na(timeout_secs) || timeout_secs < 1L) timeout_secs <- 600L
+if (!is.finite(retry_count) || is.na(retry_count) || retry_count < 0L) retry_count <- 2L
+if (!nzchar(pkg_type)) {
+  pkg_type <- if (.Platform$OS.type == "windows") "binary" else getOption("pkgType")
+}
+if (!nzchar(pkg_type)) pkg_type <- "source"
 if (!dir.exists(lib_dir)) dir.create(lib_dir, recursive = TRUE, showWarnings = FALSE)
 .libPaths(c(lib_dir, .libPaths()))
+options(timeout = timeout_secs)
+options(repos = c(CRAN = repo))
+options(pkgType = pkg_type)
+cat(sprintf(
+  "[build-r-runtime] install config: repo=%s pkgType=%s timeout=%ss retry=%d\\n",
+  getOption("repos")[["CRAN"]],
+  getOption("pkgType"),
+  getOption("timeout"),
+  retry_count
+))
+cat(sprintf("[build-r-runtime] capabilities(libcurl)=%s\\n", capabilities("libcurl")))
 pkgs <- strsplit(pkg_csv, ",", fixed = TRUE)[[1]]
 missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
 if (length(missing) > 0) {
-  install.packages(missing, repos = "https://cloud.r-project.org", lib = lib_dir)
+  attempts <- retry_count + 1L
+  remaining <- missing
+  for (attempt in seq_len(attempts)) {
+    cat(sprintf(
+      "[build-r-runtime] install attempt %d/%d (%d package(s)): %s\\n",
+      attempt,
+      attempts,
+      length(remaining),
+      paste(remaining, collapse = ", ")
+    ))
+    tryCatch(
+      install.packages(remaining, repos = getOption("repos")[["CRAN"]], lib = lib_dir, type = getOption("pkgType")),
+      error = function(err) {
+        message(sprintf("[build-r-runtime] install attempt %d error: %s", attempt, conditionMessage(err)))
+      }
+    )
+    remaining <- remaining[!vapply(remaining, requireNamespace, logical(1), quietly = TRUE)]
+    if (length(remaining) < 1L) break
+    if (attempt < attempts) {
+      cat(sprintf(
+        "[build-r-runtime] retrying in 10s; remaining %d package(s): %s\\n",
+        length(remaining),
+        paste(remaining, collapse = ", ")
+      ))
+      Sys.sleep(10L)
+    }
+  }
 }
 remaining <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
 if (length(remaining) > 0) {
