@@ -164,6 +164,39 @@ parse_num <- function(x) {
   suppressWarnings(as.numeric(x))
 }
 
+normalize_lookup_name <- function(x) {
+  if (is.null(x) || length(x) == 0) {
+    return(character())
+  }
+  out <- enc2utf8(as.character(x))
+  out <- iconv(out, from = "UTF-8", to = "ASCII//TRANSLIT", sub = "")
+  out[is.na(out)] <- ""
+  out <- tolower(trimws(out))
+  gsub("[[:space:]]+", " ", out, perl = TRUE)
+}
+
+named_value_or_default <- function(named_values, keys, default = "") {
+  if (length(named_values) == 0) {
+    return(default)
+  }
+  nms <- names(named_values)
+  if (is.null(nms) || length(nms) == 0) {
+    return(default)
+  }
+  nms_norm <- normalize_lookup_name(nms)
+  key_norm <- normalize_lookup_name(keys)
+  idx <- match(key_norm, nms_norm, nomatch = 0L)
+  idx <- idx[idx > 0L]
+  if (length(idx) == 0) {
+    return(default)
+  }
+  val <- named_values[[idx[[1]]]]
+  if (is.null(val)) {
+    return(default)
+  }
+  val
+}
+
 is_valid_xml_codepoint <- function(cp) {
   cp %in% c(9L, 10L, 13L) ||
     (cp >= 32L && cp <= 55295L) ||
@@ -195,16 +228,24 @@ replace_charrefs <- function(text, pattern, base) {
 
 clean_xml_text <- function(path) {
   size <- file.info(path)$size
-  text <- readChar(path, nchars = size, useBytes = TRUE)
+  if (is.na(size) || !is.finite(size) || size < 0) {
+    stop(sprintf("Unable to read XML size for: %s", path), call. = FALSE)
+  }
+  con <- file(path, open = "rb")
+  on.exit(close(con), add = TRUE)
+  payload <- readBin(con, what = "raw", n = size)
+  text <- rawToChar(payload)
+  Encoding(text) <- "bytes"
   hex_res <- replace_charrefs(text, "&#x([0-9A-Fa-f]+);", base = 16L)
   dec_res <- replace_charrefs(hex_res$text, "&#([0-9]+);", base = 10L)
   ctrl_res <- gsub("[\001-\010\013\014\016-\037]", "", dec_res$text, perl = TRUE)
+  Encoding(ctrl_res) <- "bytes"
   list(
     cleaned = ctrl_res,
     stats = list(
       removed_invalid_hex_refs = hex_res$removed,
       removed_invalid_dec_refs = dec_res$removed,
-      parse_mode = "cleaned_text_then_read_xml"
+      parse_mode = "cleaned_text_then_read_xml_raw_utf8"
     )
   )
 }
@@ -264,30 +305,30 @@ build_titration_df <- function(rows_by_tag, ir_table, orig_ir_table, inj_table, 
     inj_i <- if (i <= length(inj)) inj[[i]] else character()
     area_i <- if (i <= length(area)) area[[i]] else character()
 
-    start_s <- parse_num(ir_i[["Start"]])
-    stop_s <- parse_num(ir_i[["Stop"]])
+    start_s <- parse_num(named_value_or_default(ir_i, "Start"))
+    stop_s <- parse_num(named_value_or_default(ir_i, "Stop"))
     width_s <- if (!is.na(start_s) && !is.na(stop_s)) stop_s - start_s else NA_real_
-    inj_vol <- parse_num(inj_i[["InjVolume"]])
+    inj_vol <- parse_num(named_value_or_default(inj_i, "InjVolume"))
     if (is.na(inj_vol)) {
-      inj_vol <- parse_num(area_i[["inj volume (µL)"]])
+      inj_vol <- parse_num(named_value_or_default(area_i, "inj volume (uL)"))
     }
 
     rows[[i]] <- data.frame(
       index = i,
-      inj_num = parse_num(inj_i[["InjNum"]]),
-      region = parse_num(area_i[["Region"]]),
+      inj_num = parse_num(named_value_or_default(inj_i, "InjNum")),
+      region = parse_num(named_value_or_default(area_i, "Region")),
       start_s = start_s,
       stop_s = stop_s,
       width_s = width_s,
-      orig_start_s = parse_num(oir_i[["Start"]]),
-      orig_stop_s = parse_num(oir_i[["Stop"]]),
+      orig_start_s = parse_num(named_value_or_default(oir_i, "Start")),
+      orig_stop_s = parse_num(named_value_or_default(oir_i, "Stop")),
       inj_volume_uL = inj_vol,
-      Q_uJ = parse_num(area_i[["Q (µJ)"]]),
-      corrected_Q_uJ = parse_num(area_i[["Corrected Q (µJ)"]]),
-      mole_ratio = parse_num(area_i[["moles titrant / moles titrate"]]),
-      moles_titrant = parse_num(area_i[["moles titrant (moles)"]]),
-      moles_titrate = parse_num(area_i[["moles titrate (moles)"]]),
-      total_volume_uL = parse_num(area_i[["total volume (µL)"]]),
+      Q_uJ = parse_num(named_value_or_default(area_i, "Q (uJ)")),
+      corrected_Q_uJ = parse_num(named_value_or_default(area_i, "Corrected Q (uJ)")),
+      mole_ratio = parse_num(named_value_or_default(area_i, "moles titrant / moles titrate")),
+      moles_titrant = parse_num(named_value_or_default(area_i, "moles titrant (moles)")),
+      moles_titrate = parse_num(named_value_or_default(area_i, "moles titrate (moles)")),
+      total_volume_uL = parse_num(named_value_or_default(area_i, "total volume (uL)")),
       stringsAsFactors = FALSE
     )
   }
@@ -418,7 +459,29 @@ main <- function() {
   dir.create(dirname(out_xlsx), recursive = TRUE, showWarnings = FALSE)
 
   cleaned <- clean_xml_text(input)
-  doc <- read_xml(cleaned$cleaned, options = c("RECOVER", "NOERROR", "NOWARNING"))
+  doc <- tryCatch(
+    read_xml(
+      charToRaw(cleaned$cleaned),
+      encoding = "UTF-8",
+      options = c("RECOVER", "NOERROR", "NOWARNING")
+    ),
+    error = function(e) {
+      locale_ctype <- tryCatch(Sys.getlocale("LC_CTYPE"), error = function(...) "unknown")
+      stop(
+        sprintf(
+          paste0(
+            "Failed to parse XML after cleaning for %s. ",
+            "This may be caused by locale/encoding mismatch (LC_CTYPE=%s). ",
+            "Original parser error: %s"
+          ),
+          basename(input),
+          locale_ctype,
+          conditionMessage(e)
+        ),
+        call. = FALSE
+      )
+    }
+  )
   root <- xml_root(doc)
   root_name <- xml_name(root)
 
