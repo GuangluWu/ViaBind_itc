@@ -245,8 +245,98 @@ clean_xml_text <- function(path) {
     stats = list(
       removed_invalid_hex_refs = hex_res$removed,
       removed_invalid_dec_refs = dec_res$removed,
-      parse_mode = "cleaned_text_then_read_xml_raw_utf8"
+      parse_mode = "cleaned_text_then_read_xml_raw_auto_encoding"
     )
+  )
+}
+
+extract_declared_xml_encoding <- function(text) {
+  head_bytes <- min(4096L, nchar(text, type = "bytes"))
+  if (head_bytes <= 0L) {
+    return(NA_character_)
+  }
+  head_text <- substr(text, 1L, head_bytes)
+  m <- regexec("(?i)<\\?xml[^>]*encoding\\s*=\\s*['\"]([^'\"]+)['\"]", head_text, perl = TRUE)
+  hit <- regmatches(head_text, m)[[1]]
+  if (length(hit) < 2L) {
+    return(NA_character_)
+  }
+  enc <- trimws(hit[[2]])
+  if (!nzchar(enc)) {
+    return(NA_character_)
+  }
+  enc
+}
+
+build_encoding_fallbacks <- function(locale_ctype = "") {
+  loc <- tolower(locale_ctype)
+  out <- character()
+  if (grepl("chinese|gbk|gb2312|gb18030|cp936|936", loc, perl = TRUE)) {
+    out <- c(out, "GB18030", "GBK", "CP936")
+  }
+  if (grepl("japanese|shift[-_ ]?jis|cp932|932", loc, perl = TRUE)) {
+    out <- c(out, "CP932", "SHIFT_JIS")
+  }
+  if (grepl("korean|cp949|949|euc[-_ ]?kr", loc, perl = TRUE)) {
+    out <- c(out, "CP949", "EUC-KR")
+  }
+  if (grepl("1252|latin|iso[-_ ]?8859", loc, perl = TRUE)) {
+    out <- c(out, "WINDOWS-1252", "ISO-8859-1")
+  }
+  unique(out)
+}
+
+parse_cleaned_xml <- function(cleaned_text, input_basename) {
+  parse_opts <- c("RECOVER", "NOERROR", "NOWARNING")
+  payload <- charToRaw(cleaned_text)
+  locale_ctype <- tryCatch(Sys.getlocale("LC_CTYPE"), error = function(...) "unknown")
+  declared_encoding <- extract_declared_xml_encoding(cleaned_text)
+  fallback_encodings <- build_encoding_fallbacks(locale_ctype)
+
+  attempts <- list(
+    list(label = "auto", encoding = NULL)
+  )
+  if (!is.na(declared_encoding)) {
+    attempts[[length(attempts) + 1L]] <- list(label = paste0("declared:", declared_encoding), encoding = declared_encoding)
+  }
+  attempts[[length(attempts) + 1L]] <- list(label = "utf8", encoding = "UTF-8")
+  for (enc in fallback_encodings) {
+    attempts[[length(attempts) + 1L]] <- list(label = paste0("fallback:", enc), encoding = enc)
+  }
+
+  errors <- character()
+  for (attempt in attempts) {
+    doc <- tryCatch(
+      {
+        if (is.null(attempt$encoding)) {
+          read_xml(payload, options = parse_opts)
+        } else {
+          read_xml(payload, encoding = attempt$encoding, options = parse_opts)
+        }
+      },
+      error = function(e) {
+        errors[[length(errors) + 1L]] <<- sprintf("%s => %s", attempt$label, conditionMessage(e))
+        NULL
+      }
+    )
+    if (!is.null(doc)) {
+      return(doc)
+    }
+  }
+
+  stop(
+    sprintf(
+      paste0(
+        "Failed to parse XML after cleaning for %s. ",
+        "This may be caused by locale/encoding mismatch (LC_CTYPE=%s). ",
+        "Declared encoding=%s. Parse attempts: %s"
+      ),
+      input_basename,
+      locale_ctype,
+      ifelse(is.na(declared_encoding), "none", declared_encoding),
+      paste(errors, collapse = " | ")
+    ),
+    call. = FALSE
   )
 }
 
@@ -459,29 +549,7 @@ main <- function() {
   dir.create(dirname(out_xlsx), recursive = TRUE, showWarnings = FALSE)
 
   cleaned <- clean_xml_text(input)
-  doc <- tryCatch(
-    read_xml(
-      charToRaw(cleaned$cleaned),
-      encoding = "UTF-8",
-      options = c("RECOVER", "NOERROR", "NOWARNING")
-    ),
-    error = function(e) {
-      locale_ctype <- tryCatch(Sys.getlocale("LC_CTYPE"), error = function(...) "unknown")
-      stop(
-        sprintf(
-          paste0(
-            "Failed to parse XML after cleaning for %s. ",
-            "This may be caused by locale/encoding mismatch (LC_CTYPE=%s). ",
-            "Original parser error: %s"
-          ),
-          basename(input),
-          locale_ctype,
-          conditionMessage(e)
-        ),
-        call. = FALSE
-      )
-    }
-  )
+  doc <- parse_cleaned_xml(cleaned$cleaned, basename(input))
   root <- xml_root(doc)
   root_name <- xml_name(root)
 
