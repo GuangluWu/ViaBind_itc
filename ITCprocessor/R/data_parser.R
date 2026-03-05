@@ -315,6 +315,64 @@ build_ta_xlsx_path <- function(source_path, source_type) {
   )
 }
 
+resolve_executable_candidate <- function(path_like) {
+  cand <- normalize_scalar_chr(path_like, default = "")
+  if (!nzchar(cand)) return("")
+
+  resolved <- normalize_scalar_chr(unname(Sys.which(cand)), default = "")
+  if (nzchar(resolved)) {
+    return(normalizePath(path.expand(resolved), winslash = "/", mustWork = FALSE))
+  }
+
+  expanded <- normalizePath(path.expand(cand), winslash = "/", mustWork = FALSE)
+  if (!file.exists(expanded)) return("")
+  expanded
+}
+
+is_executable_candidate <- function(path_like) {
+  resolved <- resolve_executable_candidate(path_like)
+  if (!nzchar(resolved)) return(FALSE)
+  if (.Platform$OS.type == "windows") return(TRUE)
+  suppressWarnings(file.access(resolved, mode = 1L) == 0L)
+}
+
+resolve_ta_rscript_bin <- function() {
+  candidates <- list(
+    list(
+      label = "ITCSUITE_RSCRIPT",
+      value = Sys.getenv("ITCSUITE_RSCRIPT", unset = "")
+    ),
+    list(
+      label = "Sys.which('itcsuite-rscript')",
+      value = unname(Sys.which("itcsuite-rscript"))[[1L]]
+    ),
+    list(
+      label = "Sys.which('Rscript')",
+      value = unname(Sys.which("Rscript"))[[1L]]
+    )
+  )
+
+  attempted <- character()
+  for (cand in candidates) {
+    raw <- normalize_scalar_chr(cand$value, default = "")
+    attempted <- c(
+      attempted,
+      sprintf("%s=%s", cand$label, if (nzchar(raw)) raw else "<empty>")
+    )
+    if (!is_executable_candidate(raw)) next
+    resolved <- resolve_executable_candidate(raw)
+    if (nzchar(resolved)) return(resolved)
+  }
+
+  stop(
+    sprintf(
+      "Rscript executable not found for TA conversion. Tried: %s",
+      paste(attempted, collapse = "; ")
+    ),
+    call. = FALSE
+  )
+}
+
 convert_ta_to_xlsx <- function(source_path, source_type, app_dir, overwrite = TRUE) {
   src <- normalizePath(path.expand(source_path), winslash = "/", mustWork = FALSE)
   if (!file.exists(src)) {
@@ -327,10 +385,7 @@ convert_ta_to_xlsx <- function(source_path, source_type, app_dir, overwrite = TR
   }
 
   script_path <- resolve_ta_script(source_type, app_dir = app_dir)
-  rscript_bin <- Sys.which("Rscript")
-  if (!nzchar(rscript_bin)) {
-    stop("Rscript executable not found in PATH.", call. = FALSE)
-  }
+  rscript_bin <- resolve_ta_rscript_bin()
 
   dir.create(dirname(out_xlsx), recursive = TRUE, showWarnings = FALSE)
   timeout_sec <- 90

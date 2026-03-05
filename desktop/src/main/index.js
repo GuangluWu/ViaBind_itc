@@ -155,11 +155,14 @@ class BackendController extends EventEmitter {
     return "Rscript";
   }
 
-  buildEnv(runtimeRoot) {
+  buildEnv(runtimeRoot, rscriptPath = "") {
     const env = { ...process.env };
     env.ITCSUITE_DESKTOP = "1";
     env.ITCSUITE_USER_DATA_DIR = app.getPath("userData");
     env.ITCSUITE_APP_VERSION = app.getVersion();
+    if (typeof rscriptPath === "string" && rscriptPath.trim()) {
+      env.ITCSUITE_RSCRIPT = rscriptPath;
+    }
 
     const bundledLib = path.join(runtimeRoot, "library");
     if (fs.existsSync(bundledLib) && (app.isPackaged || useBundledRuntimeInDev())) {
@@ -268,7 +271,7 @@ class BackendController extends EventEmitter {
 
     this.child = spawn(rscript, args, {
       cwd: repoRoot,
-      env: this.buildEnv(runtimeRoot),
+      env: this.buildEnv(runtimeRoot, rscript),
       stdio: ["ignore", "pipe", "pipe"]
     });
 

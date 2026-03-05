@@ -24,9 +24,9 @@ ViaBind is an open-source desktop workflow for isothermal titration calorimetry 
 Step 1 currently supports these input file types:
 
 - Standard ITC formats: `.itc`, `.txt`
-- Newly added TA/raw formats: `.nitc`, `.csc`, `.xml`
+- Newly added TA/legacy formats: `.nitc`, `.csc`, and `.xml` exported by older TA software
 
-Note: the three newly added formats (`.nitc`, `.csc`, `.xml`) may import more slowly, because ViaBind needs to decode and convert them before analysis.
+Note: these newly added legacy formats (`.nitc`, `.csc`, and older-TA-exported `.xml`) may import more slowly, because ViaBind needs to decode and convert them before analysis.
 
 For deeper technical background, see the external whitepaper: [`PRdocs/ITCSuite_External_Whitepaper.md`](PRdocs/ITCSuite_External_Whitepaper.md).
 
@@ -42,20 +42,8 @@ Release assets are published on the GitHub Releases page:
 
 ## First Launch Notes
 
-- Temporary notice (macOS): Due to heavy Apple notarization service load, the current macOS release is not notarized yet and requires manual allow on first launch.
+- macOS release is now notarized by Apple and can be used in compliant environments.
 - Windows may show a SmartScreen warning for unsigned installers. Use `More info` and then continue if you trust the release source.
-
-### macOS manual allow guide (temporary)
-
-1. Open the `.dmg` and drag `ViaBind.app` to `Applications`.
-2. In `Applications`, right-click `ViaBind.app` and choose `Open`.
-3. If blocked, go to `System Settings > Privacy & Security`, click `Open Anyway`, then open the app again.
-4. If macOS still reports the app is damaged, run:
-
-```bash
-xattr -dr com.apple.quarantine "/Applications/ViaBind.app"
-open "/Applications/ViaBind.app"
-```
 
 Optional (advanced users): verify checksum with `SHA256SUMS.txt`:
 

@@ -165,6 +165,7 @@ async function main() {
   const env = {
     ...process.env,
     ITCSUITE_DESKTOP: "1",
+    ITCSUITE_RSCRIPT: rscript,
     R_HOME: runtimeRoot,
     R_LIBS: libDir,
     R_LIBS_USER: libDir,

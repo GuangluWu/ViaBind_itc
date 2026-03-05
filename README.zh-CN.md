@@ -24,9 +24,9 @@ ViaBind 是一个面向等温滴定量热（ITC）分析的开源桌面工作流
 Step 1 当前支持以下输入文件类型：
 
 - 标准 ITC 格式：`.itc`、`.txt`
-- 新增 TA/原始格式：`.nitc`、`.csc`、`.xml`
+- 新增 TA/历史格式：`.nitc`、`.csc`，以及由老 TA 软件导出的 `.xml`
 
-说明：新增的三种格式（`.nitc`、`.csc`、`.xml`）导入可能会更慢，因为 ViaBind 在分析前需要先进行解码和转换。
+说明：上述新增历史格式（`.nitc`、`.csc`、老 TA 导出 `.xml`）导入可能会更慢，因为 ViaBind 在分析前需要先进行解码和转换。
 
 更完整的技术背景请参考白皮书：[`PRdocs/ITCSuite_External_Whitepaper.md`](PRdocs/ITCSuite_External_Whitepaper.md)。
 
@@ -42,20 +42,8 @@ Step 1 当前支持以下输入文件类型：
 
 ## 首次启动说明
 
-- 临时公告（macOS）：由于 Apple notarization 服务器繁忙，当前 macOS 版本暂未 notarized，首次启动需要手动放行。
+- macOS 版本现已完成 Apple notarization，可在合规环境中正常使用。
 - Windows 对未签名安装程序可能会显示 SmartScreen 警告。如果您确认下载来源可信，可点击 `更多信息` 后继续安装。
-
-### macOS 手动放行指南（临时）
-
-1. 打开 `.dmg`，将 `ViaBind.app` 拖动到 `Applications`。
-2. 在 `Applications` 中右键 `ViaBind.app`，选择 `打开`。
-3. 如果仍被拦截，前往 `系统设置 > 隐私与安全性`，点击 `仍要打开`，然后再次启动应用。
-4. 若仍提示“文件已损坏”，请在终端执行：
-
-```bash
-xattr -dr com.apple.quarantine "/Applications/ViaBind.app"
-open "/Applications/ViaBind.app"
-```
 
 可选（高级用户）：如需校验哈希，可对照 `SHA256SUMS.txt` 执行：
 

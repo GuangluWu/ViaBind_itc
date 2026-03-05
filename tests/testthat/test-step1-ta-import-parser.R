@@ -32,6 +32,66 @@ testthat::test_that("convert_ta_to_xlsx handles source path with spaces", {
   testthat::expect_true(grepl("_nitc_extract\\.xlsx$", out))
 })
 
+testthat::test_that("convert_ta_to_xlsx prefers ITCSUITE_RSCRIPT when valid", {
+  rscript_bin <- unname(Sys.which("Rscript"))[[1L]]
+  testthat::skip_if(!nzchar(rscript_bin), "Rscript executable not found in PATH.")
+  rscript_bin <- normalizePath(rscript_bin, winslash = "/", mustWork = FALSE)
+  testthat::expect_true(file.exists(rscript_bin))
+
+  old_val <- Sys.getenv("ITCSUITE_RSCRIPT", unset = NA_character_)
+  on.exit({
+    if (is.na(old_val)) {
+      Sys.unsetenv("ITCSUITE_RSCRIPT")
+    } else {
+      Sys.setenv(ITCSUITE_RSCRIPT = old_val)
+    }
+  }, add = TRUE)
+
+  Sys.setenv(ITCSUITE_RSCRIPT = rscript_bin)
+  resolved <- resolve_ta_rscript_bin()
+  testthat::expect_identical(resolved, rscript_bin)
+
+  src <- file.path(repo_root, "Examples", "2-1bd.xml")
+  testthat::expect_true(file.exists(src))
+  out <- convert_ta_to_xlsx(
+    source_path = src,
+    source_type = "ta_xml",
+    app_dir = proc_dir,
+    overwrite = TRUE
+  )
+  testthat::expect_true(file.exists(out))
+  testthat::expect_true(grepl("_xml_extract\\.xlsx$", out))
+})
+
+testthat::test_that("convert_ta_to_xlsx falls back when ITCSUITE_RSCRIPT is invalid", {
+  missing_bin <- file.path(tempdir(), sprintf("missing-rscript-%s", as.integer(Sys.time())))
+  old_val <- Sys.getenv("ITCSUITE_RSCRIPT", unset = NA_character_)
+  on.exit({
+    if (is.na(old_val)) {
+      Sys.unsetenv("ITCSUITE_RSCRIPT")
+    } else {
+      Sys.setenv(ITCSUITE_RSCRIPT = old_val)
+    }
+  }, add = TRUE)
+
+  Sys.setenv(ITCSUITE_RSCRIPT = missing_bin)
+  resolved <- resolve_ta_rscript_bin()
+  testthat::expect_false(identical(resolved, missing_bin))
+  testthat::expect_true(nzchar(resolved))
+  testthat::expect_true(file.exists(resolved))
+
+  src <- file.path(repo_root, "Examples", "os-cb8-e7-2 2024-11-11_22.41 E7.nitc")
+  testthat::expect_true(file.exists(src))
+  out <- convert_ta_to_xlsx(
+    source_path = src,
+    source_type = "ta_nitc",
+    app_dir = proc_dir,
+    overwrite = TRUE
+  )
+  testthat::expect_true(file.exists(out))
+  testthat::expect_true(grepl("_nitc_extract\\.xlsx$", out))
+})
+
 testthat::test_that("read_step1_input parses NITC via xlsx and keeps injection compatibility", {
   testthat::skip_if_not_installed("readxl")
 
