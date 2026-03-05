@@ -145,10 +145,25 @@ is_index_axis <- function(values) {
   if (!any(finite)) {
     return(FALSE)
   }
-  good <- sum(abs(diffs[finite] - 1.0) < 1e-9)
-  total <- sum(finite)
-  starts_near_zero <- abs(check[[1]]) < 2.0
-  starts_near_zero && (good / total) > 0.995
+  unit_like <- abs(diffs[finite] - 1.0) < 1e-6
+  good_ratio <- mean(unit_like)
+  mono_ratio <- mean(diffs[finite] > 0)
+  starts_on_integer_grid <- is.finite(check[[1]]) && abs(check[[1]] - round(check[[1]])) < 1e-3
+  starts_on_integer_grid && good_ratio > 0.98 && mono_ratio > 0.995
+}
+
+pick_best_axis_idx <- function(series, axis_idx) {
+  if (length(axis_idx) == 0L) {
+    return(NA_integer_)
+  }
+  if (length(axis_idx) == 1L) {
+    return(axis_idx[[1]])
+  }
+  lens <- vapply(series, function(s) s$len, numeric(1))
+  starts <- vapply(series, function(s) s$start, numeric(1))
+  peer_cnt <- vapply(axis_idx, function(i) as.integer(sum(lens == lens[[i]]) - 1L), integer(1))
+  ord <- order(-peer_cnt, -lens[axis_idx], starts[axis_idx])
+  axis_idx[[ord[[1]]]]
 }
 
 dedup_seq_by_key <- function(seq_list, key_fn) {
@@ -170,40 +185,64 @@ dedup_seq_by_key <- function(seq_list, key_fn) {
   out
 }
 
-find_step200_sequences <- function(data) {
+find_step200_sequences <- function(data, min_len = 6L) {
   out <- list()
-  n <- 20L
+  tol <- 1e-9
   for (phase in 0:7) {
     vals <- read_doubles_by_phase(data, phase)
-    if (length(vals) < n) {
+    if (length(vals) < min_len) {
       next
     }
-    for (start_idx in seq_len(length(vals) - n + 1L)) {
-      s <- vals[start_idx:(start_idx + n - 1L)]
-      if (!all(is.finite(s))) {
+    i <- 1L
+    while (i < length(vals)) {
+      a <- vals[[i]]
+      b <- vals[[i + 1L]]
+      if (!(is_intish(a, tol) && is_intish(b, tol))) {
+        i <- i + 1L
         next
       }
-      if (!all(vapply(s, is_intish, logical(1)))) {
+      d <- b - a
+      if (!is.finite(d) || abs(d - 200.0) > tol) {
+        i <- i + 1L
         next
       }
-      d <- diff(s)
-      if (!all(abs(d - 200.0) < 1e-9)) {
+
+      j <- i + 1L
+      while (j < length(vals)) {
+        x1 <- vals[[j]]
+        x2 <- vals[[j + 1L]]
+        if (!(is_intish(x1, tol) && is_intish(x2, tol))) {
+          break
+        }
+        dd <- x2 - x1
+        if (!is.finite(dd) || abs(dd - 200.0) > tol) {
+          break
+        }
+        j <- j + 1L
+      }
+
+      run_vals <- as.numeric(round(vals[i:j]))
+      run_len <- length(run_vals)
+      if (!(run_len >= min_len && run_vals[[1]] >= 0 && run_vals[[run_len]] >= run_vals[[1]])) {
+        i <- j + 1L
         next
       }
-      if (s[[1]] < 0 || s[[n]] > 10000) {
-        next
-      }
+
       out[[length(out) + 1L]] <- list(
         phase = phase,
-        start = phase + (start_idx - 1L) * 8L,
-        values = s
+        start = phase + (i - 1L) * 8L,
+        len = run_len,
+        step = 200.0,
+        values = run_vals
       )
+
+      i <- j + 1L
     }
   }
   dedup_seq_by_key(out, function(x) paste(format(round(x$values, 9), scientific = FALSE, trim = TRUE), collapse = ","))
 }
 
-find_arithmetic_int_sequences <- function(data, min_len = 8L, step_min = 20L, step_max = 400L) {
+find_arithmetic_int_sequences <- function(data, min_len = 8L, step_min = 1L, step_max = 10000L) {
   out <- list()
   tol <- 1e-9
 
@@ -252,7 +291,7 @@ find_arithmetic_int_sequences <- function(data, min_len = 8L, step_min = 20L, st
 
       run_vals <- as.numeric(round(vals[i:j]))
       run_len <- length(run_vals)
-      if (run_len >= min_len && run_vals[[1]] >= 0 && run_vals[[run_len]] <= 20000) {
+      if (run_len >= min_len && run_vals[[1]] >= 0 && run_vals[[run_len]] >= run_vals[[1]]) {
         out[[length(out) + 1L]] <- list(
           phase = phase,
           start = phase + (i - 1L) * 8L,
@@ -269,7 +308,7 @@ find_arithmetic_int_sequences <- function(data, min_len = 8L, step_min = 20L, st
   dedup_seq_by_key(out, function(x) paste(c(x$step, x$values), collapse = ","))
 }
 
-find_monotonic_int_sequences <- function(data, n = 20L) {
+find_monotonic_int_sequences <- function(data, n = 8L) {
   out <- list()
   for (phase in 0:7) {
     vals <- read_doubles_by_phase(data, phase)
@@ -305,7 +344,7 @@ find_monotonic_int_sequences <- function(data, n = 20L) {
   dedup_seq_by_key(out, function(x) paste(x$values, collapse = ","))
 }
 
-find_constant_sequences <- function(data, target, n = 20L) {
+find_constant_sequences <- function(data, target, n = 6L) {
   out <- list()
   for (phase in 0:7) {
     vals <- read_doubles_by_phase(data, phase)
@@ -327,6 +366,20 @@ find_constant_sequences <- function(data, target, n = 20L) {
     }
   }
   dedup_seq_by_key(out, function(x) paste(format(round(x$values, 12), scientific = FALSE, trim = TRUE), collapse = ","))
+}
+
+score_widths <- function(widths, min_coverage = 0.6) {
+  valid <- is.finite(widths) & widths > 0
+  n_valid <- sum(valid)
+  needed <- max(1L, ceiling(length(widths) * min_coverage))
+  if (n_valid < needed) {
+    return(list(score = -Inf, n_valid = n_valid, cv = Inf))
+  }
+  w <- widths[valid]
+  med <- stats::median(w)
+  cv <- if (length(w) >= 2L && is.finite(med) && med > 0) stats::sd(w) / med else 0
+  score <- n_valid - min(cv, 5)
+  list(score = score, n_valid = n_valid, cv = cv)
 }
 
 derive_step_sequence_pair <- function(step_sequences) {
@@ -356,10 +409,10 @@ derive_step_sequence_pair <- function(step_sequences) {
       if (!all(b > a)) next
 
       widths <- b - a
-      in_range <- widths >= 20 & widths <= 400
-      score <- sum(in_range)
-      if (score < ceiling(length(widths) * 0.6)) next
-      if (stats::sd(widths) < 1e-9) score <- score + 4
+      ws <- score_widths(widths, min_coverage = 0.6)
+      if (!is.finite(ws$score)) next
+      score <- ws$score
+      if (is.finite(ws$cv) && ws$cv < 1e-9) score <- score + 4
       score <- score + length(a) * 0.5
 
       better <- FALSE
@@ -394,112 +447,86 @@ derive_step_sequence_pair <- function(step_sequences) {
   )
 }
 
+is_sequence_extension <- function(candidate, base, tol = 1e-9) {
+  if (is.null(base)) {
+    return(TRUE)
+  }
+  if (length(candidate) < length(base)) {
+    return(FALSE)
+  }
+  all(abs(candidate[seq_len(length(base))] - base) <= tol)
+}
+
 select_start_stop <- function(step200, mono_int = NULL, arith = NULL) {
   step_pick <- derive_step_sequence_pair(step200)
   preferred_start <- step_pick$start
   preferred_original_stop <- step_pick$original_stop
 
-  if (!is.null(arith) && length(arith) > 0) {
-    best <- NULL
-    best_score <- -Inf
+  if (!is.null(arith) && length(arith) > 0L) {
+    cand_idx <- seq_along(arith)
+    if (!is.null(preferred_start)) {
+      compat <- which(vapply(
+        arith,
+        function(x) is_sequence_extension(as.numeric(x$values), preferred_start),
+        logical(1)
+      ))
+      cand_idx <- compat
+    }
+    if (length(cand_idx) > 0L) {
+      lens <- vapply(arith[cand_idx], function(x) x$len, numeric(1))
+      starts <- vapply(arith[cand_idx], function(x) x$values[[1]], numeric(1))
+      steps <- vapply(arith[cand_idx], function(x) x$step, numeric(1))
+      pref_step <- if (!is.null(preferred_start) && length(preferred_start) >= 2L) {
+        suppressWarnings(stats::median(diff(preferred_start)))
+      } else {
+        NA_real_
+      }
+      step_delta <- if (is.finite(pref_step)) abs(steps - pref_step) else abs(steps - 200.0)
+      ord <- order(-lens, step_delta, starts)
+      best_arith <- arith[[cand_idx[[ord[[1]]]]]]
 
-    for (i in seq_along(arith)) {
-      for (j in seq_along(arith)) {
-        if (j <= i) {
-          next
-        }
-        a <- arith[[i]]
-        b <- arith[[j]]
-        if (a$len != b$len || a$step != b$step) {
-          next
-        }
+      start <- as.numeric(best_arith$values)
+      stop <- start + as.numeric(best_arith$step)
+      source <- "arithmetic_derived"
 
-        av <- a$values
-        bv <- b$values
-        if (all(av > bv)) {
-          tmp <- av
-          av <- bv
-          bv <- tmp
-        }
-        if (!all(bv > av)) {
-          next
-        }
-
-        # If a preferred start sequence is available from step sequences,
-        # do not allow arithmetic branch to shift and skip early injections.
-        if (!is.null(preferred_start)) {
-          if (length(av) != length(preferred_start) || any(abs(av - preferred_start) > 1e-9)) {
+      same_shape_idx <- which(vapply(
+        arith,
+        function(x) x$len == best_arith$len && x$step == best_arith$step,
+        logical(1)
+      ))
+      if (length(same_shape_idx) > 0L) {
+        best_pair <- NULL
+        best_pair_score <- -Inf
+        for (i in same_shape_idx) {
+          cand <- as.numeric(arith[[i]]$values)
+          if (all(cand == start) || !all(cand > start)) {
             next
           }
-        }
-
-        widths <- bv - av
-        in_range <- widths >= 20 & widths <= 400
-        score <- sum(in_range)
-        if (score < ceiling(length(widths) * 0.6)) {
-          next
-        }
-        if (sd(widths) < 1e-9) {
-          score <- score + 5
-        }
-        med_w <- median(widths)
-        if (is.finite(med_w) && med_w >= 20 && med_w <= 400) {
-          score <- score + 2
-        }
-        score <- score + length(av) * 0.5
-
-        better <- FALSE
-        if (score > best_score) {
-          better <- TRUE
-        } else if (!is.null(best) && abs(score - best_score) < 1e-9) {
-          if (length(av) > length(best$start)) {
-            better <- TRUE
-          } else if (length(av) == length(best$start) && av[[1]] < best$start[[1]]) {
-            better <- TRUE
+          widths <- cand - start
+          ws <- score_widths(widths, min_coverage = 0.6)
+          if (!is.finite(ws$score)) {
+            next
+          }
+          score <- ws$score + length(start) * 0.25
+          if (is.finite(ws$cv) && ws$cv < 1e-9) {
+            score <- score + 1
+          }
+          if (score > best_pair_score) {
+            best_pair_score <- score
+            best_pair <- cand
           }
         }
-
-        if (better) {
-          best_score <- score
-          best <- list(start = av, stop = bv, original_stop = bv, source = "arithmetic_pair")
+        if (!is.null(best_pair) && best_pair_score > 0) {
+          stop <- best_pair
+          source <- "arithmetic_pair"
         }
       }
-    }
 
-    if (!is.null(best)) {
-      best_step <- if (length(best$start) >= 2L) median(diff(best$start)) else NA_real_
-      len_vec <- vapply(arith, function(x) x$len, numeric(1))
-      longest <- arith[[which.max(len_vec)]]
-      if (
-        is.finite(best_step) &&
-        longest$len > length(best$start) &&
-        abs(longest$values[[1]] - best$start[[1]]) < 1e-9 &&
-        abs(longest$step - best_step) < 1e-9
-      ) {
-        if (is.null(preferred_start) ||
-            (length(longest$values) == length(preferred_start) && all(abs(longest$values - preferred_start) < 1e-9))) {
-          return(list(
-            start = longest$values,
-            stop = longest$values + longest$step,
-            original_stop = longest$values + longest$step,
-            source = "arithmetic_derived_from_longest"
-          ))
-        }
-      }
-      return(best)
-    }
-
-    if (is.null(preferred_start)) {
-      ord <- order(
-        vapply(arith, function(x) x$len, numeric(1)),
-        decreasing = TRUE
-      )
-      fallback <- arith[[ord[[1]]]]
       return(list(
-        start = fallback$values,
-        stop = fallback$values + fallback$step,
-        original_stop = fallback$values + fallback$step,
-        source = "arithmetic_derived"
+        start = start,
+        stop = stop,
+        original_stop = stop,
+        source = source
       ))
     }
   }
@@ -510,7 +537,8 @@ select_start_stop <- function(step200, mono_int = NULL, arith = NULL) {
   start <- preferred_start
 
   best_stop <- NULL
-  best_score <- -1L
+  best_score <- -Inf
+  best_support <- 0L
   if (!is.null(mono_int)) {
     for (cand_item in mono_int) {
       cand <- cand_item$values
@@ -521,19 +549,24 @@ select_start_stop <- function(step200, mono_int = NULL, arith = NULL) {
         next
       }
       widths <- cand - start
-      ok <- widths[widths >= 20 & widths <= 400]
-      score <- length(ok)
-      if (length(unique(widths)) > 5) {
+      ws <- score_widths(widths, min_coverage = 0.5)
+      if (!is.finite(ws$score)) {
+        next
+      }
+      score <- ws$score
+      if (length(unique(round(widths[is.finite(widths)], 6))) > 5) {
         score <- score + 2L
       }
-      if (score > best_score) {
+      support <- as.integer(ws$n_valid)
+      if (support > best_support || (support == best_support && score > best_score)) {
+        best_support <- support
         best_score <- score
         best_stop <- cand
       }
     }
   }
 
-  if (!is.null(best_stop) && best_score >= 12) {
+  if (!is.null(best_stop) && best_support >= max(3L, ceiling(length(start) * 0.35))) {
     orig <- if (!is.null(preferred_original_stop)) preferred_original_stop else (start + 200.0)
     return(list(start = start, stop = best_stop, original_stop = orig, source = "monotonic_int_match"))
   }
@@ -543,6 +576,22 @@ select_start_stop <- function(step200, mono_int = NULL, arith = NULL) {
   }
   derived <- start + 200.0
   list(start = start, stop = derived, original_stop = derived, source = "derived_plus_200")
+}
+
+select_from_monotonic_sequences <- function(mono_int) {
+  if (is.null(mono_int) || length(mono_int) == 0L) {
+    return(list(start = NULL, stop = NULL, original_stop = NULL, source = "none"))
+  }
+  lens <- vapply(mono_int, function(x) length(x$values), integer(1))
+  starts <- vapply(mono_int, function(x) x$values[[1]], numeric(1))
+  ord <- order(-lens, starts)
+  best <- mono_int[[ord[[1]]]]
+  start <- as.numeric(best$values)
+  ds <- diff(start)
+  ds <- ds[is.finite(ds) & ds > 0]
+  step <- if (length(ds) > 0L) stats::median(ds) else 200.0
+  stop <- start + step
+  list(start = start, stop = stop, original_stop = stop, source = "monotonic_derived")
 }
 
 find_constant_run <- function(data, target, tol = 1e-12, min_len = 6L) {
@@ -580,8 +629,95 @@ find_constant_run <- function(data, target, tol = 1e-12, min_len = 6L) {
   best
 }
 
+find_best_volume_run <- function(
+  data,
+  expected_len = NA_integer_,
+  preferred_targets = numeric(),
+  tol = 1e-12,
+  min_len = 3L,
+  value_min = 0.01,
+  value_max = 100.0
+) {
+  min_len <- max(1L, as.integer(min_len))
+  expected_len <- suppressWarnings(as.integer(expected_len))
+  has_expected <- is.finite(expected_len) && expected_len > 0L
+
+  candidates <- list()
+  add_candidate <- function(item, preferred = FALSE) {
+    if (is.null(item) || is.null(item$values) || length(item$values) < min_len) {
+      return()
+    }
+    v <- suppressWarnings(as.numeric(item$values[[1]]))
+    if (!is.finite(v) || v <= 0 || v < value_min || v > value_max) {
+      return()
+    }
+    candidates[[length(candidates) + 1L]] <<- list(
+      phase = item$phase,
+      start = item$start,
+      len = as.integer(length(item$values)),
+      value = v,
+      values = as.numeric(item$values),
+      preferred = isTRUE(preferred)
+    )
+  }
+
+  pref <- suppressWarnings(as.numeric(preferred_targets))
+  pref <- unique(pref[is.finite(pref) & pref > 0 & pref >= value_min & pref <= value_max])
+  if (length(pref) > 0L) {
+    for (target in pref) {
+      run <- find_constant_run(data, target = target, tol = tol, min_len = min_len)
+      if (!is.null(run)) {
+        add_candidate(run, preferred = TRUE)
+      }
+    }
+  }
+
+  for (phase in 0:7) {
+    vals <- read_doubles_by_phase(data, phase)
+    if (length(vals) == 0L) {
+      next
+    }
+    i <- 1L
+    while (i <= length(vals)) {
+      v <- vals[[i]]
+      if (!(is.finite(v) && v > 0 && v >= value_min && v <= value_max)) {
+        i <- i + 1L
+        next
+      }
+      j <- i
+      while (j < length(vals) && is.finite(vals[[j + 1L]]) && abs(vals[[j + 1L]] - v) < tol) {
+        j <- j + 1L
+      }
+      run_len <- j - i + 1L
+      if (run_len >= min_len) {
+        add_candidate(
+          list(
+            phase = phase,
+            start = phase + (i - 1L) * 8L,
+            values = vals[i:j]
+          ),
+          preferred = FALSE
+        )
+      }
+      i <- j + 1L
+    }
+  }
+
+  if (length(candidates) == 0L) {
+    return(NULL)
+  }
+
+  lens <- vapply(candidates, function(x) as.numeric(x$len), numeric(1))
+  starts <- vapply(candidates, function(x) as.numeric(x$start), numeric(1))
+  preferred_flag <- vapply(candidates, function(x) isTRUE(x$preferred), logical(1))
+  len_delta <- if (has_expected) abs(lens - expected_len) else rep(0, length(lens))
+  score <- lens - 2 * len_delta + ifelse(preferred_flag, 3, 0)
+  ord <- order(-score, -as.integer(preferred_flag), len_delta, -lens, starts)
+  candidates[[ord[[1]]]]
+}
+
 build_injection_df <- function(starts, stops, original_stops, volumes = NULL) {
-  n <- min(length(starts), length(stops), length(original_stops), if (is.null(volumes)) .Machine$integer.max else length(volumes))
+  n <- min(length(starts), length(stops), length(original_stops))
   if (n <= 0) {
     return(data.frame(
       inj_num = integer(),
@@ -595,6 +731,11 @@ build_injection_df <- function(starts, stops, original_stops, volumes = NULL) {
       stringsAsFactors = FALSE
     ))
   }
+  inj_vol <- rep(NA_real_, n)
+  if (!is.null(volumes) && length(volumes) > 0L) {
+    m <- min(n, length(volumes))
+    inj_vol[seq_len(m)] <- as.numeric(volumes[seq_len(m)])
+  }
   data.frame(
     inj_num = seq_len(n),
     start_s = starts[seq_len(n)],
@@ -603,7 +744,7 @@ build_injection_df <- function(starts, stops, original_stops, volumes = NULL) {
     original_start_s = starts[seq_len(n)],
     original_stop_s = original_stops[seq_len(n)],
     original_width_s = original_stops[seq_len(n)] - starts[seq_len(n)],
-    inj_volume_uL = if (is.null(volumes)) NA_real_ else volumes[seq_len(n)],
+    inj_volume_uL = inj_vol,
     stringsAsFactors = FALSE
   )
 }
@@ -705,6 +846,11 @@ find_anchor_index <- function(tokens, anchor) {
 
 extract_raw_kv_block <- function(payload) {
   anchor <- c("stirrate", "syringesize", "injrate", "tempsetpoint")
+  is_key_token <- function(tok) {
+    grepl("^[A-Za-z][A-Za-z0-9_.:-]{1,120}$", tok, perl = TRUE) &&
+      !grepl("^(true|false)$", tok, ignore.case = TRUE, perl = TRUE) &&
+      !grepl("^-?\\d+(?:\\.\\d+)?$", tok, perl = TRUE)
+  }
 
   # Parse around an anchor window first; full-payload min_len=1 scans can be slow.
   win <- locate_ascii_anchor_window(payload, anchor = "stirrate", pre = 512L, post = 220000L)
@@ -717,22 +863,51 @@ extract_raw_kv_block <- function(payload) {
   )
   i_start <- find_anchor_index(tokens, anchor)
   if (is.na(i_start)) {
-    # Fallback: broader scan with a safer minimum token length.
+    # Fallback 1: look for stirrate only.
+    i_start <- match(TRUE, tolower(tokens) == "stirrate")
+  }
+  if (is.na(i_start)) {
+    # Fallback 2: broader scan with a safer minimum token length.
     tokens <- extract_ascii_tokens(payload, min_len = 3L, max_len = 2000L)
     i_start <- find_anchor_index(tokens, anchor)
     if (is.na(i_start)) {
-      return(data.frame(raw_key = character(), raw_value = character(), stringsAsFactors = FALSE))
+      i_start <- match(TRUE, tolower(tokens) == "stirrate")
+      if (is.na(i_start)) {
+        return(data.frame(raw_key = character(), raw_value = character(), stringsAsFactors = FALSE))
+      }
     }
   }
 
   i_sha_rel <- match("SHA1", tokens[i_start:length(tokens)])
-  if (is.na(i_sha_rel)) {
-    return(data.frame(raw_key = character(), raw_value = character(), stringsAsFactors = FALSE))
+  if (!is.na(i_sha_rel)) {
+    i_end <- i_start + i_sha_rel - 1L
+  } else {
+    # Fallback end-boundary: consume contiguous key-like tokens.
+    i_end <- i_start
+    i <- i_start + 1L
+    while (i <= length(tokens)) {
+      tok <- tokens[[i]]
+      if (!is_key_token(tok) && (i - i_start) >= 6L) {
+        break
+      }
+      if (!is_key_token(tok) && (i - i_start) < 6L) {
+        i <- i + 1L
+        next
+      }
+      i_end <- i
+      i <- i + 1L
+      if ((i_end - i_start) > 256L) {
+        break
+      }
+    }
   }
-  i_end <- i_start + i_sha_rel - 1L
 
   keys <- tokens[i_start:i_end]
+  keys <- keys[vapply(keys, is_key_token, logical(1))]
   n_keys <- length(keys)
+  if (n_keys == 0L) {
+    return(data.frame(raw_key = character(), raw_value = character(), stringsAsFactors = FALSE))
+  }
   values_start <- i_end + 1L
   values_end <- min(length(tokens), values_start + n_keys - 1L)
   values <- if (values_start <= values_end) tokens[values_start:values_end] else character()
@@ -858,6 +1033,26 @@ get_param_numeric <- function(exp_params, key) {
   suppressWarnings(as.numeric(exp_params$value[[idx[[1]]]]))
 }
 
+collect_numeric_param_values <- function(params_df, keys) {
+  if (is.null(params_df) || nrow(params_df) == 0L || length(keys) == 0L) {
+    return(numeric())
+  }
+  out <- numeric()
+  key_lc <- tolower(as.character(params_df$key))
+  for (k in keys) {
+    idx <- which(key_lc == tolower(k))
+    if (length(idx) == 0L) {
+      next
+    }
+    vals <- suppressWarnings(as.numeric(params_df$value[idx]))
+    vals <- vals[is.finite(vals)]
+    if (length(vals) > 0L) {
+      out <- c(out, vals)
+    }
+  }
+  unique(out)
+}
+
 empty_heatflow_df <- function() {
   data.frame(
     "Time (seconds)" = numeric(),
@@ -888,10 +1083,11 @@ build_heatflow_df_from_series <- function(series, heat_rate_offset = NA_real_, a
   peers_idx <- integer()
 
   if (length(axis_idx) > 0) {
-    axis <- series[[axis_idx[[1]]]]
+    axis_pick <- pick_best_axis_idx(series, axis_idx)
+    axis <- series[[axis_pick]]
     axis_values <- axis$values
     peers_idx <- which(vapply(series, function(s) s$len == axis$len, logical(1)))
-    peers_idx <- setdiff(peers_idx, axis_idx[[1]])
+    peers_idx <- setdiff(peers_idx, axis_pick)
   } else if (allow_synthetic_axis) {
     lens <- vapply(series, function(s) s$len, numeric(1))
     uniq <- sort(unique(lens), decreasing = TRUE)
@@ -998,17 +1194,31 @@ main <- function() {
   payload <- load_nitc_payload(nitc)
   exp_params <- build_experiment_parameters(payload, input_filename = basename(nitc))
 
-  step200 <- find_step200_sequences(payload)
-  arith <- find_arithmetic_int_sequences(payload, min_len = 6L, step_min = 20L, step_max = 400L)
+  step200 <- find_step200_sequences(payload, min_len = 6L)
+  arith <- find_arithmetic_int_sequences(payload, min_len = 6L)
   selected <- select_start_stop(step200 = step200, arith = arith)
+  mono_int <- NULL
   if (identical(selected$source, "none")) {
-    mono_int <- find_monotonic_int_sequences(payload, n = 20L)
+    mono_int <- find_monotonic_int_sequences(payload, n = 8L)
     selected <- select_start_stop(step200 = step200, mono_int = mono_int)
   }
+  if (identical(selected$source, "none")) {
+    selected <- select_from_monotonic_sequences(mono_int)
+  }
 
-  n_inj <- if (!is.null(selected$start)) length(selected$start) else 20L
-  const_25 <- find_constant_run(payload, 2.5, min_len = max(6L, min(20L, n_inj)))
-  volumes <- if (!is.null(const_25)) const_25$values else NULL
+  n_inj <- if (!is.null(selected$start)) length(selected$start) else 0L
+  volume_min_len <- if (n_inj > 0L) max(3L, min(12L, as.integer(n_inj))) else 6L
+  volume_targets <- collect_numeric_param_values(
+    exp_params,
+    keys = c("DefaultInjVolume", "raw::injvol", "raw::injvolume", "raw::injectionvolume", "raw::defaultinjvolume")
+  )
+  volume_run <- find_best_volume_run(
+    payload,
+    expected_len = n_inj,
+    preferred_targets = volume_targets,
+    min_len = volume_min_len
+  )
+  volumes <- if (!is.null(volume_run)) volume_run$values else NULL
 
   injections_df <- data.frame(
     inj_num = integer(),

@@ -110,12 +110,36 @@ testthat::test_that("read_step1_input supports CSC and XML TA sources", {
 
     testthat::expect_true(nrow(rd$data) > 0)
     testthat::expect_true(length(rd$injections) >= 2)
-    testthat::expect_true(is.finite(rd$params$temperature_C))
+    if (identical(case$type, "ta_xml")) {
+      testthat::expect_true(is.finite(rd$params$temperature_C))
+    }
     testthat::expect_true(is.finite(rd$params$syringe_conc_mM))
     testthat::expect_true(is.finite(rd$params$cell_conc_mM))
     testthat::expect_true(is.finite(rd$params$cell_volume_mL))
-    testthat::expect_equal(rd$params$n_injections, 20L)
+    testthat::expect_equal(rd$params$n_injections, length(rd$injections) - 1L)
   }
+})
+
+testthat::test_that("read_step1_input parses bdtocb.csc with >20 injections and finite core params", {
+  testthat::skip_if_not_installed("readxl")
+
+  src <- file.path(repo_root, "Examples", "bdtocb.csc")
+  testthat::expect_true(file.exists(src))
+
+  rd <- read_step1_input(
+    file_path = src,
+    display_name = basename(src),
+    app_dir = proc_dir,
+    overwrite_ta_xlsx = TRUE
+  )
+
+  testthat::expect_true(nrow(rd$data) >= 8000)
+  testthat::expect_true(rd$params$n_injections > 20L)
+  testthat::expect_equal(rd$params$n_injections, length(rd$injections) - 1L)
+
+  testthat::expect_true(is.finite(rd$params$syringe_conc_mM))
+  testthat::expect_true(is.finite(rd$params$cell_conc_mM))
+  testthat::expect_true(is.finite(rd$params$cell_volume_mL))
 })
 
 testthat::test_that("first real injection timing is aligned across NITC/CSC/XML examples", {
@@ -145,6 +169,91 @@ testthat::test_that("first real injection timing is aligned across NITC/CSC/XML 
   testthat::expect_equal(first_real[[1]], first_real[[2]], tolerance = 1e-8)
   testthat::expect_equal(first_real[[1]], first_real[[3]], tolerance = 1e-8)
   testthat::expect_true(first_real[[1]] > 0)
+})
+
+testthat::test_that("xml converter keeps all titration rows when row count is not 20", {
+  testthat::skip_if_not_installed("readxl")
+
+  td <- file.path(tempdir(), "itcsuite-ta-xml-non20")
+  dir.create(td, recursive = TRUE, showWarnings = FALSE)
+  src <- file.path(td, "synthetic_non20.xml")
+
+  n_rows <- 25L
+  kv <- c(
+    "<MockKVP><Key>irTable</Key><Value>IR</Value></MockKVP>",
+    "<MockKVP><Key>injVolTable</Key><Value>INJ</Value></MockKVP>",
+    "<MockKVP><Key>areaTable</Key><Value>AREA</Value></MockKVP>",
+    "<MockKVP><Key>originalIRTable</Key><Value>OIR</Value></MockKVP>",
+    "<MockKVP><Key>baselineTable</Key><Value>BASE</Value></MockKVP>",
+    "<MockKVP><Key>rgraphTable</Key><Value>RGRAPH</Value></MockKVP>",
+    "<MockKVP><Key>Titrant</Key><Value>0.5</Value></MockKVP>",
+    "<MockKVP><Key>Titrate</Key><Value>0.0375</Value></MockKVP>",
+    "<MockKVP><Key>InitalTitrateVolume</Key><Value>170</Value></MockKVP>",
+    "<MockKVP><Key>Temperature</Key><Value>25</Value></MockKVP>"
+  )
+  ir <- vapply(
+    seq_len(n_rows),
+    function(i) sprintf("<IR><Start>%d</Start><Stop>%d</Stop></IR>", 100 + (i - 1L) * 200L, 100 + i * 200L),
+    character(1)
+  )
+  oir <- vapply(
+    seq_len(n_rows),
+    function(i) sprintf("<OIR><Start>%d</Start><Stop>%d</Stop></OIR>", 100 + (i - 1L) * 200L, 100 + i * 200L + 9L),
+    character(1)
+  )
+  inj <- vapply(
+    seq_len(n_rows),
+    function(i) sprintf("<INJ><InjNum>%d</InjNum><InjVolume>2.5</InjVolume></INJ>", i),
+    character(1)
+  )
+  area <- vapply(
+    seq_len(n_rows),
+    function(i) sprintf(
+      paste0(
+        "<AREA>",
+        "<Region>%d</Region>",
+        "<inj_x0020_volume_x0020__x0028__x00B5_L_x0029_>2.5</inj_x0020_volume_x0020__x0028__x00B5_L_x0029_>",
+        "<Q_x0020__x0028__x00B5_J_x0029_>%0.6f</Q_x0020__x0028__x00B5_J_x0029_>",
+        "<Corrected_x0020_Q_x0020__x0028__x00B5_J_x0029_>%0.6f</Corrected_x0020_Q_x0020__x0028__x00B5_J_x0029_>",
+        "<moles_x0020_titrant_x0020__x002F__x0020_moles_x0020_titrate>%0.6f</moles_x0020_titrant_x0020__x002F__x0020_moles_x0020_titrate>",
+        "<moles_x0020_titrant_x0020__x0028_moles_x0029_>%0.6f</moles_x0020_titrant_x0020__x0028_moles_x0029_>",
+        "<moles_x0020_titrate_x0020__x0028_moles_x0029_>%0.6f</moles_x0020_titrate_x0020__x0028_moles_x0029_>",
+        "<total_x0020_volume_x0020__x0028__x00B5_L_x0029_>%0.6f</total_x0020_volume_x0020__x0028__x00B5_L_x0029_>",
+        "</AREA>"
+      ),
+      i,
+      as.numeric(i) * 10,
+      as.numeric(i) * 9.5,
+      as.numeric(i) * 0.05,
+      as.numeric(i) * 0.001,
+      as.numeric(i) * 0.001,
+      170 + as.numeric(i) * 2.5
+    ),
+    character(1)
+  )
+
+  xml_lines <- c(
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+    "<root>",
+    kv,
+    ir,
+    oir,
+    inj,
+    area,
+    "</root>"
+  )
+  writeLines(xml_lines, src, useBytes = TRUE)
+
+  out <- convert_ta_to_xlsx(
+    source_path = src,
+    source_type = "ta_xml",
+    app_dir = proc_dir,
+    overwrite = TRUE
+  )
+  testthat::expect_true(file.exists(out))
+
+  tp <- as.data.frame(readxl::read_excel(out, sheet = "titration_points"), stringsAsFactors = FALSE)
+  testthat::expect_equal(nrow(tp), n_rows)
 })
 
 testthat::test_that("nitc selector does not hardcode first injection to 300", {

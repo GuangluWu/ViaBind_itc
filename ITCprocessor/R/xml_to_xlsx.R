@@ -294,7 +294,40 @@ build_titration_df <- function(rows_by_tag, ir_table, orig_ir_table, inj_table, 
   do.call(rbind, rows)
 }
 
-choose_heatflow_table <- function(exp_kvp_tag, rows_by_tag) {
+choose_heatflow_table <- function(exp_kvp_tag, rows_by_tag, schema_defs = list(), related_tables = character()) {
+  score_tag <- function(tag) {
+    rows <- rows_by_tag[[tag]]
+    if (is.null(rows) || length(rows) == 0L) {
+      return(-Inf)
+    }
+    score <- as.numeric(length(rows))
+    low_tag <- tolower(tag)
+    if (grepl("(kvp|const)$", low_tag, perl = TRUE)) {
+      score <- score - 500
+    }
+    if (tag %in% related_tables) {
+      score <- score - 250
+    }
+
+    raw_cols <- schema_defs[[tag]]
+    if (is.null(raw_cols) || length(raw_cols) == 0L) {
+      raw_cols <- xml_name(xml_children(rows[[1]]))
+    }
+    dec_cols <- tolower(decode_encoded_name(raw_cols))
+    if (length(dec_cols) > 0L) {
+      if (any(grepl("time|second|sec", dec_cols, perl = TRUE))) {
+        score <- score + 400
+      }
+      if (any(grepl("heat|power|rate|q\\s*\\(|u?j|u?cal", dec_cols, perl = TRUE))) {
+        score <- score + 400
+      }
+      if (any(grepl("inj|region|moles|volume", dec_cols, perl = TRUE))) {
+        score <- score - 150
+      }
+    }
+    score
+  }
+
   if (!is.null(exp_kvp_tag) && endsWith(exp_kvp_tag, "KVP")) {
     candidate <- sub("KVP$", "", exp_kvp_tag)
     if (candidate %in% names(rows_by_tag)) {
@@ -304,8 +337,9 @@ choose_heatflow_table <- function(exp_kvp_tag, rows_by_tag) {
   if (length(rows_by_tag) == 0) {
     return(NULL)
   }
-  counts <- vapply(rows_by_tag, length, integer(1))
-  names(counts)[which.max(counts)]
+  tags <- names(rows_by_tag)
+  scores <- vapply(tags, score_tag, numeric(1))
+  tags[[which.max(scores)]]
 }
 
 build_heatflow_df <- function(rows_by_tag, table_tag, schema_defs) {
@@ -422,7 +456,14 @@ main <- function() {
     }
   }
 
-  heatflow_table <- choose_heatflow_table(exp_kvp_tag, rows_by_tag)
+  related_tables <- unique(unlist(related_raw, use.names = FALSE))
+  related_tables <- related_tables[!is.na(related_tables) & nzchar(related_tables)]
+  heatflow_table <- choose_heatflow_table(
+    exp_kvp_tag,
+    rows_by_tag,
+    schema_defs = schema_defs,
+    related_tables = related_tables
+  )
   heatflow_df <- build_heatflow_df(rows_by_tag, heatflow_table, schema_defs)
 
   titration_df <- build_titration_df(

@@ -783,7 +783,7 @@ server <- function(input, output, session) {
     showNotification(
       sprintf(tr("ta_parse_hint", lang()), ext),
       type = "message",
-      duration = 10
+      duration = 6
     )
     invisible(TRUE)
   }

@@ -137,10 +137,25 @@ is_index_axis <- function(values) {
   if (!any(finite)) {
     return(FALSE)
   }
-  good <- sum(abs(diffs[finite] - 1.0) < 1e-9)
-  total <- sum(finite)
-  starts_near_zero <- abs(check[[1]]) < 2.0
-  starts_near_zero && (good / total) > 0.995
+  unit_like <- abs(diffs[finite] - 1.0) < 1e-6
+  good_ratio <- mean(unit_like)
+  mono_ratio <- mean(diffs[finite] > 0)
+  starts_on_integer_grid <- is.finite(check[[1]]) && abs(check[[1]] - round(check[[1]])) < 1e-3
+  starts_on_integer_grid && good_ratio > 0.98 && mono_ratio > 0.995
+}
+
+pick_best_axis_idx <- function(series, axis_idx) {
+  if (length(axis_idx) == 0L) {
+    return(NA_integer_)
+  }
+  if (length(axis_idx) == 1L) {
+    return(axis_idx[[1]])
+  }
+  lens <- vapply(series, function(s) s$len, numeric(1))
+  starts <- vapply(series, function(s) s$start, numeric(1))
+  peer_cnt <- vapply(axis_idx, function(i) as.integer(sum(lens == lens[[i]]) - 1L), integer(1))
+  ord <- order(-peer_cnt, -lens[axis_idx], starts[axis_idx])
+  axis_idx[[ord[[1]]]]
 }
 
 extract_heatflow_df <- function(payload) {
@@ -165,9 +180,10 @@ extract_heatflow_df <- function(payload) {
       check.names = FALSE
     ))
   }
-  axis <- series[[axis_idx[[1]]]]
+  axis_pick <- pick_best_axis_idx(series, axis_idx)
+  axis <- series[[axis_pick]]
   peers_idx <- which(vapply(series, function(s) s$len == axis$len, logical(1)))
-  peers_idx <- setdiff(peers_idx, axis_idx[[1]])
+  peers_idx <- setdiff(peers_idx, axis_pick)
   if (length(peers_idx) == 0) {
     return(data.frame(
       "Time (seconds)" = axis$values,
@@ -228,40 +244,131 @@ dedup_seq_by_key <- function(seq_list, key_fn) {
   out
 }
 
-find_step200_sequences <- function(data) {
+find_step200_sequences <- function(data, min_len = 6L) {
   out <- list()
-  n <- 20L
+  tol <- 1e-9
   for (phase in 0:7) {
     vals <- read_doubles_by_phase(data, phase)
-    if (length(vals) < n) {
+    if (length(vals) < min_len) {
       next
     }
-    for (start_idx in seq_len(length(vals) - n + 1L)) {
-      s <- vals[start_idx:(start_idx + n - 1L)]
-      if (!all(is.finite(s))) {
+
+    i <- 1L
+    while (i < length(vals)) {
+      a <- vals[[i]]
+      b <- vals[[i + 1L]]
+      if (!(is_intish(a, tol) && is_intish(b, tol))) {
+        i <- i + 1L
         next
       }
-      if (!all(vapply(s, is_intish, logical(1)))) {
+      d <- b - a
+      if (!is.finite(d) || abs(d - 200.0) > tol) {
+        i <- i + 1L
         next
       }
-      d <- diff(s)
-      if (!all(abs(d - 200.0) < 1e-9)) {
+
+      j <- i + 1L
+      while (j < length(vals)) {
+        x1 <- vals[[j]]
+        x2 <- vals[[j + 1L]]
+        if (!(is_intish(x1, tol) && is_intish(x2, tol))) {
+          break
+        }
+        dd <- x2 - x1
+        if (!is.finite(dd) || abs(dd - 200.0) > tol) {
+          break
+        }
+        j <- j + 1L
+      }
+
+      run_vals <- as.numeric(round(vals[i:j]))
+      run_len <- length(run_vals)
+      if (!(run_len >= min_len && run_vals[[1]] >= 0 && run_vals[[run_len]] >= run_vals[[1]])) {
+        i <- j + 1L
         next
       }
-      if (s[[1]] < 0 || s[[n]] > 10000) {
-        next
-      }
+
       out[[length(out) + 1L]] <- list(
         phase = phase,
-        start = phase + (start_idx - 1L) * 8L,
-        values = s
+        start = phase + (i - 1L) * 8L,
+        len = run_len,
+        step = 200.0,
+        values = run_vals
       )
+
+      i <- j + 1L
     }
   }
   dedup_seq_by_key(out, function(x) paste(format(round(x$values, 9), scientific = FALSE, trim = TRUE), collapse = ","))
 }
 
-find_monotonic_int_sequences <- function(data, n = 20L) {
+find_arithmetic_int_sequences <- function(data, min_len = 8L, step_min = 1L, step_max = 10000L) {
+  out <- list()
+  tol <- 1e-9
+
+  for (phase in 0:7) {
+    vals <- read_doubles_by_phase(data, phase)
+    if (length(vals) < min_len) {
+      next
+    }
+
+    i <- 1L
+    while (i < length(vals)) {
+      v1 <- vals[[i]]
+      v2 <- vals[[i + 1L]]
+      if (!(is_intish(v1, tol) && is_intish(v2, tol))) {
+        i <- i + 1L
+        next
+      }
+
+      d_raw <- v2 - v1
+      d <- round(d_raw)
+      if (!is.finite(d) || abs(d) > 1e6) {
+        i <- i + 1L
+        next
+      }
+      if (d < step_min || d > step_max || abs(d_raw - d) > tol) {
+        i <- i + 1L
+        next
+      }
+
+      j <- i + 1L
+      while (j < length(vals)) {
+        a <- vals[[j]]
+        b <- vals[[j + 1L]]
+        if (!(is_intish(a, tol) && is_intish(b, tol))) {
+          break
+        }
+        dd <- b - a
+        if (!is.finite(dd)) {
+          break
+        }
+        if (abs(dd - d) > tol) {
+          break
+        }
+        j <- j + 1L
+      }
+
+      run_vals <- as.numeric(round(vals[i:j]))
+      run_len <- length(run_vals)
+      if (run_len >= min_len && run_vals[[1]] >= 0 && run_vals[[run_len]] >= run_vals[[1]]) {
+        out[[length(out) + 1L]] <- list(
+          phase = phase,
+          start = phase + (i - 1L) * 8L,
+          step = d,
+          len = run_len,
+          values = run_vals
+        )
+      }
+
+      i <- j + 1L
+    }
+  }
+
+  dedup_seq_by_key(out, function(x) paste(c(x$step, x$values), collapse = ","))
+}
+
+find_monotonic_int_sequences <- function(data, n = 8L) {
   out <- list()
   for (phase in 0:7) {
     vals <- read_doubles_by_phase(data, phase)
@@ -297,7 +404,7 @@ find_monotonic_int_sequences <- function(data, n = 20L) {
   dedup_seq_by_key(out, function(x) paste(x$values, collapse = ","))
 }
 
-find_constant_sequences <- function(data, target, n = 20L) {
+find_constant_sequences <- function(data, target, n = 6L) {
   out <- list()
   for (phase in 0:7) {
     vals <- read_doubles_by_phase(data, phase)
@@ -319,6 +426,142 @@ find_constant_sequences <- function(data, target, n = 20L) {
     }
   }
   dedup_seq_by_key(out, function(x) paste(format(round(x$values, 12), scientific = FALSE, trim = TRUE), collapse = ","))
+}
+
+find_constant_run <- function(data, target, tol = 1e-12, min_len = 6L) {
+  best <- NULL
+  for (phase in 0:7) {
+    vals <- read_doubles_by_phase(data, phase)
+    if (length(vals) == 0) {
+      next
+    }
+    i <- 1L
+    while (i <= length(vals)) {
+      if (!(is.finite(vals[[i]]) && abs(vals[[i]] - target) < tol)) {
+        i <- i + 1L
+        next
+      }
+      j <- i
+      while (j < length(vals) && is.finite(vals[[j + 1L]]) && abs(vals[[j + 1L]] - target) < tol) {
+        j <- j + 1L
+      }
+      run_len <- j - i + 1L
+      if (run_len >= min_len) {
+        run_vals <- vals[i:j]
+        if (is.null(best) || run_len > best$len) {
+          best <- list(
+            phase = phase,
+            start = phase + (i - 1L) * 8L,
+            len = run_len,
+            values = run_vals
+          )
+        }
+      }
+      i <- j + 1L
+    }
+  }
+  best
+}
+
+find_best_volume_run <- function(
+  data,
+  expected_len = NA_integer_,
+  preferred_targets = numeric(),
+  tol = 1e-12,
+  min_len = 3L,
+  value_min = 0.01,
+  value_max = 100.0
+) {
+  min_len <- max(1L, as.integer(min_len))
+  expected_len <- suppressWarnings(as.integer(expected_len))
+  has_expected <- is.finite(expected_len) && expected_len > 0L
+
+  candidates <- list()
+  add_candidate <- function(item, preferred = FALSE) {
+    if (is.null(item) || is.null(item$values) || length(item$values) < min_len) {
+      return()
+    }
+    v <- suppressWarnings(as.numeric(item$values[[1]]))
+    if (!is.finite(v) || v <= 0 || v < value_min || v > value_max) {
+      return()
+    }
+    candidates[[length(candidates) + 1L]] <<- list(
+      phase = item$phase,
+      start = item$start,
+      len = as.integer(length(item$values)),
+      value = v,
+      values = as.numeric(item$values),
+      preferred = isTRUE(preferred)
+    )
+  }
+
+  pref <- suppressWarnings(as.numeric(preferred_targets))
+  pref <- unique(pref[is.finite(pref) & pref > 0 & pref >= value_min & pref <= value_max])
+  if (length(pref) > 0L) {
+    for (target in pref) {
+      run <- find_constant_run(data, target = target, tol = tol, min_len = min_len)
+      if (!is.null(run)) {
+        add_candidate(run, preferred = TRUE)
+      }
+    }
+  }
+
+  for (phase in 0:7) {
+    vals <- read_doubles_by_phase(data, phase)
+    if (length(vals) == 0L) {
+      next
+    }
+    i <- 1L
+    while (i <= length(vals)) {
+      v <- vals[[i]]
+      if (!(is.finite(v) && v > 0 && v >= value_min && v <= value_max)) {
+        i <- i + 1L
+        next
+      }
+      j <- i
+      while (j < length(vals) && is.finite(vals[[j + 1L]]) && abs(vals[[j + 1L]] - v) < tol) {
+        j <- j + 1L
+      }
+      run_len <- j - i + 1L
+      if (run_len >= min_len) {
+        add_candidate(
+          list(
+            phase = phase,
+            start = phase + (i - 1L) * 8L,
+            values = vals[i:j]
+          ),
+          preferred = FALSE
+        )
+      }
+      i <- j + 1L
+    }
+  }
+
+  if (length(candidates) == 0L) {
+    return(NULL)
+  }
+
+  lens <- vapply(candidates, function(x) as.numeric(x$len), numeric(1))
+  starts <- vapply(candidates, function(x) as.numeric(x$start), numeric(1))
+  preferred_flag <- vapply(candidates, function(x) isTRUE(x$preferred), logical(1))
+  len_delta <- if (has_expected) abs(lens - expected_len) else rep(0, length(lens))
+  score <- lens - 2 * len_delta + ifelse(preferred_flag, 3, 0)
+  ord <- order(-score, -as.integer(preferred_flag), len_delta, -lens, starts)
+  candidates[[ord[[1]]]]
+}
+
+score_widths <- function(widths, min_coverage = 0.6) {
+  valid <- is.finite(widths) & widths > 0
+  n_valid <- sum(valid)
+  needed <- max(1L, ceiling(length(widths) * min_coverage))
+  if (n_valid < needed) {
+    return(list(score = -Inf, n_valid = n_valid, cv = Inf))
+  }
+  w <- widths[valid]
+  med <- stats::median(w)
+  cv <- if (length(w) >= 2L && is.finite(med) && med > 0) stats::sd(w) / med else 0
+  score <- n_valid - min(cv, 5)
+  list(score = score, n_valid = n_valid, cv = cv)
 }
 
 derive_step_sequence_pair <- function(step_sequences) {
@@ -348,10 +591,10 @@ derive_step_sequence_pair <- function(step_sequences) {
       if (!all(b > a)) next
 
       widths <- b - a
-      in_range <- widths >= 20 & widths <= 400
-      score <- sum(in_range)
-      if (score < ceiling(length(widths) * 0.6)) next
-      if (stats::sd(widths) < 1e-9) score <- score + 4
+      ws <- score_widths(widths, min_coverage = 0.6)
+      if (!is.finite(ws$score)) next
+      score <- ws$score
+      if (is.finite(ws$cv) && ws$cv < 1e-9) score <- score + 4
       score <- score + length(a) * 0.5
 
       better <- FALSE
@@ -386,45 +629,150 @@ derive_step_sequence_pair <- function(step_sequences) {
   )
 }
 
-select_start_stop <- function(step200, mono_int) {
+is_sequence_extension <- function(candidate, base, tol = 1e-9) {
+  if (is.null(base)) {
+    return(TRUE)
+  }
+  if (length(candidate) < length(base)) {
+    return(FALSE)
+  }
+  all(abs(candidate[seq_len(length(base))] - base) <= tol)
+}
+
+select_start_stop <- function(step200, mono_int = NULL, arith = NULL) {
   step_pick <- derive_step_sequence_pair(step200)
-  start <- step_pick$start
-  original_stop <- step_pick$original_stop
-  if (is.null(start)) {
-    return(list(start = NULL, stop = NULL, original_stop = NULL, source = "none"))
+  preferred_start <- step_pick$start
+  preferred_original_stop <- step_pick$original_stop
+
+  if (!is.null(arith) && length(arith) > 0L) {
+    cand_idx <- seq_along(arith)
+    if (!is.null(preferred_start)) {
+      compat <- which(vapply(
+        arith,
+        function(x) is_sequence_extension(as.numeric(x$values), preferred_start),
+        logical(1)
+      ))
+      cand_idx <- compat
+    }
+    if (length(cand_idx) > 0L) {
+      lens <- vapply(arith[cand_idx], function(x) x$len, numeric(1))
+      starts <- vapply(arith[cand_idx], function(x) x$values[[1]], numeric(1))
+      steps <- vapply(arith[cand_idx], function(x) x$step, numeric(1))
+      pref_step <- if (!is.null(preferred_start) && length(preferred_start) >= 2L) {
+        suppressWarnings(stats::median(diff(preferred_start)))
+      } else {
+        NA_real_
+      }
+      step_delta <- if (is.finite(pref_step)) abs(steps - pref_step) else abs(steps - 200.0)
+      ord <- order(-lens, step_delta, starts)
+      best_arith <- arith[[cand_idx[[ord[[1]]]]]]
+
+      start <- as.numeric(best_arith$values)
+      stop <- start + as.numeric(best_arith$step)
+      source <- "arithmetic_derived"
+
+      same_shape_idx <- which(vapply(
+        arith,
+        function(x) x$len == best_arith$len && x$step == best_arith$step,
+        logical(1)
+      ))
+      if (length(same_shape_idx) > 0L) {
+        best_pair <- NULL
+        best_pair_score <- -Inf
+        for (i in same_shape_idx) {
+          cand <- as.numeric(arith[[i]]$values)
+          if (all(cand == start) || !all(cand > start)) {
+            next
+          }
+          widths <- cand - start
+          ws <- score_widths(widths, min_coverage = 0.6)
+          if (!is.finite(ws$score)) {
+            next
+          }
+          score <- ws$score + length(start) * 0.25
+          if (is.finite(ws$cv) && ws$cv < 1e-9) {
+            score <- score + 1
+          }
+          if (score > best_pair_score) {
+            best_pair_score <- score
+            best_pair <- cand
+          }
+        }
+        if (!is.null(best_pair) && best_pair_score > 0) {
+          stop <- best_pair
+          source <- "arithmetic_pair"
+        }
+      }
+
+      return(list(
+        start = start,
+        stop = stop,
+        original_stop = stop,
+        source = source
+      ))
+    }
   }
 
+  if (is.null(preferred_start)) {
+    return(list(start = NULL, stop = NULL, original_stop = NULL, source = "none"))
+  }
+  start <- preferred_start
+
   best_stop <- NULL
-  best_score <- -1L
-  for (cand_item in mono_int) {
-    cand <- cand_item$values
-    if (length(cand) != length(start)) {
-      next
-    }
-    if (all(cand == start)) {
-      next
-    }
-    widths <- cand - start
-    ok <- widths[widths >= 20 & widths <= 400]
-    score <- length(ok)
-    if (length(unique(widths)) > 5) {
-      score <- score + 2L
-    }
-    if (score > best_score) {
-      best_score <- score
-      best_stop <- cand
+  best_score <- -Inf
+  best_support <- 0L
+  if (!is.null(mono_int)) {
+    for (cand_item in mono_int) {
+      cand <- cand_item$values
+      if (length(cand) != length(start)) {
+        next
+      }
+      if (all(cand == start)) {
+        next
+      }
+      widths <- cand - start
+      ws <- score_widths(widths, min_coverage = 0.5)
+      if (!is.finite(ws$score)) {
+        next
+      }
+      score <- ws$score
+      if (length(unique(round(widths[is.finite(widths)], 6))) > 5) {
+        score <- score + 2L
+      }
+      support <- as.integer(ws$n_valid)
+      if (support > best_support || (support == best_support && score > best_score)) {
+        best_support <- support
+        best_score <- score
+        best_stop <- cand
+      }
     }
   }
-  if (!is.null(best_stop) && best_score >= 12) {
-    orig <- if (!is.null(original_stop)) original_stop else (start + 200.0)
+  if (!is.null(best_stop) && best_support >= max(3L, ceiling(length(start) * 0.35))) {
+    orig <- if (!is.null(preferred_original_stop)) preferred_original_stop else (start + 200.0)
     return(list(start = start, stop = best_stop, original_stop = orig, source = "monotonic_int_match"))
   }
 
-  if (!is.null(original_stop)) {
-    return(list(start = start, stop = original_stop, original_stop = original_stop, source = "step200_fallback"))
+  if (!is.null(preferred_original_stop)) {
+    return(list(start = start, stop = preferred_original_stop, original_stop = preferred_original_stop, source = "step200_fallback"))
   }
   derived <- start + 200.0
   list(start = start, stop = derived, original_stop = derived, source = "derived_plus_200")
+}
+
+select_from_monotonic_sequences <- function(mono_int) {
+  if (is.null(mono_int) || length(mono_int) == 0L) {
+    return(list(start = NULL, stop = NULL, original_stop = NULL, source = "none"))
+  }
+  lens <- vapply(mono_int, function(x) length(x$values), integer(1))
+  starts <- vapply(mono_int, function(x) x$values[[1]], numeric(1))
+  ord <- order(-lens, starts)
+  best <- mono_int[[ord[[1]]]]
+  start <- as.numeric(best$values)
+  ds <- diff(start)
+  ds <- ds[is.finite(ds) & ds > 0]
+  step <- if (length(ds) > 0L) stats::median(ds) else 200.0
+  stop <- start + step
+  list(start = start, stop = stop, original_stop = stop, source = "monotonic_derived")
 }
 
 extract_ascii_tokens <- function(data, min_len = 3L) {
@@ -506,72 +854,45 @@ extract_parameter_tokens_dense <- function(payload) {
     }
     if (is.na(idx_root)) idx_root <- root_candidates[[1]]
   }
-  idx_end_candidates <- which(coarse_text == "2024/10/87:46:01ZOHTRCGVDC" & seq_along(coarse_text) > idx_root)
-  idx_end <- if (length(idx_end_candidates) > 0) idx_end_candidates[[1]] else NA_integer_
-  if (is.na(idx_root) || is.na(idx_end)) return(character())
+  if (is.na(idx_root)) return(character())
+
+  idx_end <- length(coarse)
+  h4_idx <- which(startsWith(coarse_text, "H4sIA") & seq_along(coarse_text) > idx_root)
+  if (length(h4_idx) > 0L) {
+    idx_end <- max(idx_root, h4_idx[[1]] - 1L)
+  } else {
+    serialized_idx <- which(
+      grepl("CSCAnalysis, Version=|^System\\.Collections\\.", coarse_text, perl = TRUE) &
+        seq_along(coarse_text) > idx_root
+    )
+    if (length(serialized_idx) > 0L) {
+      idx_end <- max(idx_root, serialized_idx[[1]] - 1L)
+    }
+  }
 
   start <- max(1L, coarse[[idx_root]]$start - 40L)
   end <- min(length(payload), coarse[[idx_end]]$end + 40L)
   seg <- payload[start:end]
-  dense <- extract_ascii_runs(seg, min_len = 1L)
+  dense <- extract_ascii_runs(seg, min_len = 3L)
   vapply(dense, function(x) x$text, character(1))
 }
 
-extract_experiment_parameters <- function(payload) {
-  runs <- extract_parameter_tokens_dense(payload)
-  if (length(runs) == 0) return(data.frame())
-  i_report <- match("ReportViews", runs)
-  if (is.na(i_report)) return(data.frame())
-
-  values <- runs[(i_report + 1L):length(runs)]
-  # Trim framing noise from serialized stream.
-  while (length(values) > 0 && values[[1]] %in% c("\"", "0")) {
-    values <- values[-1L]
-  }
-  h4_idx <- which(startsWith(values, "H4sIA"))
-  if (length(h4_idx) > 0) {
-    values <- values[seq_len(h4_idx[[1]] - 1L)]
+extract_parameter_key_value_tokens <- function(runs) {
+  if (length(runs) == 0L) {
+    return(list(keys = character(), values = character()))
   }
 
-  rows <- list()
-  add_row <- function(key, value, confidence = "high", note = "") {
-    rows[[length(rows) + 1L]] <<- list(
-      key = key,
-      value = value,
-      confidence = confidence,
-      note = note
-    )
-  }
-
-  ptr <- 1L
-  if (ptr <= length(values)) {
-    add_row("units", values[[ptr]], "high")
-    ptr <- ptr + 1L
-  }
-  if (ptr <= length(values) && grepl("^-?\\d+$", values[[ptr]], perl = TRUE)) {
-    add_row("calUnitsColumnIndex", values[[ptr]], "high")
-    ptr <- ptr + 1L
-  }
-  if (ptr <= length(values)) {
-    add_row("XColumnName", values[[ptr]], "high")
-    ptr <- ptr + 1L
-  }
-  if ((ptr + 1L) <= length(values)) {
-    add_row("YColumnName", paste0(values[[ptr]], values[[ptr + 1L]]), "high", "Reconstructed from split tokens")
-    ptr <- ptr + 2L
-  }
-
-  table_keys <- c("areaTable", "baselineTable", "irTable", "originalIRTable", "injVolTable")
-  for (k in table_keys) {
-    if (ptr <= length(values) && grepl(TOKEN_DATE_RE, values[[ptr]], perl = TRUE)) {
-      add_row(k, values[[ptr]], "high")
-      ptr <- ptr + 1L
-    } else {
-      add_row(k, "", "low", "Not found in expected order")
-    }
-  }
-
-  ordered_keys <- c(
+  known_keys <- c(
+    "root",
+    "units",
+    "calUnitsColumnIndex",
+    "XColumnName",
+    "YColumnName",
+    "areaTable",
+    "baselineTable",
+    "irTable",
+    "originalIRTable",
+    "injVolTable",
     "IsUnfilteredData",
     "Titrant",
     "Titrate",
@@ -597,83 +918,183 @@ extract_experiment_parameters <- function(payload) {
     "TotalContInjVolume",
     "Version",
     "ConstantSubtraction",
-    "BlankSubtractType"
+    "BlankSubtractType",
+    "bUseDefaultInjVolume",
+    "rgraphTable",
+    "ModelFitSettings",
+    "bBaselineExists",
+    "bValidAnalysisForBatch",
+    "bValidExperimentParams",
+    "bFitClosenessCriteriaMet",
+    "FitModels",
+    "ConfidenceSettings",
+    "NumModels",
+    "ITCResultsLog",
+    "ReportViews"
   )
 
-  validators <- list(
-    IsUnfilteredData = "^(true|false)$",
-    Titrant = "^-?\\d+(?:\\.\\d+)?$",
-    Titrate = "^-?\\d+(?:\\.\\d+)?$",
-    InitalTitrateVolume = "^-?\\d+(?:\\.\\d+)?$",
-    Temperature = "^-?\\d+(?:\\.\\d+)?$",
-    HeatRateOffset = "^-?\\d+(?:\\.\\d+)?$",
-    starttime = "^\\d{10,20}$",
-    equilseconds = "^-?\\d+$",
-    integrationRegionStart = "^-?\\d+$",
-    integrationRegionWidth = "^-?\\d+$",
-    integrationRegionInterval = "^-?\\d+$",
-    numRegions = "^-?\\d+$",
-    AutoCreateBaseline = "^(true|false)$",
-    UserName = "^[A-Za-z0-9_.-]{2,}$",
-    StirRate = "^-?\\d+(?:\\.\\d+)?$",
-    Comments = ".*",
-    ExothermUp = "^(true|false)$",
-    ContinousTitration = "^(true|false)$",
-    FirstInjStartTime = "^-?\\d+(?:\\.\\d+)?$",
-    analysisType = "^[A-Za-z][A-Za-z0-9_-]*$",
-    PartiallyFilledCell = "^(true|false)$",
-    DefaultInjVolume = "^-?\\d+(?:\\.\\d+)?$",
-    TotalContInjVolume = "^-?\\d+(?:\\.\\d+)?$",
-    Version = "^-?\\d+(?:\\.\\d+)?$",
-    ConstantSubtraction = "^-?\\d+(?:\\.\\d+)?$",
-    BlankSubtractType = "^[A-Za-z][A-Za-z0-9_-]*$"
-  )
-
-  for (k in ordered_keys) {
-    if (ptr > length(values)) {
-      add_row(k, "", "low", "No remaining token")
-      next
-    }
-    tok <- values[[ptr]]
-    if (k == "Comments" &&
-      (grepl("^(true|false)$", tok, ignore.case = TRUE, perl = TRUE) ||
-        grepl("^-?\\d+(?:\\.\\d+)?$", tok, perl = TRUE))) {
-      add_row(k, "", "medium", "Likely empty in source")
-      next
-    }
-    if (k == "Temperature") {
-      if (!(grepl("^-?\\d+(?:\\.\\d+)?$", tok, perl = TRUE) && as.numeric(tok) >= -5 && as.numeric(tok) <= 120)) {
-        add_row(k, "", "low", "Missing or not in expected range")
-        next
-      }
-    }
-    if (k == "numRegions" && !grepl("^-?\\d+$", tok, perl = TRUE)) {
-      add_row(k, "", "low", "Missing integer token")
-      next
-    }
-    pat <- validators[[k]]
-    if (grepl(pat, tok, perl = TRUE, ignore.case = grepl("true|false", pat))) {
-      add_row(k, tok, "high")
-      ptr <- ptr + 1L
-    } else {
-      add_row(k, "", "low", "Token did not match expected type")
-    }
+  i_root <- match("root", runs)
+  if (is.na(i_root)) {
+    return(list(keys = character(), values = character()))
   }
 
-  if (ptr <= length(values) && grepl("^(true|false)$", values[[ptr]], ignore.case = TRUE, perl = TRUE)) {
-    add_row("bUseDefaultInjVolume", values[[ptr]], "high")
-  } else {
-    add_row("bUseDefaultInjVolume", "", "low", "Not available in parsed value stream")
+  is_key_like <- function(tok) {
+    tok %in% known_keys || grepl("^[A-Za-z][A-Za-z0-9_.-]{1,80}$", tok, perl = TRUE)
+  }
+  is_value_like <- function(tok) {
+    startsWith(tok, "H4sIA") ||
+      grepl(TOKEN_DATE_RE, tok, perl = TRUE) ||
+      grepl("^(true|false)$", tok, ignore.case = TRUE, perl = TRUE) ||
+      grepl("^-?\\d+(?:\\.\\d+)?$", tok, perl = TRUE)
   }
 
-  tail_date <- ""
-  for (v in values) {
-    if (grepl(TOKEN_DATE_RE, v, perl = TRUE) && grepl("ZOHTRCGVDC$", v, perl = TRUE)) {
-      tail_date <- v
+  i <- i_root
+  keys <- c("root")
+  i <- i + 1L
+  while (i <= length(runs)) {
+    tok <- runs[[i]]
+    if (!is_key_like(tok)) {
       break
     }
+    # After enough keys are seen, a value-like unknown token likely marks value stream start.
+    if (length(keys) >= 8L && !(tok %in% known_keys) && is_value_like(tok)) {
+      break
+    }
+    keys <- c(keys, tok)
+    i <- i + 1L
   }
-  add_row("rgraphTable", tail_date, if (nchar(tail_date) > 0) "medium" else "low")
+  values <- if (i <= length(runs)) runs[i:length(runs)] else character()
+  list(keys = keys, values = values)
+}
+
+extract_experiment_parameters <- function(payload) {
+  runs <- extract_parameter_tokens_dense(payload)
+  if (length(runs) == 0) return(data.frame())
+  key_value <- extract_parameter_key_value_tokens(runs)
+  if (length(key_value$values) == 0L || length(key_value$keys) <= 1L) return(data.frame())
+  values <- key_value$values
+  # Trim framing noise from serialized stream.
+  while (length(values) > 0 && values[[1]] %in% c("\"", "0")) {
+    values <- values[-1L]
+  }
+  h4_idx <- which(startsWith(values, "H4sIA"))
+  if (length(h4_idx) > 0) {
+    values <- values[seq_len(h4_idx[[1]] - 1L)]
+  }
+
+  rows <- list()
+  add_row <- function(key, value, confidence = "high", note = "") {
+    rows[[length(rows) + 1L]] <<- list(
+      key = key,
+      value = value,
+      confidence = confidence,
+      note = note
+    )
+  }
+
+  key_order <- key_value$keys[key_value$keys != "root"]
+  key_order <- key_order[!duplicated(key_order)]
+
+  infer_type <- function(key) {
+    k <- tolower(key)
+    if (grepl("table$", k, perl = TRUE)) return("date")
+    if (k %in% c("units", "xcolumnname", "ycolumnname", "comments", "username", "analysistype", "blanksubtracttype", "reportviews")) return("text")
+    if (k == "starttime") return("ticks")
+    if (k %in% c("calunitscolumnindex", "equilseconds", "integrationregionstart", "integrationregionwidth", "integrationregioninterval", "numregions")) return("int")
+    if (grepl("^(is|auto|b|exotherm|continous|partially)", k, perl = TRUE)) return("bool")
+    if (grepl("volume|rate|temp|offset|titrant|titrate|subtraction|firstinjstarttime|version", k, perl = TRUE)) return("num")
+    "text"
+  }
+
+  token_matches <- function(tok, type, key = "") {
+    if (is.null(tok) || is.na(tok) || identical(tok, "") || startsWith(tok, "H4sIA")) {
+      return(FALSE)
+    }
+    if (identical(type, "date")) return(grepl(TOKEN_DATE_RE, tok, perl = TRUE))
+    if (identical(type, "bool")) return(grepl("^(true|false)$", tok, ignore.case = TRUE, perl = TRUE))
+    if (identical(type, "ticks")) return(grepl("^\\d{10,20}$", tok, perl = TRUE))
+    if (identical(type, "int")) return(grepl("^-?\\d+$", tok, perl = TRUE))
+    if (identical(type, "num")) {
+      ok <- grepl("^-?\\d+(?:\\.\\d+)?$", tok, perl = TRUE)
+      if (!ok) return(FALSE)
+      if (identical(key, "Temperature")) {
+        v <- suppressWarnings(as.numeric(tok))
+        return(is.finite(v) && v >= -20 && v <= 80)
+      }
+      return(TRUE)
+    }
+    TRUE
+  }
+
+  ptr <- 1L
+  pull_value <- function(key, ptr0) {
+    if (ptr0 > length(values)) {
+      return(list(value = "", ptr = ptr0, confidence = "low", note = "No remaining token"))
+    }
+    type <- infer_type(key)
+    tok <- values[[ptr0]]
+
+    if (identical(key, "YColumnName") && (ptr0 + 1L) <= length(values)) {
+      joined <- paste0(values[[ptr0]], values[[ptr0 + 1L]])
+      if (grepl("Heat Rate", joined, ignore.case = TRUE, perl = TRUE) || grepl("\\(.*\\)", joined, perl = TRUE)) {
+        return(list(value = joined, ptr = ptr0 + 2L, confidence = "high", note = "Reconstructed from split tokens"))
+      }
+    }
+
+    if (token_matches(tok, type, key = key)) {
+      return(list(value = tok, ptr = ptr0 + 1L, confidence = "high", note = ""))
+    }
+
+    lookahead <- if (ptr0 < length(values)) {
+      seq.int(ptr0 + 1L, min(length(values), ptr0 + 6L))
+    } else {
+      integer()
+    }
+    hit <- NA_integer_
+    if (length(lookahead) > 0L) {
+      for (j in lookahead) {
+        if (token_matches(values[[j]], type, key = key)) {
+          hit <- j
+          break
+        }
+      }
+    }
+    if (!is.na(hit)) {
+      return(list(
+        value = values[[hit]],
+        ptr = hit + 1L,
+        confidence = "medium",
+        note = sprintf("Matched with lookahead offset %d", hit - ptr0)
+      ))
+    }
+
+    if (identical(tolower(key), "comments")) {
+      return(list(value = "", ptr = ptr0, confidence = "medium", note = "Likely empty in source"))
+    }
+
+    if (identical(type, "text") && !grepl("^(true|false)$", tok, ignore.case = TRUE, perl = TRUE)) {
+      return(list(value = tok, ptr = ptr0 + 1L, confidence = "medium", note = "Accepted as free text"))
+    }
+
+    list(value = "", ptr = ptr0, confidence = "low", note = "Token did not match expected type")
+  }
+
+  for (k in key_order) {
+    taken <- pull_value(k, ptr)
+    add_row(k, taken$value, taken$confidence, taken$note)
+    ptr <- taken$ptr
+  }
+
+  if (!("rgraphTable" %in% key_order)) {
+    tail_date <- ""
+    for (v in values) {
+      if (grepl(TOKEN_DATE_RE, v, perl = TRUE)) {
+        tail_date <- v
+        break
+      }
+    }
+    add_row("rgraphTable", tail_date, if (nchar(tail_date) > 0) "medium" else "low")
+  }
 
   data.frame(
     key = vapply(rows, function(x) x$key, character(1)),
@@ -682,6 +1103,26 @@ extract_experiment_parameters <- function(payload) {
     note = vapply(rows, function(x) x$note, character(1)),
     stringsAsFactors = FALSE
   )
+}
+
+collect_numeric_param_values <- function(params_df, keys) {
+  if (is.null(params_df) || nrow(params_df) == 0L || length(keys) == 0L) {
+    return(numeric())
+  }
+  out <- numeric()
+  key_lc <- tolower(as.character(params_df$key))
+  for (k in keys) {
+    idx <- which(key_lc == tolower(k))
+    if (length(idx) == 0L) {
+      next
+    }
+    vals <- suppressWarnings(as.numeric(params_df$value[idx]))
+    vals <- vals[is.finite(vals)]
+    if (length(vals) > 0L) {
+      out <- c(out, vals)
+    }
+  }
+  unique(out)
 }
 
 add_input_filename_row <- function(params_df, input_filename) {
@@ -773,7 +1214,7 @@ infer_conditions <- function(tokens) {
 }
 
 build_injection_df <- function(starts, stops, original_stops, volumes = NULL) {
-  n <- min(length(starts), length(stops), length(original_stops), if (is.null(volumes)) .Machine$integer.max else length(volumes))
+  n <- min(length(starts), length(stops), length(original_stops))
   if (n <= 0) {
     return(data.frame(
       inj_num = integer(),
@@ -787,6 +1228,11 @@ build_injection_df <- function(starts, stops, original_stops, volumes = NULL) {
       stringsAsFactors = FALSE
     ))
   }
+  inj_vol <- rep(NA_real_, n)
+  if (!is.null(volumes) && length(volumes) > 0L) {
+    m <- min(n, length(volumes))
+    inj_vol[seq_len(m)] <- as.numeric(volumes[seq_len(m)])
+  }
   data.frame(
     inj_num = seq_len(n),
     start_s = starts[seq_len(n)],
@@ -795,7 +1241,7 @@ build_injection_df <- function(starts, stops, original_stops, volumes = NULL) {
     original_start_s = starts[seq_len(n)],
     original_stop_s = original_stops[seq_len(n)],
     original_width_s = original_stops[seq_len(n)] - starts[seq_len(n)],
-    inj_volume_uL = if (is.null(volumes)) NA_real_ else volumes[seq_len(n)],
+    inj_volume_uL = inj_vol,
     stringsAsFactors = FALSE
   )
 }
@@ -857,11 +1303,40 @@ main <- function() {
   dir.create(dirname(out_xlsx), recursive = TRUE, showWarnings = FALSE)
 
   payload <- load_payload(csc)
-  step200 <- find_step200_sequences(payload)
-  mono_int <- find_monotonic_int_sequences(payload, n = 20L)
-  selected <- select_start_stop(step200, mono_int)
-  const_25 <- find_constant_sequences(payload, 2.5, n = 20L)
-  volumes <- if (length(const_25) > 0) const_25[[1]]$values else NULL
+  exp_params <- extract_experiment_parameters(payload)
+  if (nrow(exp_params) == 0) {
+    exp_params <- data.frame(
+      key = character(),
+      value = character(),
+      confidence = character(),
+      note = character(),
+      stringsAsFactors = FALSE
+    )
+  }
+  step200 <- find_step200_sequences(payload, min_len = 6L)
+  arith <- find_arithmetic_int_sequences(payload, min_len = 6L)
+  selected <- select_start_stop(step200 = step200, arith = arith)
+  mono_int <- NULL
+  if (identical(selected$source, "none")) {
+    mono_int <- find_monotonic_int_sequences(payload, n = 8L)
+    selected <- select_start_stop(step200 = step200, mono_int = mono_int)
+  }
+  if (identical(selected$source, "none")) {
+    selected <- select_from_monotonic_sequences(mono_int)
+  }
+  n_inj <- if (!is.null(selected$start)) length(selected$start) else 0L
+  volume_min_len <- if (n_inj > 0L) max(3L, min(12L, as.integer(n_inj))) else 6L
+  volume_targets <- collect_numeric_param_values(
+    exp_params,
+    keys = c("DefaultInjVolume", "raw::injvol", "raw::injvolume", "raw::injectionvolume", "raw::defaultinjvolume")
+  )
+  volume_run <- find_best_volume_run(
+    payload,
+    expected_len = n_inj,
+    preferred_targets = volume_targets,
+    min_len = volume_min_len
+  )
+  volumes <- if (!is.null(volume_run)) volume_run$values else NULL
 
   injections_df <- data.frame(
     inj_num = integer(),
@@ -879,17 +1354,6 @@ main <- function() {
   }
 
   heatflow_df <- extract_heatflow_df(payload)
-
-  exp_params <- extract_experiment_parameters(payload)
-  if (nrow(exp_params) == 0) {
-    exp_params <- data.frame(
-      key = character(),
-      value = character(),
-      confidence = character(),
-      note = character(),
-      stringsAsFactors = FALSE
-    )
-  }
   exp_params <- add_input_filename_row(exp_params, basename(csc))
 
   sheets <- list(
