@@ -18,18 +18,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Prepare workflow paths
+        id: workflow_paths
+        run: |
+          tmp_root="${GITHUB_WORKSPACE}/.github-tmp"
+          r_test_lib="${tmp_root}/r-lib-tests"
+          notary_state_dir="${tmp_root}/notary-state"
+          mkdir -p "${tmp_root}"
+          echo "r_test_lib=${r_test_lib}" >> "$GITHUB_OUTPUT"
+          echo "notary_state_dir=${notary_state_dir}" >> "$GITHUB_OUTPUT"
+
       - uses: r-lib/actions/setup-r@v2
         with:
           r-version: "4.3"
 
       - name: Install R test dependencies
         env:
-          R_LIBS_USER: ${{ github.workspace }}/.github-tmp/r-lib-tests
+          R_LIBS_USER: ${{ steps.workflow_paths.outputs.r_test_lib }}
         run: |
           mkdir -p "${R_LIBS_USER}"
           Rscript -e 'install.packages(c("testthat","shinytest2","shiny","rootSolve","tidyverse","DT","DEoptim","readxl","writexl","plotly","patchwork","jsonlite","later","digest","MASS","gridExtra","colourpicker"), repos="https://cloud.r-project.org")'
 
       - name: Run existing strict test suites
+        env:
+          R_LIBS_USER: ${{ steps.workflow_paths.outputs.r_test_lib }}
         run: Rscript tests/run_all.R --strict
 
       - uses: actions/setup-node@v4
@@ -124,7 +136,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ViaBind_ITCSuite-notary-state-${{ github.run_id }}
-          path: ${{ github.workspace }}/.github-tmp/notary-state
+          path: ${{ steps.workflow_paths.outputs.notary_state_dir }}
 
       - name: Notarize built macOS artifacts (retry only notarization)
         if: steps.signing.outputs.enabled == 'true'
@@ -134,6 +146,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ITCSUITE_NOTARY_STATE_DIR: ${{ steps.workflow_paths.outputs.notary_state_dir }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -146,7 +159,7 @@ jobs:
           poll_interval_seconds=45
           poll_timeout_seconds=14400
           progress_notice_seconds=7200
-          state_dir="${GITHUB_WORKSPACE}/.github-tmp/notary-state"
+          state_dir="${ITCSUITE_NOTARY_STATE_DIR}"
           state_file="${state_dir}/submission-ids.tsv"
           mkdir -p "${state_dir}"
           touch "${state_file}"
@@ -261,7 +274,7 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
           path: |
-            ${{ github.workspace }}/.github-tmp/notary-state/submission-ids.tsv
+            ${{ steps.workflow_paths.outputs.notary_state_dir }}/submission-ids.tsv
 
       - name: Staple notarized DMG artifacts
         if: steps.signing.outputs.enabled == 'true'
