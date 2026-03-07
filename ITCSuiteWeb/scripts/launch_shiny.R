@@ -167,6 +167,12 @@ main <- function() {
 
   write_log(log_file, "ready host=", args$host, " port=", port)
 
+  disable_ragg <- identical(Sys.getenv("ITCSUITE_DISABLE_RAGG", unset = ""), "1")
+  if (isTRUE(disable_ragg)) {
+    options(shiny.useragg = FALSE)
+    write_log(log_file, "graphics fallback enabled: shiny.useragg=FALSE")
+  }
+
   options(shiny.host = as.character(args$host)[1])
   options(shiny.port = as.integer(port))
 

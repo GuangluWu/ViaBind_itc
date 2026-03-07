@@ -5,6 +5,20 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  DEFAULT_MACOS_MIN_VERSION,
+  PORTABLE_RSCRIPT_LAUNCHER_NAME,
+  collectMachOBinaries,
+  collectSymlinks,
+  compareMacOSVersions,
+  findDisallowedAbsoluteReferences,
+  isAllowedAbsoluteSystemReference,
+  isHostRFrameworkReference,
+  normalizeMacOSVersion,
+  parseOtoolInstallName,
+  parseOtoolLinkedLibraries,
+  parseOtoolMinimumMacOSVersions
+} from "./runtime-macos-utils.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(__filename);
@@ -19,6 +33,9 @@ const FALLBACK_PKGS = [
   "DT",
   "writexl",
   "ggplot2",
+  "ragg",
+  "systemfonts",
+  "textshaping",
   "patchwork",
   "readxl",
   "jsonlite",
@@ -31,6 +48,8 @@ const FALLBACK_PKGS = [
   "digest",
   "colourpicker"
 ];
+
+const DEFAULT_RUNTIME_MACOS_MIN_VERSION = DEFAULT_MACOS_MIN_VERSION;
 
 const INSTALL_SCRIPT = `
 lib_dir <- Sys.getenv("ITCSUITE_LIB_DIR")
@@ -48,7 +67,7 @@ if (!nzchar(pkg_type)) {
 }
 if (!nzchar(pkg_type)) pkg_type <- "source"
 if (!dir.exists(lib_dir)) dir.create(lib_dir, recursive = TRUE, showWarnings = FALSE)
-.libPaths(c(lib_dir, .libPaths()))
+.libPaths(lib_dir)
 options(timeout = timeout_secs)
 options(repos = c(CRAN = repo))
 options(pkgType = pkg_type)
@@ -61,7 +80,13 @@ cat(sprintf(
 ))
 cat(sprintf("[build-r-runtime] capabilities(libcurl)=%s\\n", capabilities("libcurl")))
 pkgs <- strsplit(pkg_csv, ",", fixed = TRUE)[[1]]
-missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+dep_db <- available.packages(repos = getOption("repos")[["CRAN"]], type = getOption("pkgType"))
+dep_fields <- c("Depends", "Imports", "LinkingTo")
+dep_map <- tools::package_dependencies(pkgs, db = dep_db, which = dep_fields, recursive = TRUE)
+pkgs <- unique(c(pkgs, unlist(dep_map, use.names = FALSE)))
+pkgs <- pkgs[!is.na(pkgs) & nzchar(pkgs)]
+installed_names <- rownames(installed.packages(lib.loc = lib_dir))
+missing <- setdiff(pkgs, installed_names)
 if (length(missing) > 0) {
   attempts <- retry_count + 1L
   remaining <- missing
@@ -74,12 +99,19 @@ if (length(missing) > 0) {
       paste(remaining, collapse = ", ")
     ))
     tryCatch(
-      install.packages(remaining, repos = getOption("repos")[["CRAN"]], lib = lib_dir, type = getOption("pkgType")),
+      install.packages(
+        remaining,
+        repos = getOption("repos")[["CRAN"]],
+        lib = lib_dir,
+        type = getOption("pkgType"),
+        dependencies = c("Depends", "Imports", "LinkingTo")
+      ),
       error = function(err) {
         message(sprintf("[build-r-runtime] install attempt %d error: %s", attempt, conditionMessage(err)))
       }
     )
-    remaining <- remaining[!vapply(remaining, requireNamespace, logical(1), quietly = TRUE)]
+    installed_names <- rownames(installed.packages(lib.loc = lib_dir))
+    remaining <- setdiff(remaining, installed_names)
     if (length(remaining) < 1L) break
     if (attempt < attempts) {
       cat(sprintf(
@@ -91,11 +123,28 @@ if (length(missing) > 0) {
     }
   }
 }
-remaining <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+installed_names <- rownames(installed.packages(lib.loc = lib_dir))
+remaining <- setdiff(pkgs, installed_names)
 if (length(remaining) > 0) {
   stop(sprintf("Failed to install packages: %s", paste(remaining, collapse = ", ")))
 }
 cat(sprintf("Installed/verified %d packages in %s\\n", length(pkgs), lib_dir))
+`;
+
+const SANITIZE_STAGED_LIBRARY_SCRIPT = `
+lib_dir <- Sys.getenv("ITCSUITE_LIB_DIR")
+if (!dir.exists(lib_dir)) stop("library dir does not exist")
+ip <- installed.packages(lib.loc = lib_dir)
+if (nrow(ip) < 1L) q(status = 0L)
+priority <- ip[, "Priority"]
+priority[is.na(priority)] <- ""
+drop <- rownames(ip)[!priority %in% c("base", "recommended")]
+if (length(drop) > 0L) {
+  unlink(file.path(lib_dir, drop), recursive = TRUE, force = TRUE)
+  cat(sprintf("Removed %d staged non-base package(s) before runtime install.\\n", length(drop)))
+} else {
+  cat("No staged non-base packages to remove before runtime install.\\n")
+}
 `;
 
 const VERIFY_AND_PRUNE_SCRIPT = `
@@ -159,18 +208,16 @@ const PRUNE_DIR_NAMES = new Set([
   "man"
 ]);
 
+const MACOS_OPTIONAL_PRUNE_PATHS = [
+  "modules/R_X11.so",
+  "modules/R_de.so",
+  "library/tcltk",
+  "library/grDevices/libs/cairo.so"
+];
+
 const DEFAULT_RUNTIME_WARN_MAX_MB = 260;
 const DEFAULT_RUNTIME_WARN_MAX_FILES = 8000;
 const HOST_R_FRAMEWORK_RESOURCES_RE = /^\/Library\/Frameworks\/R\.framework\/Versions\/[^/]+\/Resources(?:\/(.*))?$/;
-const PORTABLE_RSCRIPT_LAUNCHER_NAME = "itcsuite-rscript";
-const MACH_O_MAGIC_NUMBERS = new Set([
-  0xfeedface,
-  0xcefaedfe,
-  0xfeedfacf,
-  0xcffaedfe,
-  0xcafebabe,
-  0xbebafeca
-]);
 
 function usage() {
   console.log(`Usage:
@@ -182,6 +229,7 @@ Options:
   --profile <release|debug>    Build profile (default: release)
   --manifest <path>            Runtime package manifest path
   --strict-runtime-manifest    Fail if manifest package is missing
+  --macos-min-version <ver>    Maximum supported minos for bundled binaries (default: ${DEFAULT_RUNTIME_MACOS_MIN_VERSION})
   --symbols-out <dir>          Archive dSYM files to this dir before pruning
   -h, --help                   Show this help
 `);
@@ -198,6 +246,7 @@ function parseArgs(argv) {
   let profile = "release";
   let manifestPath = DEFAULT_MANIFEST_PATH;
   let strictRuntimeManifest = false;
+  let macosMinVersion = DEFAULT_RUNTIME_MACOS_MIN_VERSION;
   let symbolsOut = "";
 
   const args = [...argv];
@@ -219,6 +268,9 @@ function parseArgs(argv) {
         break;
       case "--strict-runtime-manifest":
         strictRuntimeManifest = true;
+        break;
+      case "--macos-min-version":
+        macosMinVersion = args.shift() || "";
         break;
       case "--symbols-out":
         symbolsOut = args.shift() || "";
@@ -246,6 +298,7 @@ function parseArgs(argv) {
     profile,
     manifestPath: resolveInputPath(manifestPath),
     strictRuntimeManifest,
+    macosMinVersion: normalizeMacOSVersion(macosMinVersion),
     symbolsOut: symbolsOut ? resolveInputPath(symbolsOut) : "",
     rBin: process.env.R_BIN || "R"
   };
@@ -321,10 +374,6 @@ function toPosixPath(value) {
   return value.split(path.sep).join("/");
 }
 
-function isHostRFrameworkReference(value) {
-  return HOST_R_FRAMEWORK_RESOURCES_RE.test(value);
-}
-
 function getRuntimeRelativePath(reference, sourcePrefixes) {
   for (const rawPrefix of sourcePrefixes) {
     const prefix = normalizePrefix(rawPrefix);
@@ -353,96 +402,6 @@ function toLoaderPath(fromDir, targetPath) {
     rel = path.basename(targetPath);
   }
   return `@loader_path/${toPosixPath(rel)}`;
-}
-
-function parseOtoolLinkedLibraries(output) {
-  const refs = [];
-  const lines = output.split(/\r?\n/).slice(1);
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const match = trimmed.match(/^(.+?)\s+\(/);
-    if (match && match[1]) {
-      refs.push(match[1]);
-    }
-  }
-  return refs;
-}
-
-function parseOtoolInstallName(output) {
-  const lines = output
-    .split(/\r?\n/)
-    .slice(1)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (lines.length < 1) return "";
-  return lines[0];
-}
-
-function readMagicNumber(filePath) {
-  const fd = fs.openSync(filePath, "r");
-  const buffer = Buffer.alloc(4);
-  try {
-    const bytesRead = fs.readSync(fd, buffer, 0, 4, 0);
-    if (bytesRead < 4) return null;
-    const be = buffer.readUInt32BE(0);
-    const le = buffer.readUInt32LE(0);
-    if (MACH_O_MAGIC_NUMBERS.has(be)) return be;
-    if (MACH_O_MAGIC_NUMBERS.has(le)) return le;
-    return null;
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-function isMachOBinary(filePath) {
-  try {
-    return readMagicNumber(filePath) !== null;
-  } catch (_) {
-    return false;
-  }
-}
-
-function walkRuntime(root, onEntry) {
-  if (!fs.existsSync(root)) return;
-  const stack = [root];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    let entries = [];
-    try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
-    } catch (_) {
-      continue;
-    }
-    for (const entry of entries) {
-      const fullPath = path.join(current, entry.name);
-      onEntry(fullPath, entry);
-      if (entry.isDirectory() && !entry.isSymbolicLink()) {
-        stack.push(fullPath);
-      }
-    }
-  }
-}
-
-function collectMachOBinaries(root) {
-  const files = [];
-  walkRuntime(root, (fullPath, entry) => {
-    if (!entry.isFile()) return;
-    if (isMachOBinary(fullPath)) {
-      files.push(fullPath);
-    }
-  });
-  return files;
-}
-
-function collectSymlinks(root) {
-  const links = [];
-  walkRuntime(root, (fullPath, entry) => {
-    if (entry.isSymbolicLink()) {
-      links.push(fullPath);
-    }
-  });
-  return links;
 }
 
 async function relocateMacRuntimeReferences(runtimeRoot, sourcePrefixes) {
@@ -622,6 +581,85 @@ async function assertNoHostRReferences(runtimeRoot) {
   }
 }
 
+async function validateDarwinRuntimeCompatibility(runtimeRoot, maximumVersion) {
+  if (process.platform !== "darwin") {
+    return {
+      scannedBinaries: 0,
+      scannedSymlinks: 0,
+      disallowedReferences: 0,
+      unsupportedMinos: 0
+    };
+  }
+
+  const offenders = [];
+  let disallowedReferences = 0;
+  let unsupportedMinos = 0;
+
+  const binaries = collectMachOBinaries(runtimeRoot);
+  for (const binaryPath of binaries) {
+    const relPath = path.relative(runtimeRoot, binaryPath);
+    const binaryRealPath = path.resolve(binaryPath);
+
+    const linked = await runCommand("otool", ["-L", binaryPath], { capture: true });
+    const linkedRefs = parseOtoolLinkedLibraries(linked.stdout).filter((reference) => {
+      if (!reference.startsWith("/")) return true;
+      return path.resolve(reference) !== binaryRealPath;
+    });
+    const disallowedLinkedRefs = findDisallowedAbsoluteReferences(linkedRefs);
+    disallowedReferences += disallowedLinkedRefs.length;
+    for (const ref of disallowedLinkedRefs) {
+      if (offenders.length < 20) offenders.push(`${relPath} -> ${ref}`);
+    }
+
+    try {
+      const installNameRaw = await runCommand("otool", ["-D", binaryPath], { capture: true });
+      const installName = parseOtoolInstallName(installNameRaw.stdout);
+      const disallowedInstallNames = findDisallowedAbsoluteReferences(installName ? [installName] : []);
+      disallowedReferences += disallowedInstallNames.length;
+      for (const ref of disallowedInstallNames) {
+        if (offenders.length < 20) offenders.push(`${relPath} (install name) -> ${ref}`);
+      }
+    } catch (_) {
+      // Executables generally don't have LC_ID_DYLIB.
+    }
+
+    const loadCommands = await runCommand("otool", ["-l", binaryPath], { capture: true });
+    const minosValues = parseOtoolMinimumMacOSVersions(loadCommands.stdout);
+    const unsupportedVersions = minosValues.filter((version) => compareMacOSVersions(version, maximumVersion) > 0);
+    unsupportedMinos += unsupportedVersions.length;
+    for (const version of unsupportedVersions) {
+      if (offenders.length < 20) offenders.push(`${relPath} (minos ${version} > ${maximumVersion})`);
+    }
+  }
+
+  const symlinks = collectSymlinks(runtimeRoot);
+  for (const linkPath of symlinks) {
+    let target = "";
+    try {
+      target = fs.readlinkSync(linkPath);
+    } catch (_) {
+      continue;
+    }
+    if (!target || !path.isAbsolute(target)) continue;
+    if (isAllowedAbsoluteSystemReference(target)) continue;
+    disallowedReferences += 1;
+    if (offenders.length < 20) offenders.push(`${path.relative(runtimeRoot, linkPath)} -> ${target}`);
+  }
+
+  if (offenders.length > 0) {
+    throw new Error(
+      `[validate-runtime] incompatible macOS runtime artifacts detected:\n  ${offenders.join("\n  ")}`
+    );
+  }
+
+  return {
+    scannedBinaries: binaries.length,
+    scannedSymlinks: symlinks.length,
+    disallowedReferences,
+    unsupportedMinos
+  };
+}
+
 function writePortableRscriptLauncher(runtimeRoot) {
   if (process.platform === "win32") {
     return "";
@@ -688,6 +726,48 @@ function writePortableRscriptLauncher(runtimeRoot) {
   return launcherPath;
 }
 
+async function adHocSignDarwinRuntime(runtimeRoot) {
+  const binaries = collectMachOBinaries(runtimeRoot).sort();
+  let signedCount = 0;
+  for (const binaryPath of binaries) {
+    await runCommand("codesign", ["--force", "--sign", "-", binaryPath], {
+      capture: true
+    });
+    signedCount += 1;
+  }
+  return signedCount;
+}
+
+async function probePortableLauncher(runtimeRoot) {
+  const launcherPath = path.join(runtimeRoot, "bin", PORTABLE_RSCRIPT_LAUNCHER_NAME);
+  if (!fs.existsSync(launcherPath)) {
+    throw new Error(`portable launcher missing under ${runtimeRoot}`);
+  }
+
+  const bundledLib = path.join(runtimeRoot, "library");
+  const isolatedUserLib = path.join(runtimeRoot, ".itcsuite-empty-library");
+  fs.mkdirSync(isolatedUserLib, { recursive: true });
+
+  await runCommand(
+    launcherPath,
+    [
+      "-e",
+      "suppressPackageStartupMessages({library(jsonlite); library(ragg); library(systemfonts); library(textshaping)}); cat('ITCSUITE_RUNTIME_PROBE ok\\n')"
+    ],
+    {
+      cwd: runtimeRoot,
+      env: {
+        ...process.env,
+        R_HOME: runtimeRoot,
+        R_LIBS: bundledLib,
+        R_LIBS_SITE: bundledLib,
+        R_LIBS_USER: isolatedUserLib
+      },
+      capture: true
+    }
+  );
+}
+
 function readManifestPackages(manifestPath) {
   if (!fs.existsSync(manifestPath)) return null;
   const lines = fs.readFileSync(manifestPath, "utf8").split(/\r?\n/);
@@ -720,28 +800,13 @@ function resolveBundledRscript(runtimeRoot) {
   return "";
 }
 
-function resolveHostRscript(rHomeDir) {
-  const candidates = [
-    path.join(rHomeDir, "bin", "x64", "Rscript.exe"),
-    path.join(rHomeDir, "bin", "Rscript.exe"),
-    path.join(rHomeDir, "bin", "Rscript"),
-    path.join(rHomeDir, "Resources", "bin", "Rscript")
-  ];
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return "";
-}
-
-function buildHostREnv(rHomeDir, libDir) {
+function buildBundledREnv(runtimeRoot, libDir) {
   const env = { ...process.env };
   const pathEntries = [];
   const candidates = [
-    path.join(rHomeDir, "bin", "x64"),
-    path.join(rHomeDir, "bin")
+    path.join(runtimeRoot, "bin", "x64"),
+    path.join(runtimeRoot, "bin"),
+    path.join(runtimeRoot, "Resources", "bin")
   ];
 
   for (const candidate of candidates) {
@@ -756,6 +821,7 @@ function buildHostREnv(rHomeDir, libDir) {
   }
 
   env.PATH = pathEntries.join(path.delimiter);
+  env.R_HOME = runtimeRoot;
   env.R_LIBS = libDir;
   env.R_LIBS_USER = libDir;
   env.R_LIBS_SITE = libDir;
@@ -810,6 +876,18 @@ function removeDirectories(root, predicate) {
   if (fs.existsSync(root)) {
     walk(root);
   }
+}
+
+function pruneOptionalMacArtifacts(runtimeRoot) {
+  if (process.platform !== "darwin") return [];
+  const removed = [];
+  for (const relPath of MACOS_OPTIONAL_PRUNE_PATHS) {
+    const fullPath = path.join(runtimeRoot, relPath);
+    if (!fs.existsSync(fullPath)) continue;
+    fs.rmSync(fullPath, { recursive: true, force: true });
+    removed.push(relPath);
+  }
+  return removed;
 }
 
 function formatTimestampForFilename(date = new Date()) {
@@ -966,6 +1044,7 @@ async function main() {
   console.log(`[build-r-runtime] profile: ${cfg.profile}`);
   console.log(`[build-r-runtime] manifest: ${cfg.manifestPath}`);
   console.log(`[build-r-runtime] strict manifest: ${cfg.strictRuntimeManifest ? 1 : 0}`);
+  console.log(`[build-r-runtime] macOS min version gate: ${cfg.macosMinVersion}`);
   console.log(`[build-r-runtime] warn max size: ${runtimeWarnMaxMb}MB`);
   console.log(`[build-r-runtime] warn max files: ${runtimeWarnMaxFiles}`);
 
@@ -989,10 +1068,6 @@ async function main() {
   if (!bundledRscript) {
     throw new Error(`Rscript missing after copy under ${cfg.outDir}`);
   }
-  const hostRscript = resolveHostRscript(rHomeRealDir);
-  if (!hostRscript) {
-    throw new Error(`Host Rscript not found under ${rHomeRealDir}`);
-  }
 
   const libDir = path.join(cfg.outDir, "library");
   await fs.promises.mkdir(libDir, { recursive: true });
@@ -1010,19 +1085,26 @@ async function main() {
     throw new Error("no packages provided by manifest/fallback list");
   }
 
-  const hostREnv = buildHostREnv(rHomeRealDir, libDir);
+  const bundledREnv = buildBundledREnv(cfg.outDir, libDir);
 
-  await runCommand(hostRscript, ["--vanilla", "-e", INSTALL_SCRIPT], {
+  await runCommand(bundledRscript, ["--vanilla", "-e", SANITIZE_STAGED_LIBRARY_SCRIPT], {
     env: {
-      ...hostREnv,
+      ...bundledREnv,
+      ITCSUITE_LIB_DIR: libDir
+    }
+  });
+
+  await runCommand(bundledRscript, ["--vanilla", "-e", INSTALL_SCRIPT], {
+    env: {
+      ...bundledREnv,
       ITCSUITE_LIB_DIR: libDir,
       ITCSUITE_PKG_CSV: requiredPkgs.join(",")
     }
   });
 
-  await runCommand(hostRscript, ["--vanilla", "-e", VERIFY_AND_PRUNE_SCRIPT], {
+  await runCommand(bundledRscript, ["--vanilla", "-e", VERIFY_AND_PRUNE_SCRIPT], {
     env: {
-      ...hostREnv,
+      ...bundledREnv,
       ITCSUITE_LIB_DIR: libDir,
       ITCSUITE_MANIFEST_PATH: cfg.manifestPath,
       ITCSUITE_STRICT_RUNTIME_MANIFEST: cfg.strictRuntimeManifest ? "1" : "0"
@@ -1049,6 +1131,13 @@ async function main() {
     }
   }
 
+  const removedMacArtifacts = pruneOptionalMacArtifacts(cfg.outDir);
+  if (removedMacArtifacts.length > 0) {
+    console.log(
+      `[build-r-runtime] pruned optional macOS components: ${removedMacArtifacts.join(", ")}`
+    );
+  }
+
   const relocationSummary = await relocateMacRuntimeReferences(cfg.outDir, [rHomeRealDir, rHomeDir]);
   if (process.platform === "darwin") {
     console.log(
@@ -1056,11 +1145,21 @@ async function main() {
     );
     await assertNoHostRReferences(cfg.outDir);
     console.log("[build-r-runtime] relocation verification: OK");
+    const compatibilitySummary = await validateDarwinRuntimeCompatibility(cfg.outDir, cfg.macosMinVersion);
+    console.log(
+      `[build-r-runtime] macOS compatibility: binaries=${compatibilitySummary.scannedBinaries}, symlinks=${compatibilitySummary.scannedSymlinks}, max_minos=${cfg.macosMinVersion}`
+    );
   }
 
   const launcherPath = writePortableRscriptLauncher(cfg.outDir);
   if (launcherPath) {
     console.log(`[build-r-runtime] portable launcher: ${launcherPath}`);
+  }
+  if (process.platform === "darwin") {
+    const signedCount = await adHocSignDarwinRuntime(cfg.outDir);
+    console.log(`[build-r-runtime] ad-hoc signed macOS runtime binaries: ${signedCount}`);
+    await probePortableLauncher(cfg.outDir);
+    console.log("[build-r-runtime] portable launcher probe: OK");
   }
 
   const postPruneBytes = getPathSizeBytes(cfg.outDir);
@@ -1086,6 +1185,8 @@ async function main() {
     `profile=${cfg.profile}`,
     `manifest=${cfg.manifestPath}`,
     `strict_runtime_manifest=${cfg.strictRuntimeManifest ? 1 : 0}`,
+    `macos_min_version=${cfg.macosMinVersion}`,
+    `optional_macos_prune_count=${removedMacArtifacts.length}`,
     `size_before_prune_mb=${mb1(prePruneBytes)}`,
     `size_after_prune_mb=${mb1(postPruneBytes)}`,
     `size_saved_mb=${mb1(savedBytes)}`,

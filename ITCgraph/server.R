@@ -1550,6 +1550,33 @@ server <- function(input, output, session) {
       fig
     }
   }, res = 96, height = preview_height)
+
+  step3_disable_ragg <- identical(Sys.getenv("ITCSUITE_DISABLE_RAGG", unset = ""), "1")
+
+  resolve_step3_raster_device <- function(format) {
+    fmt <- tolower(as.character(format %||% "")[1])
+    if (!step3_disable_ragg) return(fmt)
+    if (fmt == "png") {
+      return(function(file, width, height, units = "in", res = 300, bg = "white", ...) {
+        grDevices::png(filename = file, width = width, height = height, units = units, res = res, bg = bg, ...)
+      })
+    }
+    if (fmt %in% c("tif", "tiff")) {
+      return(function(file, width, height, units = "in", res = 300, compression = "lzw", bg = "white", ...) {
+        grDevices::tiff(
+          filename = file,
+          width = width,
+          height = height,
+          units = units,
+          res = res,
+          compression = compression,
+          bg = bg,
+          ...
+        )
+      })
+    }
+    fmt
+  }
   
   # ============================================================
   # 9. 导出功能
@@ -1635,7 +1662,7 @@ server <- function(input, output, session) {
         return()
       }
       tryCatch({
-        ggsave(file, plot = fig, device = "png",
+        ggsave(file, plot = fig, device = resolve_step3_raster_device("png"),
                width = input$export_width %||% PLOT_DEFAULTS$export_width,
                height = input$export_height %||% PLOT_DEFAULTS$export_height,
                units = "in", dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi,
@@ -1679,7 +1706,7 @@ server <- function(input, output, session) {
         return()
       }
       tryCatch({
-        ggsave(file, plot = fig, device = "tiff",
+        ggsave(file, plot = fig, device = resolve_step3_raster_device("tiff"),
                width = input$export_width %||% PLOT_DEFAULTS$export_width,
                height = input$export_height %||% PLOT_DEFAULTS$export_height,
                units = "in", dpi = input$export_dpi %||% PLOT_DEFAULTS$export_dpi,

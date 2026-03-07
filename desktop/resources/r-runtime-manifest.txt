@@ -8,6 +8,9 @@ plotly
 DT
 writexl
 ggplot2
+ragg
+systemfonts
+textshaping
 patchwork
 readxl
 jsonlite

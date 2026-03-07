@@ -16,11 +16,12 @@ const __filename = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(__filename);
 const desktopDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(desktopDir, "..");
-const runtimeRoot = path.join(desktopDir, "resources", "r-runtime");
+const runtimeRoot = process.env.ITCSUITE_RUNTIME_ROOT || path.join(desktopDir, "resources", "r-runtime");
 const launchScript = path.join(repoRoot, "ITCSuiteWeb", "scripts", "launch_shiny.R");
 
 function resolveRscript(runtimeDir) {
   const candidates = [
+    path.join(runtimeDir, "bin", "itcsuite-rscript"),
     path.join(runtimeDir, "bin", "Rscript.exe"),
     path.join(runtimeDir, "bin", "x64", "Rscript.exe"),
     path.join(runtimeDir, "bin", "Rscript"),
@@ -151,6 +152,9 @@ async function main() {
 
   const smokeLogDir = path.join(os.tmpdir(), `itcsuite-backend-smoke-${Date.now()}`);
   fs.mkdirSync(smokeLogDir, { recursive: true });
+  const isolatedUserLib = path.join(smokeLogDir, "r-library-empty");
+  fs.mkdirSync(isolatedUserLib, { recursive: true });
+  const bundledLib = path.join(runtimeRoot, "library");
 
   const args = [
     launchScript,
@@ -161,15 +165,15 @@ async function main() {
     "--log-dir", smokeLogDir
   ];
 
-  const libDir = path.join(runtimeRoot, "library");
   const env = {
     ...process.env,
     ITCSUITE_DESKTOP: "1",
     ITCSUITE_RSCRIPT: rscript,
+    ITCSUITE_RUNTIME_ROOT: runtimeRoot,
     R_HOME: runtimeRoot,
-    R_LIBS: libDir,
-    R_LIBS_USER: libDir,
-    R_LIBS_SITE: libDir,
+    R_LIBS: bundledLib,
+    R_LIBS_SITE: bundledLib,
+    R_LIBS_USER: isolatedUserLib,
     PATH: [
       path.join(runtimeRoot, "bin", "x64"),
       path.join(runtimeRoot, "bin"),

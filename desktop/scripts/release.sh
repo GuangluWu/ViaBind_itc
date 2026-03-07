@@ -17,6 +17,7 @@ RUNTIME_PROFILE="release"
 RUNTIME_SYMBOLS_OUT=""
 STRICT_RUNTIME_MANIFEST=1
 RUNTIME_OUT_DIR=""
+MACOS_MIN_VERSION="13.0"
 
 usage() {
   cat <<USAGE
@@ -40,6 +41,8 @@ Options:
                        Whether runtime build should fail on manifest mismatch (default: 1)
   --runtime-out-dir <dir>
                        Runtime output dir (default: desktop/resources/r-runtime)
+  --macos-min-version <ver>
+                       Maximum supported minos for bundled binaries (default: 13.0)
   -h, --help           Show this help
 
 Examples:
@@ -98,6 +101,10 @@ while [[ $# -gt 0 ]]; do
       RUNTIME_OUT_DIR="${2:-}"
       shift 2
       ;;
+    --macos-min-version)
+      MACOS_MIN_VERSION="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -143,6 +150,12 @@ if [[ "${STRICT_RUNTIME_MANIFEST}" != "0" && "${STRICT_RUNTIME_MANIFEST}" != "1"
   exit 1
 fi
 
+if [[ ! "${MACOS_MIN_VERSION}" =~ ^[0-9]+\.[0-9]+([.][0-9]+)?$ ]]; then
+  echo "Invalid --macos-min-version value: ${MACOS_MIN_VERSION}" >&2
+  echo "Expected format like 13.0 or 13.0.0" >&2
+  exit 1
+fi
+
 if command -v git >/dev/null 2>&1; then
   if [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
     echo "[release] Warning: git worktree has uncommitted changes."
@@ -158,9 +171,11 @@ echo "[release] desktop: $DESKTOP_DIR"
 echo "[release] target version: $VERSION"
 echo "[release] runtime profile: $RUNTIME_PROFILE"
 echo "[release] strict runtime manifest: $STRICT_RUNTIME_MANIFEST"
+echo "[release] macOS min version gate: $MACOS_MIN_VERSION"
 if [[ -n "$R_LIBS_USER_ARG" ]]; then
   echo "[release] R_LIBS_USER: $R_LIBS_USER_ARG"
 fi
+echo "[release] note: official macOS DMG should come from the desktop-macos GitHub Actions workflow."
 
 if [[ -z "$RUNTIME_OUT_DIR" ]]; then
   RUNTIME_OUT_DIR="$DESKTOP_DIR/resources/r-runtime"
@@ -186,13 +201,6 @@ else
   echo "[release] skip strict regression"
 fi
 
-if [[ "$SKIP_SMOKE" -eq 0 ]]; then
-  echo "[release] run desktop smoke"
-  npm run smoke
-else
-  echo "[release] skip desktop smoke"
-fi
-
 if [[ "$SKIP_RUNTIME_BUILD" -eq 0 ]]; then
   echo "[release] build bundled runtime"
   BUILD_RUNTIME_CMD=(
@@ -200,6 +208,7 @@ if [[ "$SKIP_RUNTIME_BUILD" -eq 0 ]]; then
     "$RUNTIME_OUT_DIR"
     --profile "$RUNTIME_PROFILE"
     --manifest "$DESKTOP_DIR/resources/r-runtime-manifest.txt"
+    --macos-min-version "$MACOS_MIN_VERSION"
   )
   if [[ "$STRICT_RUNTIME_MANIFEST" -eq 1 ]]; then
     BUILD_RUNTIME_CMD+=(--strict-runtime-manifest)
@@ -210,6 +219,23 @@ if [[ "$SKIP_RUNTIME_BUILD" -eq 0 ]]; then
   "${BUILD_RUNTIME_CMD[@]}"
 else
   echo "[release] skip bundled runtime build"
+fi
+
+if [[ "$SKIP_SMOKE" -eq 0 ]]; then
+  echo "[release] verify bundled runtime before smoke"
+  node "$DESKTOP_DIR/scripts/ensure-r-runtime.mjs" \
+    --runtime-root "$RUNTIME_OUT_DIR" \
+    --profile "$RUNTIME_PROFILE" \
+    --manifest "$DESKTOP_DIR/resources/r-runtime-manifest.txt" \
+    --strict-runtime-manifest "$STRICT_RUNTIME_MANIFEST" \
+    --macos-min-version "$MACOS_MIN_VERSION" \
+    --check-only
+  echo "[release] run runtime graphics smoke"
+  ITCSUITE_RUNTIME_ROOT="$RUNTIME_OUT_DIR" npm run smoke:graphics
+  echo "[release] run desktop smoke against bundled runtime"
+  ITCSUITE_RUNTIME_ROOT="$RUNTIME_OUT_DIR" ITCSUITE_USE_BUNDLED_R=1 npm run smoke
+else
+  echo "[release] skip desktop smoke"
 fi
 
 CURRENT_VERSION="$(node -p "require('./package.json').version")"
@@ -229,10 +255,11 @@ if [[ "$SKIP_DIST" -eq 0 ]]; then
   echo "[release] ensure bundled runtime for packaging"
   ENSURE_RUNTIME_CMD=(
     node "$DESKTOP_DIR/scripts/ensure-r-runtime.mjs"
-    --runtime-root "$DESKTOP_DIR/resources/r-runtime"
+    --runtime-root "$RUNTIME_OUT_DIR"
     --profile "$RUNTIME_PROFILE"
     --manifest "$DESKTOP_DIR/resources/r-runtime-manifest.txt"
     --strict-runtime-manifest "$STRICT_RUNTIME_MANIFEST"
+    --macos-min-version "$MACOS_MIN_VERSION"
   )
   "${ENSURE_RUNTIME_CMD[@]}"
   echo "[release] build dist artifacts"

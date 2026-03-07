@@ -5,6 +5,20 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  DEFAULT_MACOS_MIN_VERSION,
+  HOST_R_FRAMEWORK_RESOURCES_RE,
+  PORTABLE_RSCRIPT_LAUNCHER_NAME,
+  collectMachOBinaries,
+  collectSymlinks,
+  compareMacOSVersions,
+  findDisallowedAbsoluteReferences,
+  isAllowedAbsoluteSystemReference,
+  normalizeMacOSVersion,
+  parseOtoolInstallName,
+  parseOtoolLinkedLibraries,
+  parseOtoolMinimumMacOSVersions
+} from "./runtime-macos-utils.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(__filename);
@@ -12,8 +26,6 @@ const desktopDir = path.resolve(scriptDir, "..");
 
 const DEFAULT_RUNTIME_ROOT = path.join(desktopDir, "resources", "r-runtime");
 const DEFAULT_MANIFEST_PATH = path.join(desktopDir, "resources", "r-runtime-manifest.txt");
-const HOST_R_FRAMEWORK_RESOURCES_RE = /^\/Library\/Frameworks\/R\.framework\/Versions\/[^/]+\/Resources(?:\/|$)/;
-const PORTABLE_RSCRIPT_LAUNCHER_NAME = "itcsuite-rscript";
 
 function usage() {
   console.log(`Usage:
@@ -25,6 +37,7 @@ Options:
   --profile <release|debug>          Runtime build profile (default: release)
   --manifest <path>                  Runtime package manifest path
   --strict-runtime-manifest [0|1]    Strict manifest mode (default: 1)
+  --macos-min-version <ver>          Maximum supported minos for bundled binaries (default: ${DEFAULT_MACOS_MIN_VERSION})
   --check-only                       Validate only; do not rebuild on failure
   -h, --help                         Show this help
 `);
@@ -41,6 +54,7 @@ function parseArgs(argv) {
   let profile = "release";
   let manifestPath = DEFAULT_MANIFEST_PATH;
   let strictRuntimeManifest = true;
+  let macosMinVersion = DEFAULT_MACOS_MIN_VERSION;
   let checkOnly = false;
 
   const args = [...argv];
@@ -67,6 +81,9 @@ function parseArgs(argv) {
         }
         break;
       }
+      case "--macos-min-version":
+        macosMinVersion = args.shift() || "";
+        break;
       case "--check-only":
         checkOnly = true;
         break;
@@ -95,6 +112,7 @@ function parseArgs(argv) {
     profile,
     manifestPath: resolveInputPath(manifestPath),
     strictRuntimeManifest,
+    macosMinVersion: normalizeMacOSVersion(macosMinVersion),
     checkOnly
   };
 }
@@ -137,20 +155,6 @@ function runCaptureSync(command, args) {
   return result.stdout || "";
 }
 
-function parseOtoolLinkedLibraries(output) {
-  const refs = [];
-  const lines = output.split(/\r?\n/).slice(1);
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const match = trimmed.match(/^(.+?)\s+\(/);
-    if (match && match[1]) {
-      refs.push(match[1]);
-    }
-  }
-  return refs;
-}
-
 function hasHostReferenceInLinkedLibraries(binaryPath) {
   if (!fs.existsSync(binaryPath)) return false;
   let output = "";
@@ -183,7 +187,87 @@ function hasHostReferenceSymlink(linkPath) {
   return HOST_R_FRAMEWORK_RESOURCES_RE.test(target);
 }
 
-function checkRuntime(runtimeRoot) {
+function validateDarwinRuntimeCompatibility(runtimeRoot, maximumVersion) {
+  if (process.platform !== "darwin") {
+    return { ok: true, reason: "", scannedBinaries: 0, scannedSymlinks: 0 };
+  }
+
+  const offenders = [];
+  const binaries = collectMachOBinaries(runtimeRoot);
+
+  for (const binaryPath of binaries) {
+    const relPath = path.relative(runtimeRoot, binaryPath);
+    const binaryRealPath = path.resolve(binaryPath);
+    const linkedOutput = runCaptureSync("otool", ["-L", binaryPath]);
+    if (!linkedOutput) {
+      return {
+        ok: false,
+        reason: `Failed to inspect linked libraries for ${binaryPath}`
+      };
+    }
+
+    const linkedRefs = parseOtoolLinkedLibraries(linkedOutput).filter((reference) => {
+      if (!reference.startsWith("/")) return true;
+      return path.resolve(reference) !== binaryRealPath;
+    });
+    const disallowedLinkedRefs = findDisallowedAbsoluteReferences(linkedRefs);
+    for (const ref of disallowedLinkedRefs) {
+      if (offenders.length < 20) offenders.push(`${relPath} -> ${ref}`);
+    }
+
+    const installNameOutput = runCaptureSync("otool", ["-D", binaryPath]);
+    if (installNameOutput) {
+      const installName = parseOtoolInstallName(installNameOutput);
+      const disallowedInstallNames = findDisallowedAbsoluteReferences(installName ? [installName] : []);
+      for (const ref of disallowedInstallNames) {
+        if (offenders.length < 20) offenders.push(`${relPath} (install name) -> ${ref}`);
+      }
+    }
+
+    const loadOutput = runCaptureSync("otool", ["-l", binaryPath]);
+    if (!loadOutput) {
+      return {
+        ok: false,
+        reason: `Failed to inspect load commands for ${binaryPath}`
+      };
+    }
+    const minosValues = parseOtoolMinimumMacOSVersions(loadOutput);
+    for (const version of minosValues) {
+      if (compareMacOSVersions(version, maximumVersion) > 0 && offenders.length < 20) {
+        offenders.push(`${relPath} (minos ${version} > ${maximumVersion})`);
+      }
+    }
+  }
+
+  const symlinks = collectSymlinks(runtimeRoot);
+  for (const linkPath of symlinks) {
+    let target = "";
+    try {
+      target = fs.readlinkSync(linkPath);
+    } catch (_) {
+      continue;
+    }
+    if (!target || !path.isAbsolute(target)) continue;
+    if (isAllowedAbsoluteSystemReference(target)) continue;
+    if (offenders.length < 20) offenders.push(`${path.relative(runtimeRoot, linkPath)} -> ${target}`);
+  }
+
+  if (offenders.length > 0) {
+    return {
+      ok: false,
+      reason: `Incompatible macOS runtime artifacts detected:\n  ${offenders.join("\n  ")}`
+    };
+  }
+
+  return {
+    ok: true,
+    reason: "",
+    scannedBinaries: binaries.length,
+    scannedSymlinks: symlinks.length
+  };
+}
+
+function checkRuntime(runtimeRoot, maximumVersion) {
   if (!fs.existsSync(runtimeRoot)) {
     return {
       ok: false,
@@ -245,6 +329,14 @@ function checkRuntime(runtimeRoot) {
         reason: `Bundled runtime missing portable launcher: ${portableLauncher}`
       };
     }
+
+    const compatibility = validateDarwinRuntimeCompatibility(runtimeRoot, maximumVersion);
+    if (!compatibility.ok) {
+      return {
+        ok: false,
+        reason: compatibility.reason
+      };
+    }
   }
 
   return {
@@ -261,7 +353,9 @@ function runBuildRuntime(cfg) {
     "--profile",
     cfg.profile,
     "--manifest",
-    cfg.manifestPath
+    cfg.manifestPath,
+    "--macos-min-version",
+    cfg.macosMinVersion
   ];
   if (cfg.strictRuntimeManifest) {
     args.push("--strict-runtime-manifest");
@@ -287,7 +381,7 @@ function runBuildRuntime(cfg) {
 
 async function main() {
   const cfg = parseArgs(process.argv.slice(2));
-  const before = checkRuntime(cfg.runtimeRoot);
+  const before = checkRuntime(cfg.runtimeRoot, cfg.macosMinVersion);
   if (before.ok) {
     console.log(`[ensure-r-runtime] runtime ready: ${before.rscript}`);
     return;
@@ -301,7 +395,7 @@ async function main() {
   console.log("[ensure-r-runtime] rebuilding bundled runtime...");
   await runBuildRuntime(cfg);
 
-  const after = checkRuntime(cfg.runtimeRoot);
+  const after = checkRuntime(cfg.runtimeRoot, cfg.macosMinVersion);
   if (!after.ok) {
     throw new Error(`runtime verification failed after rebuild: ${after.reason}`);
   }

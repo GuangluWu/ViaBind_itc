@@ -119,43 +119,95 @@ class BackendController extends EventEmitter {
 
     const repoRoot = process.env.ITCSUITE_REPO_ROOT || path.resolve(__dirname, "../../..");
     const launchScript = path.join(repoRoot, "ITCSuiteWeb", "scripts", "launch_shiny.R");
-    const runtimeRoot = path.join(repoRoot, "desktop", "resources", "r-runtime");
+    const runtimeRoot = process.env.ITCSUITE_RUNTIME_ROOT || path.join(repoRoot, "desktop", "resources", "r-runtime");
     return { repoRoot, launchScript, runtimeRoot };
   }
 
   resolveRscript(runtimeRoot) {
     if (process.env.ITCSUITE_RSCRIPT) {
-      return process.env.ITCSUITE_RSCRIPT;
+      return {
+        path: process.env.ITCSUITE_RSCRIPT,
+        kind: "override",
+        label: "env override"
+      };
     }
 
     // In development we prefer system Rscript to avoid accidentally
     // using a partially built bundled runtime.
     if (!app.isPackaged && !useBundledRuntimeInDev()) {
-      return "Rscript";
+      return {
+        path: "Rscript",
+        kind: "system",
+        label: "PATH Rscript"
+      };
     }
 
-    const bundledCandidates = [
-      ...(app.isPackaged ? [path.join(runtimeRoot, "bin", "itcsuite-rscript")] : []),
-      path.join(runtimeRoot, "bin", "Rscript.exe"),
-      path.join(runtimeRoot, "bin", "x64", "Rscript.exe"),
-      path.join(runtimeRoot, "bin", "Rscript"),
-      path.join(runtimeRoot, "Resources", "bin", "Rscript")
+    const candidates = [
+      ...((app.isPackaged || useBundledRuntimeInDev()) ? [{
+        path: path.join(runtimeRoot, "bin", "itcsuite-rscript"),
+        kind: "bundled",
+        label: "bundled launcher"
+      }] : []),
+      {
+        path: path.join(runtimeRoot, "bin", "Rscript.exe"),
+        kind: "bundled",
+        label: "bundled Rscript.exe"
+      },
+      {
+        path: path.join(runtimeRoot, "bin", "x64", "Rscript.exe"),
+        kind: "bundled",
+        label: "bundled x64/Rscript.exe"
+      },
+      {
+        path: path.join(runtimeRoot, "bin", "Rscript"),
+        kind: "bundled",
+        label: "bundled bin/Rscript"
+      },
+      {
+        path: path.join(runtimeRoot, "Resources", "bin", "Rscript"),
+        kind: "bundled",
+        label: "bundled Resources/bin/Rscript"
+      },
+      ...(process.platform === "darwin" ? [{
+        path: "/Library/Frameworks/R.framework/Resources/bin/Rscript",
+        kind: "system",
+        label: "system framework Rscript"
+      }] : [])
     ];
 
-    for (const candidate of bundledCandidates) {
-      if (fs.existsSync(candidate)) {
-        return candidate;
+    const resolvedCandidates = candidates.filter((candidate) => {
+      if (candidate.path === "Rscript") return true;
+      return fs.existsSync(candidate.path);
+    });
+
+    if (process.platform === "darwin" && app.isPackaged) {
+      for (const candidate of resolvedCandidates) {
+        const probe = this.probeRscriptCandidate(candidate, runtimeRoot);
+        this.appendLog(
+          `[${new Date().toISOString()}] R_PROBE ${candidate.label} (${candidate.path}) => ${probe.ok ? "OK" : "FAIL"}${probe.reason ? `: ${probe.reason}` : ""}\n`
+        );
+        if (probe.ok) {
+          return candidate;
+        }
       }
     }
 
-    if (app.isPackaged) {
-      throw new Error(`Bundled Rscript not found under ${runtimeRoot}`);
+    for (const candidate of resolvedCandidates) {
+      return candidate;
     }
 
-    return "Rscript";
+    if (app.isPackaged) {
+      throw new Error(`No usable Rscript found under ${runtimeRoot}. On macOS, the current build may still require a local CRAN R framework install.`);
+    }
+
+    return {
+      path: "Rscript",
+      kind: "system",
+      label: "PATH Rscript"
+    };
   }
 
-  buildEnv(runtimeRoot, rscriptPath = "") {
+  buildEnv(runtimeRoot, rscriptPath = "", rscriptKind = "bundled") {
     const env = { ...process.env };
     env.ITCSUITE_DESKTOP = "1";
     env.ITCSUITE_USER_DATA_DIR = app.getPath("userData");
@@ -166,10 +218,19 @@ class BackendController extends EventEmitter {
 
     const bundledLib = path.join(runtimeRoot, "library");
     if (fs.existsSync(bundledLib) && (app.isPackaged || useBundledRuntimeInDev())) {
-      env.R_HOME = runtimeRoot;
+      const isolatedUserLib = path.join(env.ITCSUITE_USER_DATA_DIR || os.tmpdir(), "r-library-empty");
+      try {
+        fs.mkdirSync(isolatedUserLib, { recursive: true });
+      } catch (_) {
+        // Best effort only.
+      }
+      env.ITCSUITE_RUNTIME_ROOT = runtimeRoot;
       env.R_LIBS = bundledLib;
-      env.R_LIBS_USER = bundledLib;
       env.R_LIBS_SITE = bundledLib;
+      env.R_LIBS_USER = isolatedUserLib;
+      if (rscriptKind !== "system") {
+        env.R_HOME = runtimeRoot;
+      }
 
       const runtimeBins = [
         path.join(runtimeRoot, "bin", "x64"),
@@ -198,6 +259,51 @@ class BackendController extends EventEmitter {
     }
 
     return env;
+  }
+
+  probeRscriptCandidate(candidate, runtimeRoot) {
+    const probeScript = [
+      "cat('ITCSUITE_PROBE_R_HOME=', normalizePath(R.home(), winslash='/', mustWork=FALSE), '\\n', sep='')",
+      "for (lib in normalizePath(.libPaths(), winslash='/', mustWork=FALSE)) cat('ITCSUITE_PROBE_LIB=', lib, '\\n', sep='')"
+    ].join(";");
+    const env = this.buildEnv(runtimeRoot, candidate.path, candidate.kind);
+    const result = spawnSync(candidate.path, ["-e", probeScript], {
+      cwd: runtimeRoot,
+      env,
+      encoding: "utf8",
+      timeout: 15000,
+      windowsHide: true
+    });
+
+    if (result.error) {
+      return { ok: false, reason: result.error.message };
+    }
+    if (result.signal) {
+      return { ok: false, reason: `terminated by signal ${result.signal}` };
+    }
+    if (result.status !== 0) {
+      const stderr = String(result.stderr || "").trim();
+      return { ok: false, reason: `exit ${result.status}${stderr ? `; ${stderr}` : ""}` };
+    }
+
+    const stdout = String(result.stdout || "");
+    const rHomeMatch = stdout.match(/^ITCSUITE_PROBE_R_HOME=(.+)$/m);
+    const libMatches = [...stdout.matchAll(/^ITCSUITE_PROBE_LIB=(.+)$/gm)].map((match) => match[1]);
+    const bundledLib = path.join(runtimeRoot, "library").replace(/\\/g, "/");
+    const normalizedRuntimeRoot = runtimeRoot.replace(/\\/g, "/");
+
+    if (libMatches.length > 0 && !libMatches.includes(bundledLib)) {
+      return { ok: false, reason: `bundled library missing from .libPaths(): ${bundledLib}` };
+    }
+
+    if (candidate.kind === "bundled" && process.platform === "darwin") {
+      const rHome = rHomeMatch ? rHomeMatch[1] : "";
+      if (!rHome.startsWith(normalizedRuntimeRoot)) {
+        return { ok: false, reason: `R.home() resolved outside bundled runtime: ${rHome || "<empty>"}` };
+      }
+    }
+
+    return { ok: true, reason: rHomeMatch ? `R.home=${rHomeMatch[1]}` : "" };
   }
 
   processLine(line) {
@@ -253,7 +359,8 @@ class BackendController extends EventEmitter {
       throw new Error(`launch_shiny.R missing: ${launchScript}`);
     }
 
-    const rscript = this.resolveRscript(runtimeRoot);
+    const rscriptCandidate = this.resolveRscript(runtimeRoot);
+    const rscript = rscriptCandidate.path;
     const args = [
       launchScript,
       "--repo-root", repoRoot,
@@ -271,7 +378,7 @@ class BackendController extends EventEmitter {
 
     this.child = spawn(rscript, args, {
       cwd: repoRoot,
-      env: this.buildEnv(runtimeRoot, rscript),
+      env: this.buildEnv(runtimeRoot, rscript, rscriptCandidate.kind),
       stdio: ["ignore", "pipe", "pipe"]
     });
 

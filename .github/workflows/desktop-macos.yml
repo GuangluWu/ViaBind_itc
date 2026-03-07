@@ -14,6 +14,8 @@ jobs:
     name: desktop-macos
     runs-on: macos-14
     timeout-minutes: 360
+    env:
+      R_LIBS_USER: ${{ runner.temp }}/r-lib-tests
 
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +26,7 @@ jobs:
 
       - name: Install R test dependencies
         run: |
+          mkdir -p "${R_LIBS_USER}"
           Rscript -e 'install.packages(c("testthat","shinytest2","shiny","rootSolve","tidyverse","DT","DEoptim","readxl","writexl","plotly","patchwork","jsonlite","later","digest","MASS","gridExtra","colourpicker"), repos="https://cloud.r-project.org")'
 
       - name: Run existing strict test suites
@@ -39,10 +42,16 @@ jobs:
 
       - name: Build bundled R runtime
         working-directory: desktop
-        run: node scripts/build-r-runtime.mjs --strict-runtime-manifest
+        run: node scripts/build-r-runtime.mjs --strict-runtime-manifest --macos-min-version 13.0
+
+      - name: Bundled runtime graphics smoke
+        working-directory: desktop
+        run: npm run smoke:graphics
 
       - name: Desktop smoke test
         working-directory: desktop
+        env:
+          ITCSUITE_USE_BUNDLED_R: "1"
         run: npm run smoke
 
       - name: Check signing/notarization secrets

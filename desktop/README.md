@@ -59,6 +59,7 @@ npm run dist
 `npm run dist` ensures `resources/r-runtime` is present and valid before packaging.
 Place learning/sample files under the repo-root `Examples/` folder before release; packaging will bundle it into app resources as `itcsuite/Examples`.
 Build outputs land in `dist/`.
+Official macOS release DMGs should be taken from the `desktop-macos` GitHub Actions workflow, not from ad hoc local `dist` builds.
 
 ## Package app (Windows x64, for CI runners)
 
