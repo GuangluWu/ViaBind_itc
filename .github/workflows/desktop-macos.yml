@@ -14,8 +14,6 @@ jobs:
     name: desktop-macos
     runs-on: macos-14
     timeout-minutes: 360
-    env:
-      R_LIBS_USER: ${{ runner.temp }}/r-lib-tests
 
     steps:
       - uses: actions/checkout@v4
@@ -25,6 +23,8 @@ jobs:
           r-version: "4.3"
 
       - name: Install R test dependencies
+        env:
+          R_LIBS_USER: ${{ github.workspace }}/.github-tmp/r-lib-tests
         run: |
           mkdir -p "${R_LIBS_USER}"
           Rscript -e 'install.packages(c("testthat","shinytest2","shiny","rootSolve","tidyverse","DT","DEoptim","readxl","writexl","plotly","patchwork","jsonlite","later","digest","MASS","gridExtra","colourpicker"), repos="https://cloud.r-project.org")'
@@ -124,7 +124,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ViaBind_ITCSuite-notary-state-${{ github.run_id }}
-          path: ${{ runner.temp }}/notary-state
+          path: ${{ github.workspace }}/.github-tmp/notary-state
 
       - name: Notarize built macOS artifacts (retry only notarization)
         if: steps.signing.outputs.enabled == 'true'
@@ -146,7 +146,7 @@ jobs:
           poll_interval_seconds=45
           poll_timeout_seconds=14400
           progress_notice_seconds=7200
-          state_dir="${RUNNER_TEMP}/notary-state"
+          state_dir="${GITHUB_WORKSPACE}/.github-tmp/notary-state"
           state_file="${state_dir}/submission-ids.tsv"
           mkdir -p "${state_dir}"
           touch "${state_file}"
@@ -261,7 +261,7 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
           path: |
-            ${{ runner.temp }}/notary-state/submission-ids.tsv
+            ${{ github.workspace }}/.github-tmp/notary-state/submission-ids.tsv
 
       - name: Staple notarized DMG artifacts
         if: steps.signing.outputs.enabled == 'true'
