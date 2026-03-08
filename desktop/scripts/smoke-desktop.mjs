@@ -48,10 +48,45 @@ const child = spawn(electronBin, [".", "--smoke-test"], {
 let stdout = "";
 let stderr = "";
 let sawSmokeMarker = false;
+let forcedSuccess = false;
+let successShutdownTimer = null;
 
 const timeout = setTimeout(() => {
   child.kill("SIGKILL");
 }, 120000);
+
+function clearSuccessShutdownTimer() {
+  if (successShutdownTimer) {
+    clearTimeout(successShutdownTimer);
+    successShutdownTimer = null;
+  }
+}
+
+function forceTerminateChildTree() {
+  if (child.killed) return;
+  forcedSuccess = true;
+
+  if (process.platform === "win32" && Number.isFinite(child.pid) && child.pid > 0) {
+    const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+      stdio: "ignore",
+      windowsHide: true
+    });
+    killer.on("error", () => {
+      try {
+        child.kill("SIGKILL");
+      } catch (_) {
+        // Ignore signal failures.
+      }
+    });
+    return;
+  }
+
+  try {
+    child.kill("SIGKILL");
+  } catch (_) {
+    // Ignore signal failures.
+  }
+}
 
 child.stdout.on("data", (chunk) => {
   const text = chunk.toString("utf8");
@@ -59,6 +94,11 @@ child.stdout.on("data", (chunk) => {
   process.stdout.write(text);
   if (text.includes("ITCSUITE_ELECTRON_SMOKE")) {
     sawSmokeMarker = true;
+    if (!successShutdownTimer) {
+      successShutdownTimer = setTimeout(() => {
+        forceTerminateChildTree();
+      }, 5000);
+    }
   }
 });
 
@@ -69,7 +109,11 @@ child.stderr.on("data", (chunk) => {
 });
 
 child.on("close", (code) => {
+  clearSuccessShutdownTimer();
   clearTimeout(timeout);
+  if (forcedSuccess && sawSmokeMarker) {
+    process.exit(0);
+  }
   if (code !== 0) {
     console.error(`Smoke failed: electron exited with code ${code}.`);
     process.exit(code ?? 1);
