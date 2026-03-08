@@ -6,9 +6,27 @@ import process from "node:process";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const desktopDir = path.resolve(path.dirname(scriptPath), "..");
-const electronBin = process.platform === "win32"
-  ? path.join(desktopDir, "node_modules", ".bin", "electron.cmd")
-  : path.join(desktopDir, "node_modules", ".bin", "electron");
+
+function resolveElectronLaunch() {
+  const windowsExe = path.join(desktopDir, "node_modules", "electron", "dist", "electron.exe");
+  const windowsCmd = path.join(desktopDir, "node_modules", ".bin", "electron.cmd");
+  const unixBin = path.join(desktopDir, "node_modules", ".bin", "electron");
+
+  if (process.platform === "win32") {
+    if (existsSync(windowsExe)) {
+      return { command: windowsExe, useShell: false, label: "electron.exe" };
+    }
+    if (existsSync(windowsCmd)) {
+      return { command: windowsCmd, useShell: true, label: "electron.cmd" };
+    }
+    return { command: windowsExe, useShell: false, label: "electron.exe" };
+  }
+
+  return { command: unixBin, useShell: false, label: "electron" };
+}
+
+const electronLaunch = resolveElectronLaunch();
+const electronBin = electronLaunch.command;
 
 if (!existsSync(electronBin)) {
   console.error(`Smoke failed: electron binary missing (${electronBin}). Run npm install first.`);
@@ -22,7 +40,9 @@ const child = spawn(electronBin, [".", "--smoke-test"], {
     ITCSUITE_SMOKE_TEST: "1",
     ITCSUITE_USE_BUNDLED_R: process.env.ITCSUITE_USE_BUNDLED_R || "0"
   },
-  stdio: ["ignore", "pipe", "pipe"]
+  stdio: ["ignore", "pipe", "pipe"],
+  shell: electronLaunch.useShell,
+  windowsHide: true
 });
 
 let stdout = "";
