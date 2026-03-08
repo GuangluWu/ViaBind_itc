@@ -82,6 +82,13 @@ jobs:
         timeout-minutes: 10
         run: npm run smoke:backend
 
+      - name: Desktop smoke test (bundled runtime)
+        working-directory: desktop
+        timeout-minutes: 10
+        env:
+          ITCSUITE_USE_BUNDLED_R: "1"
+        run: npm run smoke
+
       - name: Build Windows artifacts
         working-directory: desktop
         env:

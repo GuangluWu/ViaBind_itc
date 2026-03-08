@@ -38,7 +38,6 @@ if (process.platform === "win32" && smokeMode) {
   app.disableHardwareAcceleration();
   app.commandLine.appendSwitch("disable-gpu");
   app.commandLine.appendSwitch("disable-gpu-compositing");
-  app.commandLine.appendSwitch("disable-software-rasterizer");
 }
 
 let mainWindow = null;

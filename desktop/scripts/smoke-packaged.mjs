@@ -76,7 +76,7 @@ async function main() {
 
   await new Promise((resolve, reject) => {
     const smokeArgs = process.platform === "win32"
-      ? ["--disable-gpu", "--disable-gpu-compositing", "--disable-software-rasterizer", "--smoke-test"]
+      ? ["--disable-gpu", "--disable-gpu-compositing", "--smoke-test"]
       : ["--smoke-test"];
 
     const child = spawn(exePath, smokeArgs, {
