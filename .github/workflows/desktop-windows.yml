@@ -72,6 +72,11 @@ jobs:
           Write-Error "Bundled runtime build failed on both R 4.5 and fallback R 4.4."
           exit 1
 
+      - name: Graphics smoke test (bundled runtime)
+        working-directory: desktop
+        timeout-minutes: 10
+        run: npm run smoke:graphics
+
       - name: Backend smoke test (headless)
         working-directory: desktop
         timeout-minutes: 10
@@ -83,6 +88,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ITCSUITE_R_PKG_TYPE: binary
         run: npm run dist:win
+
+      - name: Packaged app smoke test
+        working-directory: desktop
+        timeout-minutes: 10
+        run: node scripts/smoke-packaged.mjs --exe dist\\win-unpacked\\ViaBind.exe
 
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v4
