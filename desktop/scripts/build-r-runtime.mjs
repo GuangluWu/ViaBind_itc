@@ -2,6 +2,7 @@
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -372,6 +373,34 @@ function runCommand(command, args, options = {}) {
       reject(new Error(`${command} ${normalizedArgs.join(" ")} exited with code ${code}${suffix}`));
     });
   });
+}
+
+async function runInlineRScript(rscriptPath, scriptContent, options = {}) {
+  const {
+    cwd = process.cwd(),
+    env = process.env,
+    label = "inline"
+  } = options;
+
+  if (process.platform !== "win32") {
+    return runCommand(rscriptPath, ["--vanilla", "-e", scriptContent], {
+      cwd,
+      env
+    });
+  }
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "itcsuite-build-r-"));
+  const tempScriptPath = path.join(tempDir, `${label}.R`);
+  fs.writeFileSync(tempScriptPath, scriptContent, "utf8");
+
+  try {
+    return await runCommand(rscriptPath, [tempScriptPath], {
+      cwd,
+      env
+    });
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 function normalizePrefix(prefix) {
@@ -1144,7 +1173,10 @@ async function main() {
     const removed = sanitizeStagedLibraryWithFilesystem(libDir);
     console.log(`[build-r-runtime] removed ${removed} staged non-base package(s) before runtime install.`);
   } else {
-    await runCommand(buildRscript, ["--vanilla", "-e", SANITIZE_STAGED_LIBRARY_SCRIPT], {
+    console.log("[build-r-runtime] sanitizing staged runtime library...");
+    await runInlineRScript(buildRscript, SANITIZE_STAGED_LIBRARY_SCRIPT, {
+      label: "sanitize-staged-library",
+      cwd: desktopDir,
       env: {
         ...buildREnv,
         ITCSUITE_LIB_DIR: libDir
@@ -1152,7 +1184,10 @@ async function main() {
     });
   }
 
-  await runCommand(buildRscript, ["--vanilla", "-e", INSTALL_SCRIPT], {
+  console.log("[build-r-runtime] installing runtime packages...");
+  await runInlineRScript(buildRscript, INSTALL_SCRIPT, {
+    label: "install-runtime-packages",
+    cwd: desktopDir,
     env: {
       ...buildREnv,
       ITCSUITE_LIB_DIR: libDir,
@@ -1160,7 +1195,10 @@ async function main() {
     }
   });
 
-  await runCommand(buildRscript, ["--vanilla", "-e", VERIFY_AND_PRUNE_SCRIPT], {
+  console.log("[build-r-runtime] verifying and pruning runtime library...");
+  await runInlineRScript(buildRscript, VERIFY_AND_PRUNE_SCRIPT, {
+    label: "verify-prune-runtime-library",
+    cwd: desktopDir,
     env: {
       ...buildREnv,
       ITCSUITE_LIB_DIR: libDir,
