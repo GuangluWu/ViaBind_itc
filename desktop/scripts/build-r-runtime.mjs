@@ -1102,11 +1102,19 @@ async function main() {
   }
 
   // Windows packaged R builds are not stable to execute directly from the staged copy
-  // during runtime assembly. Use the host Rscript to populate the staged library there.
+  // during runtime assembly. Use the host Rscript there, but avoid overriding its
+  // startup env; the build scripts already target the staged library explicitly.
   const buildRscript = process.platform === "win32" ? hostRscript : bundledRscript;
-  const buildREnv = buildRuntimeBuildEnv(cfg.outDir, libDir, {
-    rHomeOverride: process.platform === "win32" ? rHomeRealDir : cfg.outDir
-  });
+  const buildREnv = process.platform === "win32"
+    ? {
+        ...process.env,
+        R_LIBS: "",
+        R_LIBS_SITE: "",
+        R_LIBS_USER: ""
+      }
+    : buildRuntimeBuildEnv(cfg.outDir, libDir, {
+        rHomeOverride: cfg.outDir
+      });
 
   await runCommand(buildRscript, ["--vanilla", "-e", SANITIZE_STAGED_LIBRARY_SCRIPT], {
     env: {
