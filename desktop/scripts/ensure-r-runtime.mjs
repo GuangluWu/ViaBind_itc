@@ -349,6 +349,7 @@ function runBuildRuntime(cfg) {
   const buildScript = path.join(scriptDir, "build-r-runtime.mjs");
   const args = [
     buildScript,
+    "--runtime-root",
     cfg.runtimeRoot,
     "--profile",
     cfg.profile,

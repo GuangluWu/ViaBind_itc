@@ -809,13 +809,16 @@ function resolveBundledRscript(runtimeRoot) {
   return "";
 }
 
-function buildBundledREnv(runtimeRoot, libDir) {
+function buildRuntimeBuildEnv(runtimeRoot, libDir, options = {}) {
+  const {
+    rHomeOverride = runtimeRoot
+  } = options;
   const env = { ...process.env };
   const pathEntries = [];
   const candidates = [
-    path.join(runtimeRoot, "bin", "x64"),
-    path.join(runtimeRoot, "bin"),
-    path.join(runtimeRoot, "Resources", "bin")
+    path.join(rHomeOverride, "bin", "x64"),
+    path.join(rHomeOverride, "bin"),
+    path.join(rHomeOverride, "Resources", "bin")
   ];
 
   for (const candidate of candidates) {
@@ -830,7 +833,7 @@ function buildBundledREnv(runtimeRoot, libDir) {
   }
 
   env.PATH = pathEntries.join(path.delimiter);
-  env.R_HOME = runtimeRoot;
+  env.R_HOME = rHomeOverride;
   env.R_LIBS = libDir;
   env.R_LIBS_USER = libDir;
   env.R_LIBS_SITE = libDir;
@@ -1077,6 +1080,10 @@ async function main() {
   if (!bundledRscript) {
     throw new Error(`Rscript missing after copy under ${cfg.outDir}`);
   }
+  const hostRscript = resolveBundledRscript(rHomeRealDir);
+  if (!hostRscript) {
+    throw new Error(`host Rscript missing under ${rHomeRealDir}`);
+  }
 
   const libDir = path.join(cfg.outDir, "library");
   await fs.promises.mkdir(libDir, { recursive: true });
@@ -1094,26 +1101,31 @@ async function main() {
     throw new Error("no packages provided by manifest/fallback list");
   }
 
-  const bundledREnv = buildBundledREnv(cfg.outDir, libDir);
+  // Windows packaged R builds are not stable to execute directly from the staged copy
+  // during runtime assembly. Use the host Rscript to populate the staged library there.
+  const buildRscript = process.platform === "win32" ? hostRscript : bundledRscript;
+  const buildREnv = buildRuntimeBuildEnv(cfg.outDir, libDir, {
+    rHomeOverride: process.platform === "win32" ? rHomeRealDir : cfg.outDir
+  });
 
-  await runCommand(bundledRscript, ["--vanilla", "-e", SANITIZE_STAGED_LIBRARY_SCRIPT], {
+  await runCommand(buildRscript, ["--vanilla", "-e", SANITIZE_STAGED_LIBRARY_SCRIPT], {
     env: {
-      ...bundledREnv,
+      ...buildREnv,
       ITCSUITE_LIB_DIR: libDir
     }
   });
 
-  await runCommand(bundledRscript, ["--vanilla", "-e", INSTALL_SCRIPT], {
+  await runCommand(buildRscript, ["--vanilla", "-e", INSTALL_SCRIPT], {
     env: {
-      ...bundledREnv,
+      ...buildREnv,
       ITCSUITE_LIB_DIR: libDir,
       ITCSUITE_PKG_CSV: requiredPkgs.join(",")
     }
   });
 
-  await runCommand(bundledRscript, ["--vanilla", "-e", VERIFY_AND_PRUNE_SCRIPT], {
+  await runCommand(buildRscript, ["--vanilla", "-e", VERIFY_AND_PRUNE_SCRIPT], {
     env: {
-      ...bundledREnv,
+      ...buildREnv,
       ITCSUITE_LIB_DIR: libDir,
       ITCSUITE_MANIFEST_PATH: cfg.manifestPath,
       ITCSUITE_STRICT_RUNTIME_MANIFEST: cfg.strictRuntimeManifest ? "1" : "0"
