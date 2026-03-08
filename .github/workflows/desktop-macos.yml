@@ -30,14 +30,14 @@ jobs:
 
       - uses: r-lib/actions/setup-r@v2
         with:
-          r-version: "4.3"
+          r-version: "4.5"
 
       - name: Install R test dependencies
         env:
           R_LIBS_USER: ${{ steps.workflow_paths.outputs.r_test_lib }}
         run: |
           mkdir -p "${R_LIBS_USER}"
-          Rscript -e 'install.packages(c("testthat","shinytest2","shiny","rootSolve","tidyverse","DT","DEoptim","readxl","writexl","plotly","patchwork","jsonlite","later","digest","MASS","gridExtra","colourpicker"), repos="https://cloud.r-project.org")'
+          Rscript -e 'options(pkgType = "binary"); install.packages(c("testthat","shinytest2","shiny","rootSolve","tidyverse","DT","DEoptim","readxl","writexl","plotly","patchwork","jsonlite","later","digest","MASS","gridExtra","colourpicker"), repos="https://cloud.r-project.org", type="binary")'
 
       - name: Run existing strict test suites
         env:
@@ -54,6 +54,8 @@ jobs:
 
       - name: Build bundled R runtime
         working-directory: desktop
+        env:
+          ITCSUITE_R_PKG_TYPE: binary
         run: node scripts/build-r-runtime.mjs --strict-runtime-manifest --macos-min-version 13.0
 
       - name: Bundled runtime graphics smoke
@@ -126,6 +128,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ITCSUITE_R_PKG_TYPE: binary
         run: |
           npm run ensure:r-runtime
           ./node_modules/.bin/electron-builder --mac dmg --config.mac.notarize=false
@@ -298,6 +301,7 @@ jobs:
         working-directory: desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ITCSUITE_R_PKG_TYPE: binary
         run: |
           npm run ensure:r-runtime
           ./node_modules/.bin/electron-builder --mac dmg --config.mac.identity=null --config.mac.notarize=false

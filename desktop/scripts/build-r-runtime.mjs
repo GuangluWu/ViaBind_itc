@@ -58,19 +58,28 @@ repo <- Sys.getenv("ITCSUITE_R_REPO", unset = "https://cloud.r-project.org")
 pkg_type <- Sys.getenv("ITCSUITE_R_PKG_TYPE", unset = "")
 timeout_secs <- suppressWarnings(as.integer(Sys.getenv("ITCSUITE_R_TIMEOUT", unset = "600")))
 retry_count <- suppressWarnings(as.integer(Sys.getenv("ITCSUITE_R_RETRY", unset = "2")))
+is_darwin <- identical(Sys.info()[["sysname"]], "Darwin")
 if (!nzchar(lib_dir) || !nzchar(pkg_csv)) stop("missing env")
 if (!nzchar(repo)) repo <- "https://cloud.r-project.org"
 if (!is.finite(timeout_secs) || is.na(timeout_secs) || timeout_secs < 1L) timeout_secs <- 600L
 if (!is.finite(retry_count) || is.na(retry_count) || retry_count < 0L) retry_count <- 2L
 if (!nzchar(pkg_type)) {
-  pkg_type <- if (.Platform$OS.type == "windows") "binary" else getOption("pkgType")
+  pkg_type <- if (.Platform$OS.type == "windows" || is_darwin) "binary" else getOption("pkgType")
 }
-if (!nzchar(pkg_type)) pkg_type <- "source"
+if (!nzchar(pkg_type)) pkg_type <- if (is_darwin) "binary" else "source"
 if (!dir.exists(lib_dir)) dir.create(lib_dir, recursive = TRUE, showWarnings = FALSE)
 .libPaths(lib_dir)
 options(timeout = timeout_secs)
 options(repos = c(CRAN = repo))
 options(pkgType = pkg_type)
+if (is_darwin && !identical(getOption("pkgType"), "binary")) {
+  stop(
+    paste(
+      "macOS bundled runtime builds must use CRAN binary packages.",
+      "Set ITCSUITE_R_PKG_TYPE=binary and use an R version that still has macOS binaries available."
+    )
+  )
+}
 cat(sprintf(
   "[build-r-runtime] install config: repo=%s pkgType=%s timeout=%ss retry=%d\\n",
   getOption("repos")[["CRAN"]],
