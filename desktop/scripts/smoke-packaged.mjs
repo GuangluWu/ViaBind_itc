@@ -286,7 +286,7 @@ async function main() {
       copyFileBestEffort(path.join(logsDir, "backend.log"), path.join(diagDir, "backend.log"));
       writeJson(path.join(diagDir, "packaged-smoke-summary.json"), summary);
       process.stdout.write(`ITCSUITE_PACKAGED_SMOKE ${JSON.stringify(summary)}\n`);
-      return;
+      process.exit(0);
     }
   }
 
