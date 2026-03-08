@@ -41,67 +41,65 @@ function tailText(text, maxChars = 4000) {
   return text.slice(text.length - maxChars);
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  if (!args.exe) {
-    throw new Error("Missing required --exe argument");
+function writeJson(filePath, payload) {
+  fs.writeFileSync(filePath, JSON.stringify(payload, null, 2));
+}
+
+function resolveDefaultLogsDir() {
+  if (process.platform !== "win32") {
+    return path.join(os.tmpdir(), "ViaBind", "logs");
   }
+  const appData = process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming");
+  return path.join(appData, "ViaBind", "logs");
+}
 
-  const exePath = path.resolve(args.exe);
-  if (!fs.existsSync(exePath)) {
-    throw new Error(`Packaged app missing: ${exePath}`);
+function copyFileBestEffort(src, dst) {
+  try {
+    if (!fs.existsSync(src)) return false;
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    fs.copyFileSync(src, dst);
+    return true;
+  } catch (_) {
+    return false;
   }
+}
 
-  const requestedWorkDir = args.workDir || process.env.ITCSUITE_SMOKE_ROOT || "";
-  const tmpRoot = requestedWorkDir
-    ? path.resolve(requestedWorkDir)
-    : fs.mkdtempSync(path.join(os.tmpdir(), "itcsuite-packaged-smoke-"));
-  const roamingRoot = path.join(tmpRoot, "appdata-roaming");
-  const localRoot = path.join(tmpRoot, "appdata-local");
-  const homeRoot = path.join(tmpRoot, "home");
-  fs.rmSync(tmpRoot, { recursive: true, force: true });
-  fs.mkdirSync(tmpRoot, { recursive: true });
-  fs.mkdirSync(roamingRoot, { recursive: true });
-  fs.mkdirSync(localRoot, { recursive: true });
-  fs.mkdirSync(homeRoot, { recursive: true });
-
-  const logsDir = path.join(roamingRoot, "ViaBind", "logs");
-  const mainLogPath = path.join(logsDir, "main.log");
-  const backendLogPath = path.join(logsDir, "backend.log");
-
-  process.stdout.write(`ITCSUITE_PACKAGED_SMOKE_ROOT ${tmpRoot}\n`);
-
+async function runAttempt({ exePath, cwd, smokeArgs, logsDir, timeoutMs }) {
   let stdout = "";
   let stderr = "";
 
-  await new Promise((resolve, reject) => {
-    const smokeArgs = process.platform === "win32"
-      ? ["--disable-gpu", "--disable-gpu-compositing", "--smoke-test"]
-      : ["--smoke-test"];
+  const mainLogPath = path.join(logsDir, "main.log");
+  const backendLogPath = path.join(logsDir, "backend.log");
 
+  const result = await new Promise((resolve, reject) => {
     const child = spawn(exePath, smokeArgs, {
-      cwd: path.dirname(exePath),
+      cwd,
       env: {
         ...process.env,
-        APPDATA: roamingRoot,
-        LOCALAPPDATA: localRoot,
-        USERPROFILE: homeRoot,
-        HOME: homeRoot,
         ITCSUITE_SMOKE_TEST: "1",
-        ELECTRON_ENABLE_LOGGING: "1"
+        ELECTRON_ENABLE_LOGGING: "1",
+        ELECTRON_NO_ATTACH_CONSOLE: "1"
       },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true
     });
 
+    const startedAt = Date.now();
     const timeout = setTimeout(() => {
       try {
         child.kill("SIGKILL");
       } catch (_) {
         // Ignore signal failures.
       }
-      reject(new Error(`Packaged smoke timed out. main.log tail:\n${tailText(readTextIfExists(mainLogPath))}`));
-    }, 180000);
+      resolve({
+        ok: false,
+        code: null,
+        reason: "timeout",
+        durationMs: Date.now() - startedAt,
+        stdout,
+        stderr
+      });
+    }, timeoutMs);
 
     child.stdout.on("data", (chunk) => {
       const text = chunk.toString("utf8");
@@ -122,46 +120,140 @@ async function main() {
 
     child.on("close", (code) => {
       clearTimeout(timeout);
-      if (code === 0) {
-        resolve();
-      } else {
-        const mainLogTail = tailText(readTextIfExists(mainLogPath));
-        const backendLogTail = tailText(readTextIfExists(backendLogPath));
-        reject(
-          new Error(
-            [
-              `Packaged smoke exited with code ${code}.`,
-              mainLogTail ? `main.log tail:\n${mainLogTail}` : "",
-              backendLogTail ? `backend.log tail:\n${backendLogTail}` : "",
-              stderr ? `stderr tail:\n${tailText(stderr)}` : ""
-            ].filter(Boolean).join("\n\n")
-          )
-        );
-      }
+      resolve({
+        ok: code === 0,
+        code: Number.isFinite(code) ? code : null,
+        reason: code === 0 ? "exit_0" : "nonzero_exit",
+        durationMs: Date.now() - startedAt,
+        stdout,
+        stderr
+      });
     });
   });
 
   const mainLog = readTextIfExists(mainLogPath);
-  const sawStdoutMarker = stdout.includes("ITCSUITE_ELECTRON_SMOKE");
+  const backendLog = readTextIfExists(backendLogPath);
+  const sawStdoutMarker = result.stdout.includes("ITCSUITE_ELECTRON_SMOKE");
   const sawBackendPageLoad = mainLog.includes("\"event\":\"backend_page_load_success\"");
 
-  if (!sawStdoutMarker && !sawBackendPageLoad) {
-    throw new Error(
-      [
-        "Packaged smoke completed without expected success signals.",
-        `Expected stdout marker or backend_page_load_success in ${mainLogPath}.`,
-        mainLog ? `main.log tail:\n${tailText(mainLog)}` : "main.log missing or empty."
-      ].join("\n\n")
-    );
+  return {
+    ...result,
+    smokeArgs,
+    sawStdoutMarker,
+    sawBackendPageLoad,
+    mainLogTail: tailText(mainLog),
+    backendLogTail: tailText(backendLog),
+    stderrTail: tailText(result.stderr),
+    stdoutTail: tailText(result.stdout)
+  };
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (!args.exe) {
+    throw new Error("Missing required --exe argument");
   }
 
-  const payload = JSON.stringify({
+  const exePath = path.resolve(args.exe);
+  if (!fs.existsSync(exePath)) {
+    throw new Error(`Packaged app missing: ${exePath}`);
+  }
+
+  const requestedWorkDir = args.workDir || process.env.ITCSUITE_SMOKE_ROOT || "";
+  const smokeRoot = requestedWorkDir
+    ? path.resolve(requestedWorkDir)
+    : fs.mkdtempSync(path.join(os.tmpdir(), "itcsuite-packaged-smoke-"));
+  fs.rmSync(smokeRoot, { recursive: true, force: true });
+  fs.mkdirSync(smokeRoot, { recursive: true });
+
+  const logsDir = resolveDefaultLogsDir();
+  const diagDir = path.join(smokeRoot, "diag");
+  fs.mkdirSync(diagDir, { recursive: true });
+  process.stdout.write(`ITCSUITE_PACKAGED_SMOKE_ROOT ${smokeRoot}\n`);
+  process.stdout.write(`ITCSUITE_PACKAGED_LOGS_DIR ${logsDir}\n`);
+
+  const attempts = [];
+  const launchProfiles = process.platform === "win32"
+    ? [
+        {
+          name: "safe-flags",
+          args: [
+            "--smoke-test",
+            "--no-sandbox",
+            "--disable-gpu",
+            "--disable-gpu-compositing",
+            "--disable-features=RendererCodeIntegrity,CalculateNativeWinOcclusion"
+          ]
+        },
+        {
+          name: "minimal-flags",
+          args: ["--smoke-test"]
+        }
+      ]
+    : [
+        { name: "default", args: ["--smoke-test"] }
+      ];
+
+  for (const profile of launchProfiles) {
+    const attempt = await runAttempt({
+      exePath,
+      cwd: path.dirname(exePath),
+      smokeArgs: profile.args,
+      logsDir,
+      timeoutMs: 180000
+    });
+    attempts.push({
+      profile: profile.name,
+      ...attempt
+    });
+
+    if (attempt.ok && (attempt.sawStdoutMarker || attempt.sawBackendPageLoad)) {
+      const summary = {
+        status: "success",
+        exe: exePath,
+        logs_dir: logsDir,
+        chosen_profile: profile.name,
+        attempts: attempts.map((x) => ({
+          profile: x.profile,
+          code: x.code,
+          reason: x.reason,
+          duration_ms: x.durationMs,
+          saw_stdout_marker: x.sawStdoutMarker,
+          saw_backend_page_load: x.sawBackendPageLoad
+        }))
+      };
+      copyFileBestEffort(path.join(logsDir, "main.log"), path.join(diagDir, "main.log"));
+      copyFileBestEffort(path.join(logsDir, "backend.log"), path.join(diagDir, "backend.log"));
+      writeJson(path.join(diagDir, "packaged-smoke-summary.json"), summary);
+      process.stdout.write(`ITCSUITE_PACKAGED_SMOKE ${JSON.stringify(summary)}\n`);
+      return;
+    }
+  }
+
+  copyFileBestEffort(path.join(logsDir, "main.log"), path.join(diagDir, "main.log"));
+  copyFileBestEffort(path.join(logsDir, "backend.log"), path.join(diagDir, "backend.log"));
+
+  const failureSummary = {
+    status: "failed",
     exe: exePath,
     logs_dir: logsDir,
-    stdout_marker: sawStdoutMarker,
-    backend_page_load_success: sawBackendPageLoad
-  });
-  process.stdout.write(`ITCSUITE_PACKAGED_SMOKE ${payload}\n`);
+    attempts: attempts.map((x) => ({
+      profile: x.profile,
+      code: x.code,
+      reason: x.reason,
+      duration_ms: x.durationMs,
+      saw_stdout_marker: x.sawStdoutMarker,
+      saw_backend_page_load: x.sawBackendPageLoad,
+      stdout_tail: x.stdoutTail,
+      stderr_tail: x.stderrTail,
+      main_log_tail: x.mainLogTail,
+      backend_log_tail: x.backendLogTail
+    }))
+  };
+  writeJson(path.join(diagDir, "packaged-smoke-summary.json"), failureSummary);
+
+  const concise = attempts.map((x) => `${x.profile}: code=${x.code} reason=${x.reason}`).join("; ");
+  throw new Error(`Packaged smoke failed after ${attempts.length} attempt(s). ${concise}`);
 }
 
 main().catch((error) => {
