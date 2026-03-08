@@ -811,7 +811,7 @@ ui <- fluidPage(
                 ),
                  
                 # --- Dimer (D) ---
-                conditionalPanel("input.active_paths.includes('rxn_D')",
+                conditionalPanel("(input.active_paths || []).includes('rxn_D')",
                                  div(class="param-group", style="border-left-color: var(--path-c-rxn-d);",
                                      strong(uiOutput("param_stepwise_title", inline = TRUE)),
                                      sliderInput("logK2", "logK2", 
@@ -827,7 +827,7 @@ ui <- fluidPage(
                 ),
                  
                 # --- Trimer (T) ---
-                conditionalPanel("input.active_paths.includes('rxn_T')",
+                conditionalPanel("(input.active_paths || []).includes('rxn_T')",
                                  div(class="param-group", style="border-left-color: var(--path-c-rxn-t);",
                                      strong(uiOutput("param_dimer_title", inline = TRUE)),
                                      sliderInput("logK3", "logK3", 
@@ -843,7 +843,7 @@ ui <- fluidPage(
                 ),
                  
                 # --- Host Bind (B) ---
-                conditionalPanel("input.active_paths.includes('rxn_B')",
+                conditionalPanel("(input.active_paths || []).includes('rxn_B')",
                                  div(class="param-group", style="border-left-color: var(--path-c-rxn-b);",
                                      strong(uiOutput("param_reverse_title", inline = TRUE)),
                                      sliderInput("logK4", "logK4", 
@@ -859,7 +859,7 @@ ui <- fluidPage(
                 ),
                  
                # --- T+G (F) ---
-               conditionalPanel("input.active_paths.includes('rxn_F')",
+               conditionalPanel("(input.active_paths || []).includes('rxn_F')",
                                 div(class="param-group", style="border-left-color: var(--path-c-rxn-f);",
                                     strong(uiOutput("param_oligomer_title", inline = TRUE)),
                                     sliderInput("logK5", "logK5", 
@@ -875,7 +875,7 @@ ui <- fluidPage(
                ),
                 
                # --- Bending (U) ---
-               conditionalPanel("input.active_paths.includes('rxn_U')",
+               conditionalPanel("(input.active_paths || []).includes('rxn_U')",
                                 div(class="param-group", style="border-left-color: var(--path-c-rxn-u);",
                                     strong(uiOutput("param_bending_title", inline = TRUE)),
                                     sliderInput("logK6", "logK6", 

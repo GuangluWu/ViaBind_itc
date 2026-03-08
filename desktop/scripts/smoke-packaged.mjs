@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -67,9 +67,36 @@ function copyFileBestEffort(src, dst) {
 async function runAttempt({ exePath, cwd, smokeArgs, logsDir, timeoutMs }) {
   let stdout = "";
   let stderr = "";
+  let sawMarker = false;
+  let sawMarkerAt = 0;
+  let settled = false;
+  let successExitTimer = null;
 
   const mainLogPath = path.join(logsDir, "main.log");
   const backendLogPath = path.join(logsDir, "backend.log");
+
+  function terminateChildBestEffort(child) {
+    if (process.platform === "win32" && Number.isFinite(child.pid) && child.pid > 0) {
+      const result = spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+        stdio: "ignore",
+        windowsHide: true
+      });
+      if (result.error) {
+        try {
+          child.kill("SIGKILL");
+        } catch (_) {
+          // Best effort only.
+        }
+      }
+      return;
+    }
+
+    try {
+      child.kill("SIGKILL");
+    } catch (_) {
+      // Best effort only.
+    }
+  }
 
   const result = await new Promise((resolve, reject) => {
     const child = spawn(exePath, smokeArgs, {
@@ -85,17 +112,26 @@ async function runAttempt({ exePath, cwd, smokeArgs, logsDir, timeoutMs }) {
     });
 
     const startedAt = Date.now();
-    const timeout = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } catch (_) {
-        // Ignore signal failures.
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (successExitTimer) {
+        clearTimeout(successExitTimer);
+        successExitTimer = null;
       }
-      resolve({
+      resolve(payload);
+    };
+
+    const timeout = setTimeout(() => {
+      terminateChildBestEffort(child);
+      finish({
         ok: false,
         code: null,
         reason: "timeout",
         durationMs: Date.now() - startedAt,
+        sawMarker,
+        sawMarkerAt,
         stdout,
         stderr
       });
@@ -105,6 +141,23 @@ async function runAttempt({ exePath, cwd, smokeArgs, logsDir, timeoutMs }) {
       const text = chunk.toString("utf8");
       stdout += text;
       process.stdout.write(text);
+      if (!sawMarker && text.includes("ITCSUITE_ELECTRON_SMOKE")) {
+        sawMarker = true;
+        sawMarkerAt = Date.now();
+        successExitTimer = setTimeout(() => {
+          terminateChildBestEffort(child);
+          finish({
+            ok: true,
+            code: null,
+            reason: "marker_detected",
+            durationMs: Date.now() - startedAt,
+            sawMarker,
+            sawMarkerAt,
+            stdout,
+            stderr
+          });
+        }, 1500);
+      }
     });
 
     child.stderr.on("data", (chunk) => {
@@ -114,17 +167,23 @@ async function runAttempt({ exePath, cwd, smokeArgs, logsDir, timeoutMs }) {
     });
 
     child.on("error", (error) => {
+      if (settled) return;
+      if (successExitTimer) {
+        clearTimeout(successExitTimer);
+        successExitTimer = null;
+      }
       clearTimeout(timeout);
       reject(error);
     });
 
     child.on("close", (code) => {
-      clearTimeout(timeout);
-      resolve({
+      finish({
         ok: code === 0,
         code: Number.isFinite(code) ? code : null,
         reason: code === 0 ? "exit_0" : "nonzero_exit",
         durationMs: Date.now() - startedAt,
+        sawMarker,
+        sawMarkerAt,
         stdout,
         stderr
       });
@@ -139,6 +198,7 @@ async function runAttempt({ exePath, cwd, smokeArgs, logsDir, timeoutMs }) {
   return {
     ...result,
     smokeArgs,
+    markerDetectedAt: result.sawMarkerAt ? new Date(result.sawMarkerAt).toISOString() : null,
     sawStdoutMarker,
     sawBackendPageLoad,
     mainLogTail: tailText(mainLog),
