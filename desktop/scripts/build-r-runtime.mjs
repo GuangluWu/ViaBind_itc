@@ -735,6 +735,35 @@ function writePortableRscriptLauncher(runtimeRoot) {
   return launcherPath;
 }
 
+function readPackagePriority(descriptionPath) {
+  if (!fs.existsSync(descriptionPath)) return "";
+  try {
+    const contents = fs.readFileSync(descriptionPath, "utf8");
+    const match = contents.match(/^Priority:\s*(.+)$/m);
+    return match ? match[1].trim() : "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function sanitizeStagedLibraryWithFilesystem(libDir) {
+  if (!fs.existsSync(libDir)) {
+    throw new Error(`library dir does not exist: ${libDir}`);
+  }
+
+  let removed = 0;
+  const entries = fs.readdirSync(libDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const packageDir = path.join(libDir, entry.name);
+    const priority = readPackagePriority(path.join(packageDir, "DESCRIPTION"));
+    if (priority === "base" || priority === "recommended") continue;
+    fs.rmSync(packageDir, { recursive: true, force: true });
+    removed += 1;
+  }
+  return removed;
+}
+
 async function adHocSignDarwinRuntime(runtimeRoot) {
   const binaries = collectMachOBinaries(runtimeRoot).sort();
   let signedCount = 0;
@@ -1106,22 +1135,22 @@ async function main() {
   // startup env; the build scripts already target the staged library explicitly.
   const buildRscript = process.platform === "win32" ? hostRscript : bundledRscript;
   const buildREnv = process.platform === "win32"
-    ? {
-        ...process.env,
-        R_LIBS: "",
-        R_LIBS_SITE: "",
-        R_LIBS_USER: ""
-      }
+    ? { ...process.env }
     : buildRuntimeBuildEnv(cfg.outDir, libDir, {
         rHomeOverride: cfg.outDir
       });
 
-  await runCommand(buildRscript, ["--vanilla", "-e", SANITIZE_STAGED_LIBRARY_SCRIPT], {
-    env: {
-      ...buildREnv,
-      ITCSUITE_LIB_DIR: libDir
-    }
-  });
+  if (process.platform === "win32") {
+    const removed = sanitizeStagedLibraryWithFilesystem(libDir);
+    console.log(`[build-r-runtime] removed ${removed} staged non-base package(s) before runtime install.`);
+  } else {
+    await runCommand(buildRscript, ["--vanilla", "-e", SANITIZE_STAGED_LIBRARY_SCRIPT], {
+      env: {
+        ...buildREnv,
+        ITCSUITE_LIB_DIR: libDir
+      }
+    });
+  }
 
   await runCommand(buildRscript, ["--vanilla", "-e", INSTALL_SCRIPT], {
     env: {
