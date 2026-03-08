@@ -92,7 +92,17 @@ jobs:
       - name: Packaged app smoke test
         working-directory: desktop
         timeout-minutes: 10
-        run: node scripts/smoke-packaged.mjs --exe dist\\win-unpacked\\ViaBind.exe
+        env:
+          ITCSUITE_SMOKE_ROOT: ${{ github.workspace }}\\desktop\\dist\\smoke-logs\\packaged-app
+        run: node scripts/smoke-packaged.mjs --exe dist\\win-unpacked\\ViaBind.exe --work-dir dist\\smoke-logs\\packaged-app
+
+      - name: Upload packaged smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ViaBind_ITCSuite-desktop-windows-smoke-logs
+          path: desktop/dist/smoke-logs/**/*
+          if-no-files-found: warn
 
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v4

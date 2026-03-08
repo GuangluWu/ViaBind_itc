@@ -7,11 +7,16 @@ import path from "node:path";
 import process from "node:process";
 
 function parseArgs(argv) {
-  const out = { exe: "" };
+  const out = { exe: "", workDir: "" };
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (token === "--exe") {
       out.exe = argv[i + 1] || "";
+      i += 1;
+      continue;
+    }
+    if (token === "--work-dir") {
+      out.workDir = argv[i + 1] || "";
       i += 1;
       continue;
     }
@@ -47,10 +52,15 @@ async function main() {
     throw new Error(`Packaged app missing: ${exePath}`);
   }
 
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "itcsuite-packaged-smoke-"));
+  const requestedWorkDir = args.workDir || process.env.ITCSUITE_SMOKE_ROOT || "";
+  const tmpRoot = requestedWorkDir
+    ? path.resolve(requestedWorkDir)
+    : fs.mkdtempSync(path.join(os.tmpdir(), "itcsuite-packaged-smoke-"));
   const roamingRoot = path.join(tmpRoot, "appdata-roaming");
   const localRoot = path.join(tmpRoot, "appdata-local");
   const homeRoot = path.join(tmpRoot, "home");
+  fs.rmSync(tmpRoot, { recursive: true, force: true });
+  fs.mkdirSync(tmpRoot, { recursive: true });
   fs.mkdirSync(roamingRoot, { recursive: true });
   fs.mkdirSync(localRoot, { recursive: true });
   fs.mkdirSync(homeRoot, { recursive: true });
@@ -59,11 +69,17 @@ async function main() {
   const mainLogPath = path.join(logsDir, "main.log");
   const backendLogPath = path.join(logsDir, "backend.log");
 
+  process.stdout.write(`ITCSUITE_PACKAGED_SMOKE_ROOT ${tmpRoot}\n`);
+
   let stdout = "";
   let stderr = "";
 
   await new Promise((resolve, reject) => {
-    const child = spawn(exePath, ["--smoke-test"], {
+    const smokeArgs = process.platform === "win32"
+      ? ["--disable-gpu", "--disable-gpu-compositing", "--disable-software-rasterizer", "--smoke-test"]
+      : ["--smoke-test"];
+
+    const child = spawn(exePath, smokeArgs, {
       cwd: path.dirname(exePath),
       env: {
         ...process.env,
@@ -71,7 +87,8 @@ async function main() {
         LOCALAPPDATA: localRoot,
         USERPROFILE: homeRoot,
         HOME: homeRoot,
-        ITCSUITE_SMOKE_TEST: "1"
+        ITCSUITE_SMOKE_TEST: "1",
+        ELECTRON_ENABLE_LOGGING: "1"
       },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true

@@ -32,6 +32,15 @@ app.setName(APP_NAME);
 
 const smokeMode = process.argv.includes("--smoke-test") || process.env.ITCSUITE_SMOKE_TEST === "1";
 
+if (process.platform === "win32" && smokeMode) {
+  // GitHub-hosted Windows runners can crash packaged Electron apps during
+  // early GPU initialization. Keep smoke mode CPU-rendered only.
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch("disable-gpu");
+  app.commandLine.appendSwitch("disable-gpu-compositing");
+  app.commandLine.appendSwitch("disable-software-rasterizer");
+}
+
 let mainWindow = null;
 let backend = null;
 let allowedUrlPrefix = null;
@@ -1340,7 +1349,8 @@ function createMainWindow() {
     minWidth: 1200,
     minHeight: 760,
     title: APP_TITLE,
-    show: true,
+    show: !smokeMode,
+    paintWhenInitiallyHidden: true,
     autoHideMenuBar: process.platform === "win32",
     webPreferences: {
       contextIsolation: true,
@@ -1645,20 +1655,22 @@ app.whenReady().then(async () => {
   configureDownloadBehavior();
   createMainWindow();
   wireBackendEvents();
-  powerMonitor.on("suspend", () => {
-    appendMainLog("power_suspend", {});
-    emitPowerEventToRenderer("suspend", "power-monitor");
-  });
-  powerMonitor.on("resume", () => {
-    appendMainLog("power_resume", {});
-    emitPowerEventToRenderer("resume", "power-monitor");
-    recoverAfterResume("power-resume");
-  });
-  powerMonitor.on("unlock-screen", () => {
-    appendMainLog("unlock_screen", {});
-    emitPowerEventToRenderer("unlock-screen", "power-monitor");
-    recoverAfterResume("unlock-screen");
-  });
+  if (!smokeMode) {
+    powerMonitor.on("suspend", () => {
+      appendMainLog("power_suspend", {});
+      emitPowerEventToRenderer("suspend", "power-monitor");
+    });
+    powerMonitor.on("resume", () => {
+      appendMainLog("power_resume", {});
+      emitPowerEventToRenderer("resume", "power-monitor");
+      recoverAfterResume("power-resume");
+    });
+    powerMonitor.on("unlock-screen", () => {
+      appendMainLog("unlock_screen", {});
+      emitPowerEventToRenderer("unlock-screen", "power-monitor");
+      recoverAfterResume("unlock-screen");
+    });
+  }
 
   try {
     await backend.start();
