@@ -40,6 +40,14 @@ Step 1 当前支持以下输入文件类型：
 - macOS: 下载 `.dmg` 安装包
 - Windows: 下载 `.exe` 安装程序
 
+## 系统要求
+
+- macOS: 仅支持 Apple Silicon（M 系列 / ARM64）
+- macOS: 不支持 Intel 架构 Mac
+- macOS: 需要 macOS 13 及以上
+- Windows: 提供 x64 安装程序
+- Windows: 建议使用性能较好的电脑；在低配置机器上处理较大数据集或进行更复杂的拟合时，可能会出现卡顿
+
 ## 首次启动说明
 
 - macOS 版本现已完成 Apple notarization，可在合规环境中正常使用。

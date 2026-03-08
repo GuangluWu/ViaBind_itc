@@ -40,6 +40,14 @@ Release assets are published on the GitHub Releases page:
 - macOS: download the `.dmg` installer
 - Windows: download the `.exe` installer
 
+## System Requirements
+
+- macOS: Apple Silicon only (M-series / ARM64)
+- macOS: Intel-based Macs are not supported
+- macOS: macOS 13 or later
+- Windows: x64 installer
+- Windows: a higher-performance machine is recommended; lower-spec systems may feel slow during larger datasets or more complex fitting tasks
+
 ## First Launch Notes
 
 - macOS release is now notarized by Apple and can be used in compliant environments.
