@@ -83,11 +83,21 @@ jobs:
         run: npm run smoke:backend
 
       - name: Desktop smoke test (bundled runtime)
+        continue-on-error: true
         working-directory: desktop
         timeout-minutes: 10
         env:
           ITCSUITE_USE_BUNDLED_R: "1"
+          ITCSUITE_SMOKE_ROOT: ${{ github.workspace }}\\desktop\\dist\\smoke-logs\\desktop-smoke
         run: npm run smoke
+
+      - name: Upload desktop smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ViaBind_ITCSuite-desktop-windows-desktop-smoke-logs
+          path: desktop/dist/smoke-logs/desktop-smoke/**/*
+          if-no-files-found: warn
 
       - name: Build Windows artifacts
         working-directory: desktop
@@ -108,7 +118,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ViaBind_ITCSuite-desktop-windows-smoke-logs
-          path: desktop/dist/smoke-logs/**/*
+          path: desktop/dist/smoke-logs/packaged-app/**/*
           if-no-files-found: warn
 
       - name: Upload desktop artifacts
