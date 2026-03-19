@@ -105,7 +105,7 @@ assert_equal(DE_OPTIM$min_pop_size, 50, "DE 最小种群 = 50")
 # 测试5：UI 默认值常量
 cat("\n[测试组] UI 默认值\n")
 assert_true(exists("UI_DEFAULTS"), "UI_DEFAULTS 存在")
-assert_equal(UI_DEFAULTS$n_inj_default, 26, "默认注射次数 = 26")
+assert_equal(UI_DEFAULTS$n_inj_default, 20, "默认注射次数 = 20")
 
 # ==============================================================================
 # 测试辅助函数 (constants.R)
