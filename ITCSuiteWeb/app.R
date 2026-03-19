@@ -707,7 +707,7 @@ ui <- fluidPage(
         $(window).on('resize', scheduleViewportCssVarRefresh);
         $(document).on('shown.bs.tab', 'a[data-toggle=\"tab\"]', scheduleViewportCssVarRefresh);
         $(document).on('shiny:value', function(event) {
-          if (event && event.name === 'home_panel_ui') {
+          if (event && (event.name === 'home_recent_ui' || event.name === 'home_contact_ui' || event.name === 'home_welcome_ui')) {
             scheduleViewportCssVarRefresh();
           }
         });
@@ -723,7 +723,19 @@ ui <- fluidPage(
       tabsetPanel(
         id = "main_tabs",
         selected = "home",
-        tabPanel(tags$span(id = "main_tab_label_home", "Home"), value = "home", uiOutput("home_panel_ui")),
+        tabPanel(
+          tags$span(id = "main_tab_label_home", "Home"),
+          value = "home",
+          div(
+            class = "home-tab-wrap",
+            div(
+              class = "home-panel",
+              uiOutput("home_welcome_ui"),
+              uiOutput("home_recent_ui"),
+              uiOutput("home_contact_ui")
+            )
+          )
+        ),
         tabPanel(tags$span(id = "main_tab_label_step1", "Step 1 Baseline & Integration"), value = "step1", uiOutput("legacy_processor_ui")),
         tabPanel(tags$span(id = "main_tab_label_step2", "Step 2 Simulation & Fitting"), value = "step2", uiOutput("legacy_simfit_ui")),
         tabPanel(tags$span(id = "main_tab_label_step3", "Step 3 Plot & Export"), value = "step3", uiOutput("legacy_graph_ui"))
@@ -2134,7 +2146,27 @@ server <- function(input, output, session) {
     )
   }, ignoreInit = FALSE)
 
-  output$home_panel_ui <- renderUI({
+  output$home_welcome_ui <- renderUI({
+    l <- host_lang()
+    home_icon_tag <- NULL
+    if (is.character(home_icon_src) && nzchar(home_icon_src)) {
+      home_icon_tag <- tags$img(class = "home-title-icon", src = home_icon_src, alt = "ViaBind")
+    }
+    tagList(
+      div(
+        class = "home-title-row",
+        home_icon_tag,
+        tags$h3(host_tr("home_welcome_title", l))
+      ),
+      tags$p(host_tr("home_welcome_desc", l)),
+      div(
+        class = "home-action-row",
+        actionButton("home_start_step1", host_tr("home_start_step1", l), class = "btn btn-primary")
+      )
+    )
+  })
+
+  output$home_recent_ui <- renderUI({
     l <- host_lang()
     import_recs <- with_recent_path_status(home_state$import_records)
     import_recs <- home_filter_existing_recent_records(import_recs)
@@ -2203,10 +2235,14 @@ server <- function(input, output, session) {
       )
     }
 
-    home_icon_tag <- NULL
-    if (is.character(home_icon_src) && nzchar(home_icon_src)) {
-      home_icon_tag <- tags$img(class = "home-title-icon", src = home_icon_src, alt = "ViaBind")
-    }
+    tagList(
+      tags$h4(host_tr("home_recent_title", l)),
+      build_recent_table(import_recs, host_tr("home_recent_empty", l))
+    )
+  })
+
+  output$home_contact_ui <- renderUI({
+    l <- host_lang()
     home_contact_email <- home_contact_scalar_chr(home_contact_profile$email, default = "")
     home_contact_email_href <- home_contact_mailto_href(home_contact_email)
     home_contact_site <- home_contact_scalar_chr(home_contact_profile$website, default = "")
@@ -2218,11 +2254,7 @@ server <- function(input, output, session) {
       resource_prefix = "/assets"
     )
     home_contact_qr_node <- if (isTRUE(home_contact_qr$exists) && nzchar(home_contact_qr$src)) {
-      tags$img(
-        class = "home-contact-qr",
-        src = home_contact_qr$src,
-        alt = host_tr("home_contact_donate_link_label", l)
-      )
+      tags$img(class = "home-contact-qr", src = home_contact_qr$src, alt = host_tr("home_contact_donate_link_label", l))
     } else {
       div(class = "home-contact-qr-missing", host_tr("home_contact_qr_missing", l))
     }
@@ -2231,21 +2263,13 @@ server <- function(input, output, session) {
       host_tr("home_contact_donate_note_line2", l),
       host_tr("home_contact_donate_note_line3", l)
     )
-    home_contact_donate_note_lines <- home_contact_donate_note_lines[
-      nzchar(trimws(home_contact_donate_note_lines))
-    ]
+    home_contact_donate_note_lines <- home_contact_donate_note_lines[nzchar(trimws(home_contact_donate_note_lines))]
     home_contact_donate_note <- tagList(lapply(home_contact_donate_note_lines, function(txt) {
       tags$p(class = "home-contact-donate-note", txt)
     }))
     home_contact_donate_link <- NULL
     if (identical(l, "en") && nzchar(home_contact_bmc_url)) {
-      home_contact_donate_link <- tags$a(
-        href = home_contact_bmc_url,
-        target = "_blank",
-        rel = "noopener noreferrer",
-        class = "home-contact-link",
-        host_tr("home_contact_donate_link_label", l)
-      )
+      home_contact_donate_link <- tags$a(href = home_contact_bmc_url, target = "_blank", rel = "noopener noreferrer", class = "home-contact-link", host_tr("home_contact_donate_link_label", l))
     }
     home_contact_donate_line <- NULL
     if (!is.null(home_contact_donate_link)) {
@@ -2253,89 +2277,32 @@ server <- function(input, output, session) {
     }
 
     div(
-      class = "home-tab-wrap",
+      class = "home-contact-panel",
       div(
-        class = "home-panel",
+        class = "home-contact-grid",
         div(
-          class = "home-title-row",
-          home_icon_tag,
-          tags$h3(host_tr("home_welcome_title", l))
+          class = "home-contact-lines home-contact-col home-contact-col-dev",
+          tags$h5(class = "home-contact-col-title", host_tr("home_contact_title", l)),
+          tags$p(tags$strong(paste0(host_tr("home_contact_dev_name_label", l), ": ")), home_contact_profile$name),
+          tags$p(tags$strong(paste0(host_tr("home_contact_email_label", l), ": ")), if(nzchar(home_contact_email_href)){tags$a(href = home_contact_email_href, class = "home-contact-link", home_contact_email)}else{home_contact_email}),
+          tags$p(tags$strong(paste0(host_tr("home_contact_website_label", l), ": ")), tags$a(href = home_contact_site, target = "_blank", rel = "noopener noreferrer", class = "home-contact-link", home_contact_site)),
+          tags$p(tags$strong(paste0(host_tr("home_contact_version_label", l), ": ")), home_contact_version)
         ),
-        tags$p(host_tr("home_welcome_desc", l)),
         div(
-          class = "home-action-row",
-          actionButton("home_start_step1", host_tr("home_start_step1", l), class = "btn btn-primary")
+          class = "home-contact-lines home-contact-col home-contact-col-citation",
+          tags$h5(class = "home-contact-col-title", host_tr("home_contact_citation_title", l)),
+          tags$p(host_tr("home_contact_citation_intro", l)),
+          tags$p(class = "home-contact-citation-line", home_contact_citation$line1),
+          tags$p(class = "home-contact-citation-line", home_contact_citation$line2_prefix, tags$a(href = home_contact_citation$doi_href, target = "_blank", rel = "noopener noreferrer", class = "home-contact-link", home_contact_citation$doi_text)),
+          actionButton("home_copy_citation", host_tr("home_contact_citation_copy_btn", l), class = "btn btn-default btn-xs home-contact-citation-copy")
         ),
-        tags$h4(host_tr("home_recent_title", l)),
-        build_recent_table(import_recs, host_tr("home_recent_empty", l)),
         div(
-          class = "home-contact-panel",
-          div(
-            class = "home-contact-grid",
-            div(
-              class = "home-contact-lines home-contact-col home-contact-col-dev",
-              tags$h5(class = "home-contact-col-title", host_tr("home_contact_title", l)),
-              tags$p(
-                tags$strong(paste0(host_tr("home_contact_dev_name_label", l), ": ")),
-                home_contact_profile$name
-              ),
-              tags$p(
-                tags$strong(paste0(host_tr("home_contact_email_label", l), ": ")),
-                if (nzchar(home_contact_email_href)) {
-                  tags$a(
-                    href = home_contact_email_href,
-                    class = "home-contact-link",
-                    home_contact_email
-                  )
-                } else {
-                  home_contact_email
-                }
-              ),
-              tags$p(
-                tags$strong(paste0(host_tr("home_contact_website_label", l), ": ")),
-                tags$a(
-                  href = home_contact_site,
-                  target = "_blank",
-                  rel = "noopener noreferrer",
-                  class = "home-contact-link",
-                  home_contact_site
-                )
-              ),
-              tags$p(
-                tags$strong(paste0(host_tr("home_contact_version_label", l), ": ")),
-                home_contact_version
-              )
-            ),
-            div(
-              class = "home-contact-lines home-contact-col home-contact-col-citation",
-              tags$h5(class = "home-contact-col-title", host_tr("home_contact_citation_title", l)),
-              tags$p(host_tr("home_contact_citation_intro", l)),
-              tags$p(class = "home-contact-citation-line", home_contact_citation$line1),
-              tags$p(
-                class = "home-contact-citation-line",
-                home_contact_citation$line2_prefix,
-                tags$a(
-                  href = home_contact_citation$doi_href,
-                  target = "_blank",
-                  rel = "noopener noreferrer",
-                  class = "home-contact-link",
-                  home_contact_citation$doi_text
-                )
-              ),
-              actionButton("home_copy_citation", host_tr("home_contact_citation_copy_btn", l), class = "btn btn-default btn-xs home-contact-citation-copy")
-            ),
-            div(
-              class = "home-contact-lines home-contact-col home-contact-col-donate",
-              tags$h5(class = "home-contact-col-title", host_tr("home_contact_donate_title", l)),
-              home_contact_donate_note,
-              home_contact_donate_line
-            ),
-            div(
-              class = "home-contact-qr-wrap home-contact-col home-contact-col-qr",
-              home_contact_qr_node
-            )
-          )
-        )
+          class = "home-contact-lines home-contact-col home-contact-col-donate",
+          tags$h5(class = "home-contact-col-title", host_tr("home_contact_donate_title", l)),
+          home_contact_donate_note,
+          home_contact_donate_line
+        ),
+        div(class = "home-contact-qr-wrap home-contact-col home-contact-col-qr", home_contact_qr_node)
       )
     )
   })

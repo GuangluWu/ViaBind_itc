@@ -80,19 +80,15 @@ choose_port <- function(requested, host = "127.0.0.1") {
 
   ensure_dependency("httpuv")
 
-  for (i in 1:20) {
-    p <- as.integer(sample.int(20000L, size = 1L) + 30000L)
-    srv <- tryCatch({
-      httpuv::startServer(host, p, list())
-    }, error = function(e) NULL)
+  p <- tryCatch({
+    httpuv::randomPort(host = host)
+  }, error = function(e) NULL)
 
-    if (!is.null(srv)) {
-      httpuv::stopServer(srv)
-      return(p)
-    }
+  if (!is.null(p)) {
+    return(as.integer(p))
   }
 
-  fail("Could not find an available port after 20 attempts")
+  fail("Could not find an available port via httpuv::randomPort")
 }
 
 ensure_utf8_locale <- function(log_file = NULL) {

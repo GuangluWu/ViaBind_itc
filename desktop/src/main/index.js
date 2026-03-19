@@ -784,6 +784,22 @@ app.whenReady().then(async () => {
   mainLogPath = path.join(logsDir, "main.log");
   appendMainLog("app_ready", { platform: process.platform });
 
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        "Content-Security-Policy": [
+          "default-src 'self'; " +
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+          "style-src 'self' 'unsafe-inline'; " +
+          "img-src 'self' data: blob:; " +
+          "font-src 'self'; " +
+          "connect-src 'self' ws: wss:;"
+        ]
+      }
+    });
+  });
+
   backend = new BackendController({
     host: HOST,
     logsDir,
