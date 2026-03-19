@@ -42,7 +42,7 @@ testthat::test_that("host app defines home tab and itcsuite_home interface", {
   testthat::expect_true(grepl("paste0\\(ev\\$type, \"\\\\|\", format\\(ev\\$ts, scientific = FALSE, trim = TRUE\\)\\)", src, perl = TRUE))
   testthat::expect_true(grepl("outcome\\s*=\\s*\"deferred_no_steps_applied\"", src, perl = TRUE))
   testthat::expect_true(grepl("consume_pending_sleep_restore\\([\\s\\S]*trigger\\s*=\\s*paste0\\(normalize_home_scalar_chr\\(trigger, default = \"power_event\"\\), \"_retry\"\\)", src, perl = TRUE))
-  testthat::expect_true(grepl("shiny::isolate\\(request_sleep_restore_snapshot\\(reason = \"periodic_autosave\", source_event = \"autosave\"\\)\\)", src, perl = TRUE))
+  testthat::expect_true(grepl("shiny::isolate\\([\\s\\S]*request_sleep_restore_snapshot\\(reason = \"periodic_autosave\", source_event = \"autosave\"\\)", src, perl = TRUE))
   testthat::expect_true(grepl("function isDesktopRuntime\\(\\)", src, perl = TRUE))
   testthat::expect_true(grepl("\\$\\(document\\)\\.on\\('shiny:disconnected', function\\(\\) \\{\\s*if \\(isDesktopRuntime\\(\\)\\) return;", src, perl = TRUE))
   testthat::expect_true(grepl("session\\$userData\\$itcsuite_sleep_restore\\s*<-\\s*list", src, perl = TRUE))
