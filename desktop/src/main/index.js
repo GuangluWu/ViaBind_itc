@@ -558,6 +558,37 @@ async function isBackendAlive() {
   return alive;
 }
 
+async function isRendererSessionAlive() {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+
+  const script = `(() => {
+    try {
+      if (window.Shiny && window.Shiny.shinyapp &&
+          window.Shiny.shinyapp.$socket &&
+          window.Shiny.shinyapp.$socket.readyState === WebSocket.OPEN) {
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  })();`;
+
+  try {
+    const alive = await Promise.race([
+      mainWindow.webContents.executeJavaScript(script),
+      delay(3000).then(() => false)
+    ]);
+    const result = alive === true;
+    appendMainLog("renderer_session_probe", { alive: result });
+    return result;
+  } catch (error) {
+    appendMainLog("renderer_session_probe", {
+      alive: false,
+      error: error.message
+    });
+    return false;
+  }
+}
+
 async function waitForReachableBackendPort(timeoutMs = 90000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -691,6 +722,12 @@ async function recoverAfterResume(reason) {
       appendMainLog("recover_path", { reason, action: "restart_backend" });
       await restartBackendAndReload(reason);
       appendMainLog("recover_end", { reason, result: "backend_restarted" });
+      return;
+    }
+
+    const sessionAlive = await isRendererSessionAlive();
+    if (sessionAlive) {
+      appendMainLog("recover_end", { reason, result: "session_still_alive" });
       return;
     }
 
@@ -1662,12 +1699,12 @@ app.whenReady().then(async () => {
     powerMonitor.on("resume", () => {
       appendMainLog("power_resume", {});
       emitPowerEventToRenderer("resume", "power-monitor");
-      recoverAfterResume("power-resume");
+      setTimeout(() => recoverAfterResume("power-resume"), 2000);
     });
     powerMonitor.on("unlock-screen", () => {
       appendMainLog("unlock_screen", {});
       emitPowerEventToRenderer("unlock-screen", "power-monitor");
-      recoverAfterResume("unlock-screen");
+      setTimeout(() => recoverAfterResume("unlock-screen"), 2000);
     });
   }
 

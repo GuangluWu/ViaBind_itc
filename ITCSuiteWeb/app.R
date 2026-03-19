@@ -1535,6 +1535,7 @@ server <- function(input, output, session) {
 
     if (identical(event$type, "suspend")) {
       request_sleep_restore_snapshot(reason = trigger, source_event = "suspend")
+      tryCatch(session$flush(), error = function(e) NULL)
       return(invisible(TRUE))
     }
     if (event$type %in% c("resume", "unlock-screen")) {

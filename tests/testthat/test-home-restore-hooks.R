@@ -47,6 +47,7 @@ testthat::test_that("host app defines home tab and itcsuite_home interface", {
   testthat::expect_true(grepl("\\$\\(document\\)\\.on\\('shiny:disconnected', function\\(\\) \\{\\s*if \\(isDesktopRuntime\\(\\)\\) return;", src, perl = TRUE))
   testthat::expect_true(grepl("session\\$userData\\$itcsuite_sleep_restore\\s*<-\\s*list", src, perl = TRUE))
   testthat::expect_true(grepl("observeEvent\\(input\\$itcsuite_power_event", src, perl = TRUE))
+  testthat::expect_true(grepl("request_sleep_restore_snapshot\\(reason = trigger, source_event = \"suspend\"\\)\\s*\\n\\s*tryCatch\\(session\\$flush\\(\\)", src, perl = TRUE))
   testthat::expect_true(grepl("outputOptions\\(output,\\s*\"legacy_processor_ui\",\\s*suspendWhenHidden\\s*=\\s*FALSE\\)", src, perl = TRUE))
   testthat::expect_true(grepl("outputOptions\\(output,\\s*\"legacy_simfit_ui\",\\s*suspendWhenHidden\\s*=\\s*FALSE\\)", src, perl = TRUE))
   testthat::expect_true(grepl("outputOptions\\(output,\\s*\"legacy_graph_ui\",\\s*suspendWhenHidden\\s*=\\s*FALSE\\)", src, perl = TRUE))

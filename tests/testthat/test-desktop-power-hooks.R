@@ -13,17 +13,20 @@ testthat::test_that("desktop main wires suspend/resume power events into shiny i
   testthat::expect_true(grepl("POWER_EVENT_REPLAY_WINDOW_MS", src, perl = TRUE))
   testthat::expect_true(grepl("replayLatestPowerEventToRenderer\\(\"did-finish-load\"\\)", src, perl = TRUE))
   testthat::expect_true(grepl("waitForShinyMs\\s*:\\s*10000", src, perl = TRUE))
+  testthat::expect_true(grepl("isRendererSessionAlive", src, perl = TRUE))
+  testthat::expect_true(grepl("session_still_alive", src, perl = TRUE))
+  testthat::expect_true(grepl("renderer_session_probe", src, perl = TRUE))
 
   testthat::expect_true(grepl("powerMonitor\\.on\\(\"resume\"", src, perl = TRUE))
   testthat::expect_true(grepl(
-    "emitPowerEventToRenderer\\(\"resume\"[^\\n]*\\n\\s*recoverAfterResume\\(\"power-resume\"\\)",
+    "emitPowerEventToRenderer\\(\"resume\"[^\\n]*\\n\\s*setTimeout\\(\\(\\)\\s*=\u003e\\s*recoverAfterResume\\(\"power-resume\"\\)",
     src,
     perl = TRUE
   ))
 
   testthat::expect_true(grepl("powerMonitor\\.on\\(\"unlock-screen\"", src, perl = TRUE))
   testthat::expect_true(grepl(
-    "emitPowerEventToRenderer\\(\"unlock-screen\"[^\\n]*\\n\\s*recoverAfterResume\\(\"unlock-screen\"\\)",
+    "emitPowerEventToRenderer\\(\"unlock-screen\"[^\\n]*\\n\\s*setTimeout\\(\\(\\)\\s*=\u003e\\s*recoverAfterResume\\(\"unlock-screen\"\\)",
     src,
     perl = TRUE
   ))
