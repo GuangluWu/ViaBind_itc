@@ -72,14 +72,27 @@ ensure_dependency <- function(pkg) {
   }
 }
 
-choose_port <- function(requested) {
+choose_port <- function(requested, host = "127.0.0.1") {
   if (is.null(requested) || !is.finite(requested) || requested < 0L) {
     fail("Invalid --port value")
   }
   if (requested > 0L) return(as.integer(requested))
 
-  # Use high ephemeral-range sampling and let runApp fail fast on collision.
-  as.integer(sample.int(20000L, size = 1L) + 30000L)
+  ensure_dependency("httpuv")
+
+  for (i in 1:20) {
+    p <- as.integer(sample.int(20000L, size = 1L) + 30000L)
+    srv <- tryCatch({
+      httpuv::startServer(host, p, list())
+    }, error = function(e) NULL)
+
+    if (!is.null(srv)) {
+      httpuv::stopServer(srv)
+      return(p)
+    }
+  }
+
+  fail("Could not find an available port after 20 attempts")
 }
 
 ensure_utf8_locale <- function(log_file = NULL) {
@@ -153,19 +166,14 @@ main <- function() {
   write_log(log_file, "app_path=", app_path)
   ensure_utf8_locale(log_file = log_file)
 
-  port <- choose_port(args$port)
-  payload <- list(
+  port <- choose_port(args$port, as.character(args$host)[1])
+  ready_payload <- list(
     port = as.integer(port),
     host = as.character(args$host)[1],
     ts = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
   )
 
   setwd(repo_root)
-
-  cat(sprintf("ITCSUITE_READY %s\n", jsonlite::toJSON(payload, auto_unbox = TRUE)))
-  flush.console()
-
-  write_log(log_file, "ready host=", args$host, " port=", port)
 
   disable_ragg <- identical(Sys.getenv("ITCSUITE_DISABLE_RAGG", unset = ""), "1")
   if (isTRUE(disable_ragg)) {
@@ -176,8 +184,24 @@ main <- function() {
   options(shiny.host = as.character(args$host)[1])
   options(shiny.port = as.integer(port))
 
+  # Emit the READY signal via shiny.launch.browser option so it fires AFTER
+  # httpuv has successfully bound to the port, avoiding the race condition.
+  ready_emitted <- FALSE
+  on_start_fn <- function(url) {
+    if (isTRUE(ready_emitted)) return(invisible(NULL))
+    ready_emitted <<- TRUE
+    cat(sprintf("ITCSUITE_READY %s\n", jsonlite::toJSON(ready_payload, auto_unbox = TRUE)))
+    flush.console()
+    write_log(log_file, "ready host=", args$host, " port=", port, " url=", url, " (emitted after server bind)")
+  }
+  options(shiny.launch.browser = on_start_fn)
+
   tryCatch({
-    shiny::runApp(appDir = app_path, host = as.character(args$host)[1], port = as.integer(port), launch.browser = FALSE)
+    shiny::runApp(
+      appDir = app_path,
+      host = as.character(args$host)[1],
+      port = as.integer(port)
+    )
   }, error = function(e) {
     write_log(log_file, "runApp error: ", conditionMessage(e))
     fail(conditionMessage(e), code = 2L)

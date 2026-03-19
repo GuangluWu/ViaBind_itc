@@ -16,8 +16,6 @@ const {
 const { trimScalar, escapeHtml } = require("./utils");
 
 const HOST = "127.0.0.1";
-const READY_PREFIX = "ITCSUITE_READY ";
-const ERROR_PREFIX = "ITCSUITE_ERROR ";
 const SMOKE_PREFIX = "ITCSUITE_ELECTRON_SMOKE ";
 const APP_NAME = "ViaBind";
 const APP_SLOGAN = "Your Path, Your Model";
@@ -26,9 +24,6 @@ const APP_DEVELOPER_NAME = "Guanglu Wu (吴光鹭)";
 const APP_DEVELOPER_EMAIL = "guanglu.wu@gmail.com";
 const APP_DEVELOPER_SITE = "guanglu.xyz";
 const appVersionSignature = () => `ViaBind v${app.getVersion()}`;
-const OPEN_FILE_CHANNEL = "itcsuite:open-file";
-const EXPORT_DIAGNOSTICS_CHANNEL = "itcsuite:export-diagnostics";
-const OPEN_FILE_PURPOSES = new Set(["step1_import", "step2_import", "step3_import"]);
 app.setName(APP_NAME);
 
 const smokeMode = process.argv.includes("--smoke-test") || process.env.ITCSUITE_SMOKE_TEST === "1";
@@ -52,13 +47,9 @@ let recoveryInProgress = false;
 let lastRecoveryAt = 0;
 let unresponsiveRecoveryTimer = null;
 let rendererMarkedUnresponsive = false;
-let openFileLastDir = "";
-let diagnosticsExportInFlight = false;
-let latestPowerEventPayload = null;
 
 const RECOVERY_COOLDOWN_MS = 10000;
 const UNRESPONSIVE_RECOVERY_DELAY_MS = 3000;
-const POWER_EVENT_REPLAY_WINDOW_MS = 3 * 60 * 1000;
 const WINDOWS_SCROLLBAR_HIDE_CSS = `
   * {
     scrollbar-width: none !important;
@@ -69,9 +60,10 @@ const WINDOWS_SCROLLBAR_HIDE_CSS = `
   }
 `;
 
-function useBundledRuntimeInDev() {
-  return process.env.ITCSUITE_USE_BUNDLED_R === "1";
-}
+const BackendController = require("./backend-controller");
+const { setupIpcHandlers, handleMenuExportDiagnostics } = require("./ipc-handlers");
+const { setupMenu } = require("./menu");
+const { setupPowerEvents, replayLatestPowerEventToRenderer } = require("./power-events");
 
 function appendMainLog(eventName, details = {}) {
   if (!mainLogPath) return;
@@ -82,11 +74,9 @@ function appendMainLog(eventName, details = {}) {
     ...details
   };
 
-  try {
-    fs.appendFileSync(mainLogPath, `${JSON.stringify(payload)}\n`);
-  } catch (_) {
+  fs.promises.appendFile(mainLogPath, `${JSON.stringify(payload)}\n`).catch(() => {
     // Best effort logging.
-  }
+  });
 }
 
 function resolveAppIconPath() {
@@ -101,393 +91,6 @@ function resolveAppIconPath() {
     }
   }
   return null;
-}
-
-class BackendController extends EventEmitter {
-  constructor(options) {
-    super();
-    this.options = options;
-    this.state = "stopped";
-    this.child = null;
-    this.stdoutBuffer = "";
-    this.readyTimeout = null;
-    this.readyPort = null;
-  }
-
-  transition(nextState) {
-    this.state = nextState;
-  }
-
-  resolvePaths() {
-    if (app.isPackaged) {
-      const repoRoot = path.join(process.resourcesPath, "itcsuite");
-      const launchScript = path.join(repoRoot, "ITCSuiteWeb", "scripts", "launch_shiny.R");
-      const runtimeRoot = path.join(process.resourcesPath, "r-runtime");
-      return { repoRoot, launchScript, runtimeRoot };
-    }
-
-    const repoRoot = process.env.ITCSUITE_REPO_ROOT || path.resolve(__dirname, "../../..");
-    const launchScript = path.join(repoRoot, "ITCSuiteWeb", "scripts", "launch_shiny.R");
-    const runtimeRoot = process.env.ITCSUITE_RUNTIME_ROOT || path.join(repoRoot, "desktop", "resources", "r-runtime");
-    return { repoRoot, launchScript, runtimeRoot };
-  }
-
-  resolveRscript(runtimeRoot) {
-    if (process.env.ITCSUITE_RSCRIPT) {
-      return {
-        path: process.env.ITCSUITE_RSCRIPT,
-        kind: "override",
-        label: "env override"
-      };
-    }
-
-    // In development we prefer system Rscript to avoid accidentally
-    // using a partially built bundled runtime.
-    if (!app.isPackaged && !useBundledRuntimeInDev()) {
-      return {
-        path: "Rscript",
-        kind: "system",
-        label: "PATH Rscript"
-      };
-    }
-
-    const candidates = [
-      ...((app.isPackaged || useBundledRuntimeInDev()) ? [{
-        path: path.join(runtimeRoot, "bin", "itcsuite-rscript"),
-        kind: "bundled",
-        label: "bundled launcher"
-      }] : []),
-      {
-        path: path.join(runtimeRoot, "bin", "Rscript.exe"),
-        kind: "bundled",
-        label: "bundled Rscript.exe"
-      },
-      {
-        path: path.join(runtimeRoot, "bin", "x64", "Rscript.exe"),
-        kind: "bundled",
-        label: "bundled x64/Rscript.exe"
-      },
-      {
-        path: path.join(runtimeRoot, "bin", "Rscript"),
-        kind: "bundled",
-        label: "bundled bin/Rscript"
-      },
-      {
-        path: path.join(runtimeRoot, "Resources", "bin", "Rscript"),
-        kind: "bundled",
-        label: "bundled Resources/bin/Rscript"
-      },
-      ...(process.platform === "darwin" ? [{
-        path: "/Library/Frameworks/R.framework/Resources/bin/Rscript",
-        kind: "system",
-        label: "system framework Rscript"
-      }] : [])
-    ];
-
-    const resolvedCandidates = candidates.filter((candidate) => {
-      if (candidate.path === "Rscript") return true;
-      return fs.existsSync(candidate.path);
-    });
-
-    if (process.platform === "darwin" && app.isPackaged) {
-      for (const candidate of resolvedCandidates) {
-        const probe = this.probeRscriptCandidate(candidate, runtimeRoot);
-        this.appendLog(
-          `[${new Date().toISOString()}] R_PROBE ${candidate.label} (${candidate.path}) => ${probe.ok ? "OK" : "FAIL"}${probe.reason ? `: ${probe.reason}` : ""}\n`
-        );
-        if (probe.ok) {
-          return candidate;
-        }
-      }
-    }
-
-    for (const candidate of resolvedCandidates) {
-      return candidate;
-    }
-
-    if (app.isPackaged) {
-      throw new Error(`No usable Rscript found under ${runtimeRoot}. On macOS, the current build may still require a local CRAN R framework install.`);
-    }
-
-    return {
-      path: "Rscript",
-      kind: "system",
-      label: "PATH Rscript"
-    };
-  }
-
-  buildEnv(runtimeRoot, rscriptPath = "", rscriptKind = "bundled") {
-    const env = { ...process.env };
-    env.ITCSUITE_DESKTOP = "1";
-    env.ITCSUITE_USER_DATA_DIR = app.getPath("userData");
-    env.ITCSUITE_APP_VERSION = app.getVersion();
-    if (typeof rscriptPath === "string" && rscriptPath.trim()) {
-      env.ITCSUITE_RSCRIPT = rscriptPath;
-    }
-
-    const bundledLib = path.join(runtimeRoot, "library");
-    if (fs.existsSync(bundledLib) && (app.isPackaged || useBundledRuntimeInDev())) {
-      const isolatedUserLib = path.join(env.ITCSUITE_USER_DATA_DIR || os.tmpdir(), "r-library-empty");
-      try {
-        fs.mkdirSync(isolatedUserLib, { recursive: true });
-      } catch (_) {
-        // Best effort only.
-      }
-      env.ITCSUITE_RUNTIME_ROOT = runtimeRoot;
-      env.R_LIBS = bundledLib;
-      env.R_LIBS_SITE = bundledLib;
-      env.R_LIBS_USER = isolatedUserLib;
-      if (rscriptKind !== "system") {
-        env.R_HOME = runtimeRoot;
-      }
-
-      const runtimeBins = [
-        path.join(runtimeRoot, "bin", "x64"),
-        path.join(runtimeRoot, "bin"),
-        path.join(runtimeRoot, "Resources", "bin")
-      ].filter((candidate) => fs.existsSync(candidate));
-
-      if (runtimeBins.length > 0) {
-        const currentPath = env.PATH || env.Path || "";
-        const prefixedPath = runtimeBins.join(path.delimiter);
-        env.PATH = currentPath ? `${prefixedPath}${path.delimiter}${currentPath}` : prefixedPath;
-        if (Object.prototype.hasOwnProperty.call(env, "Path")) {
-          env.Path = env.PATH;
-        }
-      }
-    }
-
-    // Preserve Unicode rendering in bundled runtime on Unix-like hosts.
-    if (process.platform !== "win32") {
-      if (!env.LANG || !/UTF-?8/i.test(env.LANG)) {
-        env.LANG = "en_US.UTF-8";
-      }
-      if (!env.LC_CTYPE || !/UTF-?8/i.test(env.LC_CTYPE)) {
-        env.LC_CTYPE = "en_US.UTF-8";
-      }
-    }
-
-    return env;
-  }
-
-  probeRscriptCandidate(candidate, runtimeRoot) {
-    const probeScript = [
-      "cat('ITCSUITE_PROBE_R_HOME=', normalizePath(R.home(), winslash='/', mustWork=FALSE), '\\n', sep='')",
-      "for (lib in normalizePath(.libPaths(), winslash='/', mustWork=FALSE)) cat('ITCSUITE_PROBE_LIB=', lib, '\\n', sep='')"
-    ].join(";");
-    const env = this.buildEnv(runtimeRoot, candidate.path, candidate.kind);
-    const result = spawnSync(candidate.path, ["-e", probeScript], {
-      cwd: runtimeRoot,
-      env,
-      encoding: "utf8",
-      timeout: 15000,
-      windowsHide: true
-    });
-
-    if (result.error) {
-      return { ok: false, reason: result.error.message };
-    }
-    if (result.signal) {
-      return { ok: false, reason: `terminated by signal ${result.signal}` };
-    }
-    if (result.status !== 0) {
-      const stderr = String(result.stderr || "").trim();
-      return { ok: false, reason: `exit ${result.status}${stderr ? `; ${stderr}` : ""}` };
-    }
-
-    const stdout = String(result.stdout || "");
-    const rHomeMatch = stdout.match(/^ITCSUITE_PROBE_R_HOME=(.+)$/m);
-    const libMatches = [...stdout.matchAll(/^ITCSUITE_PROBE_LIB=(.+)$/gm)].map((match) => match[1]);
-    const bundledLib = path.join(runtimeRoot, "library").replace(/\\/g, "/");
-    const normalizedRuntimeRoot = runtimeRoot.replace(/\\/g, "/");
-
-    if (libMatches.length > 0 && !libMatches.includes(bundledLib)) {
-      return { ok: false, reason: `bundled library missing from .libPaths(): ${bundledLib}` };
-    }
-
-    if (candidate.kind === "bundled" && process.platform === "darwin") {
-      const rHome = rHomeMatch ? rHomeMatch[1] : "";
-      if (!rHome.startsWith(normalizedRuntimeRoot)) {
-        return { ok: false, reason: `R.home() resolved outside bundled runtime: ${rHome || "<empty>"}` };
-      }
-    }
-
-    return { ok: true, reason: rHomeMatch ? `R.home=${rHomeMatch[1]}` : "" };
-  }
-
-  processLine(line) {
-    const trimmed = line.trim();
-    if (!trimmed) return;
-
-    if (trimmed.startsWith(READY_PREFIX)) {
-      const payloadRaw = trimmed.slice(READY_PREFIX.length);
-      try {
-        const payload = JSON.parse(payloadRaw);
-        const port = Number(payload.port);
-        if (!Number.isFinite(port) || port <= 0) {
-          throw new Error("invalid ready payload");
-        }
-        this.readyPort = port;
-        clearTimeout(this.readyTimeout);
-        this.transition("ready");
-        this.emit("backend-ready", port);
-      } catch (error) {
-        this.emit("backend-error", `Malformed READY payload: ${error.message}`);
-      }
-      return;
-    }
-
-    if (trimmed.startsWith(ERROR_PREFIX)) {
-      const payloadRaw = trimmed.slice(ERROR_PREFIX.length);
-      let message = payloadRaw;
-      try {
-        const payload = JSON.parse(payloadRaw);
-        message = payload.message || payloadRaw;
-      } catch (_) {
-        // Keep plain message fallback.
-      }
-      this.emit("backend-error", message);
-    }
-  }
-
-  appendLog(line) {
-    try {
-      fs.appendFileSync(this.options.backendLogPath, line);
-    } catch (_) {
-      // Best effort logging.
-    }
-  }
-
-  async start() {
-    if (this.child) {
-      return;
-    }
-
-    const { repoRoot, launchScript, runtimeRoot } = this.resolvePaths();
-    if (!fs.existsSync(launchScript)) {
-      throw new Error(`launch_shiny.R missing: ${launchScript}`);
-    }
-
-    const rscriptCandidate = this.resolveRscript(runtimeRoot);
-    const rscript = rscriptCandidate.path;
-    const args = [
-      launchScript,
-      "--repo-root", repoRoot,
-      "--app-dir", "ITCSuiteWeb",
-      "--host", HOST,
-      "--port", "0",
-      "--log-dir", this.options.logsDir
-    ];
-
-    this.transition("booting");
-    this.readyPort = null;
-    this.stdoutBuffer = "";
-
-    this.appendLog(`\n[${new Date().toISOString()}] START ${rscript} ${args.join(" ")}\n`);
-
-    this.child = spawn(rscript, args, {
-      cwd: repoRoot,
-      env: this.buildEnv(runtimeRoot, rscript, rscriptCandidate.kind),
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-
-    this.child.stdout.on("data", (chunk) => {
-      const text = chunk.toString("utf8");
-      this.appendLog(text);
-      this.stdoutBuffer += text;
-
-      let idx = this.stdoutBuffer.indexOf("\n");
-      while (idx >= 0) {
-        const line = this.stdoutBuffer.slice(0, idx);
-        this.processLine(line);
-        this.stdoutBuffer = this.stdoutBuffer.slice(idx + 1);
-        idx = this.stdoutBuffer.indexOf("\n");
-      }
-    });
-
-    this.child.stderr.on("data", (chunk) => {
-      const text = chunk.toString("utf8");
-      this.appendLog(text);
-    });
-
-    this.child.on("error", (error) => {
-      this.emit("backend-error", `Failed to start backend: ${error.message}`);
-    });
-
-    this.child.on("close", (code) => {
-      clearTimeout(this.readyTimeout);
-      const exitCode = Number.isFinite(code) ? code : -1;
-      const wasReady = this.state === "ready";
-      const wasStopping = this.state === "stopping";
-      this.child = null;
-      this.transition("stopped");
-      this.emit("backend-exit", exitCode, wasReady, wasStopping);
-    });
-
-    this.readyTimeout = setTimeout(() => {
-      if (this.state !== "ready") {
-        this.emit("backend-error", "Backend startup timed out (60s). Check logs.");
-      }
-    }, 60000);
-  }
-
-  async stop() {
-    if (!this.child) {
-      this.transition("stopped");
-      return;
-    }
-
-    this.transition("stopping");
-    const child = this.child;
-
-    await new Promise((resolve) => {
-      let settled = false;
-      const finish = () => {
-        if (!settled) {
-          settled = true;
-          resolve();
-        }
-      };
-
-      // On Windows, SIGTERM has no effect on child processes.
-      // Skip the graceful SIGTERM phase and kill directly.
-      const useDirectKill = process.platform === "win32";
-      const gracePeriodMs = useDirectKill ? 0 : 5000;
-
-      const timeout = setTimeout(() => {
-        if (!child.killed) {
-          try {
-            child.kill("SIGKILL");
-          } catch (_) {
-            // Ignore kill failures.
-          }
-        }
-      }, gracePeriodMs);
-
-      child.once("close", () => {
-        clearTimeout(timeout);
-        finish();
-      });
-
-      try {
-        if (useDirectKill) {
-          // Windows: kill immediately (TerminateProcess).
-          child.kill();
-        } else {
-          // Unix: send SIGTERM for graceful shutdown.
-          child.kill("SIGTERM");
-        }
-      } catch (_) {
-        clearTimeout(timeout);
-        finish();
-      }
-    });
-  }
-
-  async restart() {
-    await this.stop();
-    await this.start();
-  }
 }
 
 function delay(ms) {
@@ -757,9 +360,16 @@ function makeDataUrl(html) {
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 
+let cachedIconDataUrl = null;
+
 function resolveLoadingIconDataUrl() {
+  if (cachedIconDataUrl !== null) return cachedIconDataUrl;
+
   const iconPath = resolveAppIconPath();
-  if (!iconPath || !fs.existsSync(iconPath)) return "";
+  if (!iconPath || !fs.existsSync(iconPath)) {
+    cachedIconDataUrl = "";
+    return cachedIconDataUrl;
+  }
 
   try {
     const ext = path.extname(iconPath).toLowerCase();
@@ -768,12 +378,17 @@ function resolveLoadingIconDataUrl() {
       ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" :
       ext === ".webp" ? "image/webp" :
       "";
-    if (!mime) return "";
+    if (!mime) {
+      cachedIconDataUrl = "";
+      return cachedIconDataUrl;
+    }
 
     const base64 = fs.readFileSync(iconPath).toString("base64");
-    return `data:${mime};base64,${base64}`;
+    cachedIconDataUrl = `data:${mime};base64,${base64}`;
+    return cachedIconDataUrl;
   } catch (_) {
-    return "";
+    cachedIconDataUrl = "";
+    return cachedIconDataUrl;
   }
 }
 
@@ -846,348 +461,6 @@ function isAllowedNavigation(url) {
 
 
 
-function isExistingDirectory(dirPath) {
-  const candidate = trimScalar(dirPath, "");
-  if (!candidate || !fs.existsSync(candidate)) return false;
-  try {
-    return fs.statSync(candidate).isDirectory();
-  } catch (_) {
-    return false;
-  }
-}
-
-function resolveExamplesDir() {
-  const candidate = app.isPackaged
-    ? path.join(process.resourcesPath, "itcsuite", "Examples")
-    : path.resolve(__dirname, "../../../Examples");
-  if (!isExistingDirectory(candidate)) return "";
-  return path.resolve(candidate);
-}
-
-function resolveOpenFileDefaultPath() {
-  const rememberedDir = trimScalar(openFileLastDir, "");
-  if (isExistingDirectory(rememberedDir)) {
-    return path.resolve(rememberedDir);
-  }
-  return resolveExamplesDir();
-}
-
-function rememberOpenFileDir(selectedFilePath) {
-  const selected = trimScalar(selectedFilePath, "");
-  if (!selected) return;
-  const dirPath = path.dirname(path.resolve(selected));
-  if (!isExistingDirectory(dirPath)) return;
-  openFileLastDir = dirPath;
-}
-
-function sanitizeOpenFileExtensions(extensions) {
-  if (!Array.isArray(extensions)) return [];
-  const cleaned = [];
-  for (const raw of extensions) {
-    const ext = trimScalar(raw, "").toLowerCase().replace(/^\.+/, "");
-    if (!ext || !/^[a-z0-9]+$/.test(ext)) continue;
-    if (!cleaned.includes(ext)) cleaned.push(ext);
-  }
-  return cleaned.slice(0, 12);
-}
-
-function sanitizeOpenFileFilters(filters, purpose) {
-  if (!Array.isArray(filters)) {
-    if (purpose === "step1_import") {
-      return [{ name: "ITC/TA Data", extensions: ["itc", "txt", "nitc", "csc", "xml"] }];
-    }
-    return [{ name: "Spreadsheet", extensions: ["xlsx"] }];
-  }
-
-  const cleaned = [];
-  for (const rawFilter of filters.slice(0, 4)) {
-    if (!rawFilter || typeof rawFilter !== "object") continue;
-    const name = trimScalar(rawFilter.name, "Files");
-    const extensions = sanitizeOpenFileExtensions(rawFilter.extensions);
-    if (extensions.length < 1) continue;
-    cleaned.push({ name, extensions });
-  }
-
-  if (cleaned.length > 0) return cleaned;
-  return sanitizeOpenFileFilters(null, purpose);
-}
-
-function sanitizeOpenFilePayload(rawPayload) {
-  const payload = rawPayload && typeof rawPayload === "object" ? rawPayload : {};
-  const requestId = trimScalar(payload.request_id, "");
-  let purpose = trimScalar(payload.purpose, "");
-  if (!OPEN_FILE_PURPOSES.has(purpose)) purpose = "step2_import";
-  const fallbackTitle = purpose === "step1_import" ? "Select ITC/TA Data File" : "Select Data File";
-  const titleRaw = trimScalar(payload.title, fallbackTitle);
-  const title = titleRaw.slice(0, 160);
-  const filters = sanitizeOpenFileFilters(payload.filters, purpose);
-  return { request_id: requestId, purpose, title, filters };
-}
-
-function makeOpenFileResult(payload, patch = {}) {
-  return {
-    request_id: payload.request_id,
-    purpose: payload.purpose,
-    canceled: true,
-    file_path: "",
-    file_name: "",
-    error: "",
-    ...patch
-  };
-}
-
-function diagnosticsTimestamp() {
-  const d = new Date();
-  const pad = (v) => String(v).padStart(2, "0");
-  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-}
-
-function defaultDiagnosticsArchivePath() {
-  const downloadsPath = app.getPath("downloads");
-  return uniqueDownloadPath(downloadsPath, `ViaBind_diagnostics_${diagnosticsTimestamp()}.zip`);
-}
-
-function zipDirectoryToFile(sourceDir, targetZipPath) {
-  if (process.platform === "win32") {
-    const escapedTarget = targetZipPath.replace(/'/g, "''");
-    const args = [
-      "-NoProfile",
-      "-Command",
-      `Compress-Archive -Path * -DestinationPath '${escapedTarget}' -Force`
-    ];
-    const out = spawnSync("powershell", args, { cwd: sourceDir, encoding: "utf8" });
-    if (out.status !== 0) {
-      const msg = trimScalar(out.stderr, trimScalar(out.stdout, "Compress-Archive failed"));
-      throw new Error(msg);
-    }
-    return;
-  }
-
-  const out = spawnSync("zip", ["-rq", targetZipPath, "."], {
-    cwd: sourceDir,
-    encoding: "utf8"
-  });
-  if (out.status !== 0) {
-    const msg = trimScalar(out.stderr, trimScalar(out.stdout, "zip command failed"));
-    throw new Error(msg);
-  }
-}
-
-function buildDiagnosticsArchive(payload, outputZipPath) {
-  const tmpRoot = fs.mkdtempSync(path.join(app.getPath("temp"), "viabind-diag-"));
-  const redactionOpts = {
-    userHome: os.homedir(),
-    userDataDir: app.getPath("userData")
-  };
-
-  try {
-    const candidates = collectDiagnosticsFiles(logsDir);
-    const copiedFiles = [];
-
-    for (const entry of candidates) {
-      const srcPath = entry.abs_path;
-      const destPath = path.join(tmpRoot, entry.name);
-      const ok = copyRedactedLog(srcPath, destPath, redactionOpts);
-      if (!ok) continue;
-      copiedFiles.push({
-        name: entry.name,
-        path: destPath,
-        bytes: fs.statSync(destPath).size,
-        sha256: sha256File(destPath)
-      });
-    }
-
-    const manifest = buildManifest({
-      appVersion: app.getVersion(),
-      platform: process.platform,
-      locale: app.getLocale ? app.getLocale() : "",
-      privacyMode: payload.privacy_mode,
-      files: copiedFiles
-    });
-    const manifestPath = path.join(tmpRoot, "manifest.json");
-    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-
-    zipDirectoryToFile(tmpRoot, outputZipPath);
-
-    return {
-      file_count: copiedFiles.length + 1,
-      manifest: manifestPath
-    };
-  } finally {
-    try {
-      fs.rmSync(tmpRoot, { recursive: true, force: true });
-    } catch (_) {
-      // Best effort cleanup.
-    }
-  }
-}
-
-function resolveDialogParentWindow() {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    return mainWindow;
-  }
-  return null;
-}
-
-async function runDiagnosticsExport(rawPayload, trigger = "ipc") {
-  const payload = sanitizeDiagnosticsRequest(rawPayload);
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    return makeDiagnosticsResult(payload, { error: "Main window is unavailable." });
-  }
-  if (!logsDir || !fs.existsSync(logsDir)) {
-    return makeDiagnosticsResult(payload, { error: "Logs directory is unavailable." });
-  }
-  if (diagnosticsExportInFlight) {
-    return makeDiagnosticsResult(payload, { error: "Diagnostics export already in progress." });
-  }
-
-  diagnosticsExportInFlight = true;
-  try {
-    const dialogParent = resolveDialogParentWindow();
-    const dialogOptions = {
-      title: "Export Diagnostics",
-      buttonLabel: "Export",
-      defaultPath: defaultDiagnosticsArchivePath(),
-      filters: [{ name: "ZIP Archive", extensions: ["zip"] }],
-      properties: ["showOverwriteConfirmation", "createDirectory", "showHiddenFiles"]
-    };
-    const savePath = dialogParent
-      ? dialog.showSaveDialogSync(dialogParent, dialogOptions)
-      : dialog.showSaveDialogSync(dialogOptions);
-
-    if (!savePath) {
-      return makeDiagnosticsResult(payload, { error: "Canceled by user." });
-    }
-
-    appendMainLog("diagnostics_export_start", {
-      request_id: payload.request_id,
-      privacy_mode: payload.privacy_mode,
-      output: savePath,
-      trigger
-    });
-
-    const archiveStats = buildDiagnosticsArchive(payload, savePath);
-    appendMainLog("diagnostics_export_success", {
-      request_id: payload.request_id,
-      privacy_mode: payload.privacy_mode,
-      output: savePath,
-      file_count: archiveStats.file_count,
-      trigger
-    });
-
-    return makeDiagnosticsResult(payload, {
-      ok: true,
-      file_path: path.resolve(savePath)
-    });
-  } catch (error) {
-    const message = error && error.message ? error.message : "Diagnostics export failed.";
-    appendMainLog("diagnostics_export_error", {
-      request_id: payload.request_id,
-      privacy_mode: payload.privacy_mode,
-      error: message,
-      trigger
-    });
-    return makeDiagnosticsResult(payload, { error: message });
-  } finally {
-    diagnosticsExportInFlight = false;
-  }
-}
-
-async function showDiagnosticsExportSuccessMessage(filePath) {
-  const dialogOptions = {
-    type: "info",
-    title: "Export Diagnostics",
-    message: "Diagnostics package exported successfully.",
-    detail: `File: ${filePath}\n\nAttach this ZIP file when reporting an issue.`,
-    buttons: ["Open Folder", "OK"],
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true
-  };
-  const dialogParent = resolveDialogParentWindow();
-  const result = dialogParent
-    ? await dialog.showMessageBox(dialogParent, dialogOptions)
-    : await dialog.showMessageBox(dialogOptions);
-  if (result.response !== 0) return;
-
-  const err = await shell.openPath(path.dirname(filePath));
-  if (err) {
-    dialog.showErrorBox("Open folder failed", err);
-  }
-}
-
-async function handleMenuExportDiagnostics() {
-  const result = await runDiagnosticsExport(
-    { privacy_mode: "default_redacted", reason: "menu" },
-    "menu"
-  );
-  if (result && result.ok === true && result.file_path) {
-    await showDiagnosticsExportSuccessMessage(result.file_path);
-    return;
-  }
-
-  const msg = trimScalar(result && result.error, "Diagnostics export failed.");
-  if (msg === "Canceled by user.") return;
-  dialog.showErrorBox("Export Diagnostics Failed", msg);
-}
-
-function registerIpcHandlers() {
-  ipcMain.handle(OPEN_FILE_CHANNEL, async (_event, rawPayload) => {
-    const payload = sanitizeOpenFilePayload(rawPayload);
-    if (!mainWindow || mainWindow.isDestroyed()) {
-      return makeOpenFileResult(payload, { error: "Main window is unavailable." });
-    }
-
-    const smokeMockPath = trimScalar(process.env.ITCSUITE_SMOKE_OPEN_FILE_PATH, "");
-    if (smokeMode && smokeMockPath) {
-      const resolvedMockPath = path.resolve(smokeMockPath);
-      return makeOpenFileResult(payload, {
-        canceled: false,
-        file_path: resolvedMockPath,
-        file_name: path.basename(resolvedMockPath)
-      });
-    }
-
-    try {
-      const dialogOptions = {
-        title: payload.title,
-        properties: ["openFile"],
-        filters: payload.filters
-      };
-      const defaultPath = resolveOpenFileDefaultPath();
-      if (defaultPath) {
-        dialogOptions.defaultPath = defaultPath;
-      }
-
-      const dialogResult = await dialog.showOpenDialog(mainWindow, dialogOptions);
-
-      if (dialogResult.canceled) {
-        return makeOpenFileResult(payload, { canceled: true });
-      }
-
-      const selectedPath = Array.isArray(dialogResult.filePaths) ? dialogResult.filePaths[0] : "";
-      const resolvedPath = trimScalar(selectedPath, "");
-      if (!resolvedPath) {
-        return makeOpenFileResult(payload, { error: "No file selected." });
-      }
-      const absolutePath = path.resolve(resolvedPath);
-      rememberOpenFileDir(absolutePath);
-
-      return makeOpenFileResult(payload, {
-        canceled: false,
-        file_path: absolutePath,
-        file_name: path.basename(absolutePath)
-      });
-    } catch (error) {
-      const message = error && error.message ? error.message : "Failed to open file dialog.";
-      return makeOpenFileResult(payload, { error: message });
-    }
-  });
-
-  ipcMain.handle(EXPORT_DIAGNOSTICS_CHANNEL, async (_event, rawPayload) => {
-    return runDiagnosticsExport(rawPayload, "ipc");
-  });
-}
 
 function uniqueDownloadPath(downloadsPath, filename) {
   const ext = path.extname(filename);
@@ -1214,130 +487,6 @@ function emitDownloadSavedEvent(fileName, savePath) {
     }
   })();`;
   mainWindow.webContents.executeJavaScript(script).catch(() => {});
-}
-
-function buildPowerEventPayload(type, source = "desktop-main", ts = Date.now()) {
-  const typeSafe = trimScalar(type, "");
-  if (!typeSafe) return null;
-  const sourceSafe = trimScalar(source, "desktop-main");
-  const tsNum = Number.isFinite(Number(ts)) ? Number(ts) : Date.now();
-  return { type: typeSafe, ts: tsNum, source: sourceSafe };
-}
-
-function emitPowerPayloadToRenderer(payload, emitKind = "direct", options = {}) {
-  if (!payload || typeof payload !== "object") return Promise.resolve(false);
-  const normalized = buildPowerEventPayload(payload.type, payload.source, payload.ts);
-  if (!normalized) return Promise.resolve(false);
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    appendMainLog("power_event_emit_skipped", {
-      type: normalized.type,
-      source: normalized.source,
-      emit_kind: emitKind,
-      reason: "window_unavailable"
-    });
-    return Promise.resolve(false);
-  }
-
-  const payloadJson = JSON.stringify(normalized);
-  const waitForShinyMsRaw = Number(options.waitForShinyMs);
-  const waitForShinyMs = Number.isFinite(waitForShinyMsRaw) && waitForShinyMsRaw > 0
-    ? Math.round(waitForShinyMsRaw)
-    : 0;
-  const pollIntervalMsRaw = Number(options.pollIntervalMs);
-  const pollIntervalMs = Number.isFinite(pollIntervalMsRaw) && pollIntervalMsRaw > 0
-    ? Math.max(25, Math.min(1000, Math.round(pollIntervalMsRaw)))
-    : 120;
-
-  const script = waitForShinyMs > 0
-    ? `(() => {
-      const payload = ${payloadJson};
-      const deadline = Date.now() + ${waitForShinyMs};
-      const pollMs = ${pollIntervalMs};
-      return new Promise((resolve) => {
-        const attempt = () => {
-          try {
-            if (window.Shiny && typeof window.Shiny.setInputValue === "function") {
-              window.Shiny.setInputValue("itcsuite_power_event", payload, { priority: "event" });
-              resolve(true);
-              return;
-            }
-          } catch (_) {}
-          if (Date.now() >= deadline) {
-            resolve(false);
-            return;
-          }
-          window.setTimeout(attempt, pollMs);
-        };
-        attempt();
-      });
-    })();`
-    : `(() => {
-      if (window.Shiny && typeof window.Shiny.setInputValue === "function") {
-        window.Shiny.setInputValue("itcsuite_power_event", ${payloadJson}, { priority: "event" });
-        return true;
-      }
-      return false;
-    })();`;
-
-  return mainWindow.webContents.executeJavaScript(script)
-    .then((ok) => {
-      const delivered = ok === true;
-      appendMainLog("power_event_emit", {
-        type: normalized.type,
-        source: normalized.source,
-        emit_kind: emitKind,
-        wait_for_shiny_ms: waitForShinyMs,
-        delivered
-      });
-      return delivered;
-    })
-    .catch((error) => {
-      appendMainLog("power_event_emit_failed", {
-        type: normalized.type,
-        source: normalized.source,
-        emit_kind: emitKind,
-        wait_for_shiny_ms: waitForShinyMs,
-        error: error.message
-      });
-      return false;
-    });
-}
-
-function emitPowerEventToRenderer(type, source = "desktop-main") {
-  const payload = buildPowerEventPayload(type, source, Date.now());
-  if (!payload) return Promise.resolve(false);
-  latestPowerEventPayload = payload;
-  return emitPowerPayloadToRenderer(payload, "direct");
-}
-
-function replayLatestPowerEventToRenderer(reason = "did-finish-load") {
-  const payload = latestPowerEventPayload;
-  if (!payload || typeof payload !== "object") return Promise.resolve(false);
-  if (!["resume", "unlock-screen"].includes(trimScalar(payload.type, ""))) {
-    return Promise.resolve(false);
-  }
-  const ageMs = Date.now() - Number(payload.ts || 0);
-  if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > POWER_EVENT_REPLAY_WINDOW_MS) {
-    return Promise.resolve(false);
-  }
-
-  const replayPayload = {
-    ...payload,
-    source: `${trimScalar(payload.source, "desktop-main")}.replay`
-  };
-  return emitPowerPayloadToRenderer(replayPayload, "replay", {
-    waitForShinyMs: 10000,
-    pollIntervalMs: 120
-  })
-    .then((delivered) => {
-      appendMainLog("power_event_replay", {
-        reason: trimScalar(reason, "did-finish-load"),
-        type: replayPayload.type,
-        age_ms: ageMs,
-        delivered
-      });
-      return delivered;
-    });
 }
 
 function configureDownloadBehavior() {
@@ -1524,8 +673,20 @@ async function loadShinyPage(url) {
   for (let i = 1; i <= attempts; i += 1) {
     try {
       await mainWindow.loadURL(url);
+      if (i > 1) {
+        appendMainLog("load_shiny_page_success", { url, attempt: i });
+      }
       return;
     } catch (error) {
+      // Log the first failure and then every 10 attempts for diagnostics.
+      if (i === 1 || i % 10 === 0) {
+        appendMainLog("load_shiny_page_retry", {
+          url,
+          attempt: i,
+          max_attempts: attempts,
+          error: error.message
+        });
+      }
       if (i === attempts) {
         throw error;
       }
@@ -1547,72 +708,6 @@ function showStartupError(message) {
   }
 }
 
-function buildAppMenu() {
-  const template = [
-    {
-      label: APP_NAME,
-      submenu: [
-        {
-          label: "About",
-          click: () => {
-            dialog.showMessageBox({
-              type: "info",
-              title: `About ${APP_NAME}`,
-              message: `${APP_NAME} Desktop`,
-              detail: `${APP_SLOGAN}\n\nDeveloper: ${APP_DEVELOPER_NAME}\nEmail: ${APP_DEVELOPER_EMAIL}\nWebsite: ${APP_DEVELOPER_SITE}\nVersion: ${appVersionSignature()}\n\nElectron shell with local Shiny backend.`
-            });
-          }
-        },
-        { type: "separator" },
-        {
-          label: "Restart Backend",
-          click: async () => {
-            if (!backend) return;
-            allowedUrlPrefix = null;
-            if (mainWindow) {
-              mainWindow.loadURL(makeDataUrl(loadingHtml()));
-            }
-            try {
-              await backend.restart();
-            } catch (error) {
-              showStartupError(error.message);
-            }
-          }
-        },
-        {
-          label: "Open Logs Directory",
-          click: async () => {
-            const err = await shell.openPath(logsDir);
-            if (err) {
-              dialog.showErrorBox("Open logs failed", err);
-            }
-          }
-        },
-        {
-          label: "Export Diagnostics Package...",
-          click: async () => {
-            await handleMenuExportDiagnostics();
-          }
-        },
-        { type: "separator" },
-        { role: "quit" }
-      ]
-    },
-    {
-      label: "View",
-      submenu: [
-        { role: "reload" },
-        { role: "toggledevtools" },
-        { role: "togglefullscreen" },
-        { role: "resetzoom" },
-        { role: "zoomin" },
-        { role: "zoomout" }
-      ]
-    }
-  ];
-
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
-}
 
 function wireBackendEvents() {
   backend.on("backend-ready", async (port) => {
@@ -1690,31 +785,55 @@ app.whenReady().then(async () => {
   appendMainLog("app_ready", { platform: process.platform });
 
   backend = new BackendController({
+    host: HOST,
     logsDir,
     backendLogPath: path.join(logsDir, "backend.log")
   });
 
-  buildAppMenu();
-  registerIpcHandlers();
+  setupMenu({
+    appName: APP_NAME,
+    appSlogan: APP_SLOGAN,
+    developerName: APP_DEVELOPER_NAME,
+    developerEmail: APP_DEVELOPER_EMAIL,
+    developerSite: APP_DEVELOPER_SITE,
+    versionSignature: appVersionSignature(),
+    restartBackend: async () => {
+      if (!backend) return;
+      allowedUrlPrefix = null;
+      if (mainWindow) {
+        mainWindow.loadURL(makeDataUrl(loadingHtml()));
+      }
+      try {
+        await backend.restart();
+      } catch (error) {
+        showStartupError(error.message);
+      }
+    },
+    openLogsDir: async () => {
+      const err = await shell.openPath(logsDir);
+      if (err) {
+        dialog.showErrorBox("Open logs failed", err);
+      }
+    },
+    exportDiagnostics: async () => {
+      await handleMenuExportDiagnostics();
+    }
+  });
+  setupIpcHandlers({
+    getMainWindow: () => mainWindow,
+    getLogsDir: () => logsDir,
+    appendMainLog
+  });
+  setupPowerEvents({
+    smokeMode,
+    appendMainLog,
+    recoverAfterResume,
+    getMainWindow: () => mainWindow
+  });
   configureDownloadBehavior();
   createMainWindow();
   wireBackendEvents();
-  if (!smokeMode) {
-    powerMonitor.on("suspend", () => {
-      appendMainLog("power_suspend", {});
-      emitPowerEventToRenderer("suspend", "power-monitor");
-    });
-    powerMonitor.on("resume", () => {
-      appendMainLog("power_resume", {});
-      emitPowerEventToRenderer("resume", "power-monitor");
-      setTimeout(() => recoverAfterResume("power-resume"), 2000);
-    });
-    powerMonitor.on("unlock-screen", () => {
-      appendMainLog("unlock_screen", {});
-      emitPowerEventToRenderer("unlock-screen", "power-monitor");
-      setTimeout(() => recoverAfterResume("unlock-screen"), 2000);
-    });
-  }
+
 
   try {
     await backend.start();

@@ -1605,10 +1605,20 @@ server <- function(input, output, session) {
     normalize_recent_path(cache_path)
   }
 
+  recent_path_cache <- new.env(parent = emptyenv())
   recent_path_exists <- function(path) {
     p <- normalize_recent_path(path)
     if (!nzchar(p)) return(FALSE)
-    isTRUE(file.exists(p))
+
+    now <- as.numeric(Sys.time())
+    cached <- recent_path_cache[[p]]
+    if (!is.null(cached) && (now - cached$ts) < 10) {
+      return(cached$exists)
+    }
+
+    ans <- isTRUE(file.exists(p))
+    recent_path_cache[[p]] <- list(exists = ans, ts = now)
+    ans
   }
 
   with_recent_path_status <- function(records) {
@@ -2024,12 +2034,35 @@ server <- function(input, output, session) {
 
   observe({
     if (!isTRUE(desktop_runtime_enabled())) return(invisible(NULL))
-    invalidateLater(15000, session)
+    invalidateLater(60000, session)
     if (!isTRUE(sleep_restore_runtime$autosave_bootstrap_done)) {
       sleep_restore_runtime$autosave_bootstrap_done <- TRUE
+      sleep_restore_runtime$last_autosave_hash <- ""
       return(invisible(NULL))
     }
-    shiny::isolate(request_sleep_restore_snapshot(reason = "periodic_autosave", source_event = "autosave"))
+
+    shiny::isolate({
+      # Build the snapshot payload without triggering reactive dependencies here
+      snapshot_data <- home_sleep_restore_store_normalize_state(list(
+        schema_version = home_sleep_restore_store_schema(),
+        active_tab = sleep_restore_runtime$active_tab,
+        source_event = "autosave",
+        steps = list(
+          step1 = collect_sleep_restore_step("step1"),
+          step2 = collect_sleep_restore_step("step2"),
+          step3 = collect_sleep_restore_step("step3")
+        )
+      ))
+
+      # Use a fast hash to implement a robust "dirty flag"
+      current_hash <- digest::digest(snapshot_data, algo = "md5")
+      if (identical(current_hash, sleep_restore_runtime$last_autosave_hash)) {
+        return(invisible(NULL)) # Not dirty, skip disk I/O
+      }
+
+      sleep_restore_runtime$last_autosave_hash <- current_hash
+      request_sleep_restore_snapshot(reason = "periodic_autosave", source_event = "autosave")
+    })
   })
 
   observeEvent(input$itcsuite_power_event, {
