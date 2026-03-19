@@ -31,7 +31,7 @@ PARAM_BOUNDS <- list(
 )
 
 # 第一针体积默认值（uL），无实验数据时使用；仅在此处定义，避免硬编码
-V_PRE_DEFAULT_uL <- 0.3
+V_PRE_DEFAULT_uL <- 0.4
 
 # 默认参数值（用于初始化或重置）
 DEFAULT_PARAMS <- list(
@@ -118,17 +118,17 @@ DATA_VALIDATION <- list(
 UI_DEFAULTS <- list(
   # 滑块控件
   n_inj_min = 2,              # 最小注射次数（避免单次注射的向量化边界问题）
-  n_inj_default = 26,         # 默认注射次数
+  n_inj_default = 20,         # 默认注射次数
   n_inj_max = 50,             # 最大注射次数
   
   # 浓度范围（mM）
-  conc_cell_min = 0.01,
+  conc_cell_min = 0.005,
   conc_cell_max = 10,
-  conc_cell_default = 0.03,
+  conc_cell_default = 0.08,
   
-  conc_syringe_min = 0.01,
+  conc_syringe_min = 0.005,
   conc_syringe_max = 50,
-  conc_syringe_default = 0.6,
+  conc_syringe_default = 0.8,
   
   # 体积范围（mL）
   v_cell_min = 0.05,      # 修正：最小值改为 0.05 mL (50 uL)，以支持小体积样品池
@@ -137,7 +137,7 @@ UI_DEFAULTS <- list(
   
   v_inj_min = 0.0005,      # 0.001 mL = 1 uL
   v_inj_max = 0.1,        # 0.1 mL = 100 uL
-  v_inj_default = 0.0015, # 0.0015 mL = 1.5 uL
+  v_inj_default = 0.002, # 0.002 mL = 2 uL
   
   v_pre_default = V_PRE_DEFAULT_uL,    # 实验第一针体积默认（无实验数据时）
   
