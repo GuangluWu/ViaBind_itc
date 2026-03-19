@@ -25,17 +25,19 @@ is_valid_created_at <- function(x) {
   !is.na(created)
 }
 
+# Module-local environment for reject logger.
+# Avoids .GlobalEnv pollution and multi-session conflicts.
+bridge_reject_logger_env <- new.env(parent = emptyenv())
+bridge_reject_logger_env$logger <- NULL
+
 bridge_set_reject_logger <- function(fn = NULL) {
   if (!is.null(fn) && !is.function(fn)) return(invisible(FALSE))
-  assign("ITCSUITE_BRIDGE_REJECT_LOGGER", fn, envir = .GlobalEnv)
+  bridge_reject_logger_env$logger <- fn
   invisible(TRUE)
 }
 
 bridge_get_reject_logger <- function() {
-  if (!exists("ITCSUITE_BRIDGE_REJECT_LOGGER", envir = .GlobalEnv, inherits = FALSE)) {
-    return(NULL)
-  }
-  logger <- get("ITCSUITE_BRIDGE_REJECT_LOGGER", envir = .GlobalEnv, inherits = FALSE)
+  logger <- bridge_reject_logger_env$logger
   if (is.function(logger)) logger else NULL
 }
 

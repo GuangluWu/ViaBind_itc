@@ -13,6 +13,7 @@ const {
   sha256File,
   buildManifest
 } = require("./diagnostics");
+const { trimScalar, escapeHtml } = require("./utils");
 
 const HOST = "127.0.0.1";
 const READY_PREFIX = "ITCSUITE_READY ";
@@ -448,6 +449,11 @@ class BackendController extends EventEmitter {
         }
       };
 
+      // On Windows, SIGTERM has no effect on child processes.
+      // Skip the graceful SIGTERM phase and kill directly.
+      const useDirectKill = process.platform === "win32";
+      const gracePeriodMs = useDirectKill ? 0 : 5000;
+
       const timeout = setTimeout(() => {
         if (!child.killed) {
           try {
@@ -456,7 +462,7 @@ class BackendController extends EventEmitter {
             // Ignore kill failures.
           }
         }
-      }, 5000);
+      }, gracePeriodMs);
 
       child.once("close", () => {
         clearTimeout(timeout);
@@ -464,7 +470,13 @@ class BackendController extends EventEmitter {
       });
 
       try {
-        child.kill("SIGTERM");
+        if (useDirectKill) {
+          // Windows: kill immediately (TerminateProcess).
+          child.kill();
+        } else {
+          // Unix: send SIGTERM for graceful shutdown.
+          child.kill("SIGTERM");
+        }
       } catch (_) {
         clearTimeout(timeout);
         finish();
@@ -818,8 +830,8 @@ function errorHtml(message, logPath) {
   <div class="wrap">
     <h1>Backend startup failed</h1>
     <p>Check whether the bundled runtime and required R packages are available.</p>
-    <pre>${message}</pre>
-    <p>Log file: <code>${logPath}</code></p>
+    <pre>${escapeHtml(message)}</pre>
+    <p>Log file: <code>${escapeHtml(logPath)}</code></p>
     <p>Use menu action \"Open Logs Directory\" for quick access.</p>
   </div>
 </body>
@@ -832,11 +844,7 @@ function isAllowedNavigation(url) {
   return false;
 }
 
-function trimScalar(value, defaultValue = "") {
-  const out = typeof value === "string" ? value : String(value ?? "");
-  const trimmed = out.trim();
-  return trimmed || defaultValue;
-}
+
 
 function isExistingDirectory(dirPath) {
   const candidate = trimScalar(dirPath, "");

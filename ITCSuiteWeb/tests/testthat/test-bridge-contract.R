@@ -174,3 +174,54 @@ testthat::test_that("make_bridge_channel stores only validated payloads", {
   ch(NULL)
   testthat::expect_null(shiny::isolate(ch()))
 })
+
+testthat::test_that("bridge_set/get_reject_logger does not pollute .GlobalEnv", {
+  # Clear any pre-existing global variable from earlier code
+  if (exists("ITCSUITE_BRIDGE_REJECT_LOGGER", envir = .GlobalEnv, inherits = FALSE)) {
+    rm("ITCSUITE_BRIDGE_REJECT_LOGGER", envir = .GlobalEnv)
+  }
+
+  my_logger <- function(label, reason, payload = NULL) invisible(TRUE)
+  bridge_set_reject_logger(my_logger)
+  testthat::expect_identical(bridge_get_reject_logger(), my_logger)
+
+  # Confirm .GlobalEnv is NOT used
+  testthat::expect_false(
+    exists("ITCSUITE_BRIDGE_REJECT_LOGGER", envir = .GlobalEnv, inherits = FALSE)
+  )
+
+  bridge_set_reject_logger(NULL)
+  testthat::expect_null(bridge_get_reject_logger())
+})
+
+testthat::test_that("bridge_set_reject_logger rejects non-function non-null values", {
+  bridge_set_reject_logger(NULL)
+  result <- bridge_set_reject_logger("not_a_function")
+  testthat::expect_false(result)
+  testthat::expect_null(bridge_get_reject_logger())
+})
+
+testthat::test_that("bridge_emit_reject calls session-scoped logger correctly", {
+  captured <- list()
+  my_logger <- function(label, reason, payload = NULL) {
+    captured$label <<- label
+    captured$reason <<- reason
+    captured$payload <<- payload
+  }
+
+  bridge_set_reject_logger(my_logger)
+  result <- bridge_emit_reject("test_channel", "bad_payload", list(x = 1))
+  testthat::expect_true(result)
+  testthat::expect_equal(captured$label, "test_channel")
+  testthat::expect_equal(captured$reason, "bad_payload")
+  testthat::expect_equal(captured$payload, list(x = 1))
+
+  bridge_set_reject_logger(NULL)
+})
+
+testthat::test_that("bridge_emit_reject returns FALSE when no logger is set", {
+  bridge_set_reject_logger(NULL)
+  result <- bridge_emit_reject("ch", "reason")
+  testthat::expect_false(result)
+})
+
