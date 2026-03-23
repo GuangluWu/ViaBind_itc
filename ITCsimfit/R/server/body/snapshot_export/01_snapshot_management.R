@@ -517,7 +517,7 @@
          markActiveById(activeRowId);
        }
        function markActiveById(id) {
-         table.rows({page: 'current'}).every(function() {
+         table.rows().every(function() {
            var rowData = this.data();
            var rowId = (rowData && rowData.length > rowIdCol) ? String(rowData[rowIdCol] || '') : '';
            $(this.node()).toggleClass('snap-row-active', !!id && rowId === id);
@@ -564,8 +564,8 @@
       rownames = FALSE,
       selection = "none",
       options = list(
-        dom = "tp",
-        pageLength = 5,
+        dom = "t",
+        paging = FALSE,
         scrollX = TRUE,
         scrollY = "120px",
         scrollCollapse = FALSE,
