@@ -60,6 +60,50 @@ extract_fit_params_map <- function(fit_params_df) {
   setNames(param_values, param_names)
 }
 
+extract_fit_bounds_map <- function(fit_bounds_df) {
+  if (is.null(fit_bounds_df) || !is.data.frame(fit_bounds_df)) return(list())
+  col_lookup <- setNames(names(fit_bounds_df), tolower(names(fit_bounds_df)))
+  param_col <- if ("param" %in% names(col_lookup)) unname(col_lookup[["param"]]) else ""
+  lower_col <- if ("lower" %in% names(col_lookup)) unname(col_lookup[["lower"]]) else ""
+  upper_col <- if ("upper" %in% names(col_lookup)) unname(col_lookup[["upper"]]) else ""
+  if (!nzchar(param_col) || !nzchar(lower_col) || !nzchar(upper_col)) return(list())
+
+  params <- trimws(as.character(fit_bounds_df[[param_col]]))
+  lower <- suppressWarnings(as.numeric(fit_bounds_df[[lower_col]]))
+  upper <- suppressWarnings(as.numeric(fit_bounds_df[[upper_col]]))
+  out <- list()
+  for (idx in seq_along(params)) {
+    param_name <- params[[idx]]
+    if (!nzchar(param_name)) next
+    lower_num <- lower[[idx]]
+    upper_num <- upper[[idx]]
+    if (!is.finite(lower_num) || !is.finite(upper_num)) next
+    if (lower_num > upper_num) {
+      tmp <- lower_num
+      lower_num <- upper_num
+      upper_num <- tmp
+    }
+    out[[param_name]] <- list(lower = lower_num, upper = upper_num)
+  }
+  out
+}
+
+extract_snapshot_fit_bounds_map <- function(snapshot_fit_bounds_df, row_id_col = "_snapshot_row_id") {
+  if (is.null(snapshot_fit_bounds_df) || !is.data.frame(snapshot_fit_bounds_df)) return(list())
+  row_id_col_chr <- as.character(row_id_col)
+  row_id_col_chr <- if (length(row_id_col_chr) == 0L) "" else trimws(row_id_col_chr[1])
+  if (!nzchar(row_id_col_chr) || !row_id_col_chr %in% names(snapshot_fit_bounds_df)) return(list())
+
+  row_ids <- trimws(as.character(snapshot_fit_bounds_df[[row_id_col_chr]]))
+  valid_row_ids <- unique(row_ids[nzchar(row_ids)])
+  out <- list()
+  for (row_id in valid_row_ids) {
+    row_df <- snapshot_fit_bounds_df[row_ids == row_id, , drop = FALSE]
+    out[[row_id]] <- extract_fit_bounds_map(row_df)
+  }
+  out
+}
+
 get_fit_param_num <- function(fp_map, key, default = NA_real_) {
   if (is.null(fp_map) || length(fp_map) == 0) return(default)
   nm <- names(fp_map)

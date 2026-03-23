@@ -155,16 +155,42 @@ testthat::test_that("build_params_export_sheets keeps snapshots before meta", {
   testthat::expect_equal(sheets$meta$value[1], "ViaBind v1.2.3: ITCsimfit")
 })
 
+testthat::test_that("build_fit_bounds helpers emit workbook-friendly tables", {
+  fit_bounds <- list(
+    logK1 = c(lower = 0.5, upper = 12),
+    H1 = list(lower = -20000, upper = -5000)
+  )
+  fit_bounds_df <- export_bridge_build_fit_bounds_df(fit_bounds)
+  snapshot_bounds_df <- export_bridge_build_snapshot_fit_bounds_df(
+    snapshot_fit_bounds_by_row_id = list(
+      snap_1 = fit_bounds
+    )
+  )
+  sheets <- export_bridge_build_params_export_sheets(
+    export_df = data.frame(`_snapshot_row_id` = "snap_1", logK1 = 6, stringsAsFactors = FALSE),
+    module_name = "ITCsimfit",
+    version = "1.2.3",
+    snapshot_fit_bounds_df = snapshot_bounds_df
+  )
+
+  testthat::expect_equal(names(fit_bounds_df), c("param", "lower", "upper"))
+  testthat::expect_equal(fit_bounds_df$param, c("logK1", "H1"))
+  testthat::expect_equal(names(snapshot_bounds_df), c("_snapshot_row_id", "param", "lower", "upper"))
+  testthat::expect_true(all(snapshot_bounds_df$`_snapshot_row_id` == "snap_1"))
+  testthat::expect_equal(names(sheets), c("snapshots", "snapshot_fit_bounds", "meta"))
+})
+
 testthat::test_that("order_sheets keeps expected order and report at end", {
   sheets <- list(
     fit_params = data.frame(a = 1),
+    fit_bounds = data.frame(a = 6),
     custom_x = data.frame(a = 2),
     simulation = data.frame(a = 3),
     report = data.frame(a = 4),
     meta_rev = data.frame(a = 5)
   )
   ordered <- export_bridge_order_sheets(sheets)
-  testthat::expect_equal(names(ordered), c("meta_rev", "simulation", "fit_params", "custom_x", "report"))
+  testthat::expect_equal(names(ordered), c("meta_rev", "simulation", "fit_params", "fit_bounds", "custom_x", "report"))
 })
 
 testthat::test_that("resolve_step2_plot_source returns stable source label", {

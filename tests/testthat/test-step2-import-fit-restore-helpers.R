@@ -54,6 +54,37 @@ testthat::test_that("fit_params parser restores active paths and thermo params",
   testthat::expect_equal(restore$FitRangeEnd_Inj, 18)
 })
 
+testthat::test_that("fit_bounds parser restores per-parameter bounds", {
+  fit_bounds <- data.frame(
+    param = c("logK1", "H1"),
+    lower = c(0.5, -20000),
+    upper = c(12, -5000),
+    stringsAsFactors = FALSE
+  )
+  out <- extract_fit_bounds_map(fit_bounds)
+
+  testthat::expect_equal(out$logK1$lower, 0.5)
+  testthat::expect_equal(out$logK1$upper, 12)
+  testthat::expect_equal(out$H1$lower, -20000)
+  testthat::expect_equal(out$H1$upper, -5000)
+})
+
+testthat::test_that("snapshot fit_bounds parser groups rows by snapshot id", {
+  snapshot_fit_bounds <- data.frame(
+    `_snapshot_row_id` = c("snap_1", "snap_1", "snap_2"),
+    param = c("logK1", "H1", "logK1"),
+    lower = c(0.5, -20000, 1.5),
+    upper = c(12, -5000, 9.5),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  out <- extract_snapshot_fit_bounds_map(snapshot_fit_bounds)
+
+  testthat::expect_equal(sort(names(out)), c("snap_1", "snap_2"))
+  testthat::expect_equal(out$snap_1$H1$lower, -20000)
+  testthat::expect_equal(out$snap_2$logK1$upper, 9.5)
+})
+
 testthat::test_that("missing ActivePaths falls back to base model", {
   fit_params <- data.frame(
     parameter = c("logK1", "H1_cal_mol"),

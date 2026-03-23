@@ -68,6 +68,31 @@
         finish_export(outcome = "error", payload = list(reason = "none_selected"), level = "WARN")
         return(invisible(NULL))
       }
+      export_fit_bounds_by_row_id <- if (exists("build_snapshot_fit_bounds_map_for_rows", mode = "function", inherits = TRUE)) {
+        tryCatch(
+          build_snapshot_fit_bounds_map_for_rows(
+            rows_df = export_df,
+            bounds_map = values$snapshot_fit_bounds_by_row_id
+          ),
+          error = function(e) list()
+        )
+      } else {
+        list()
+      }
+      if (length(export_fit_bounds_by_row_id) > 0L) {
+        current_snapshot_bounds <- if (is.list(values$snapshot_fit_bounds_by_row_id)) values$snapshot_fit_bounds_by_row_id else list()
+        for (row_id in names(export_fit_bounds_by_row_id)) {
+          current_snapshot_bounds[[row_id]] <- export_fit_bounds_by_row_id[[row_id]]
+        }
+        values$snapshot_fit_bounds_by_row_id <- current_snapshot_bounds
+      }
+      snapshot_fit_bounds_df <- export_bridge_build_snapshot_fit_bounds_df(
+        snapshot_fit_bounds_by_row_id = export_fit_bounds_by_row_id,
+        row_ids = as.character(export_df$row_id %||% character(0))
+      )
+      if ("row_id" %in% colnames(export_df)) {
+        colnames(export_df)[colnames(export_df) == "row_id"] <- "_snapshot_row_id"
+      }
       # 重命名实验条件列，加单位后缀（内部名 → 文件名）
       col_rename <- c(
         "H_cell_0" = "H_cell_0_mM", "G_syringe" = "G_syringe_mM",
@@ -83,7 +108,11 @@
         }
       }
       writexl::write_xlsx(
-        export_bridge_build_params_export_sheets(export_df, module_name = "ITCsimfit"),
+        export_bridge_build_params_export_sheets(
+          export_df,
+          module_name = "ITCsimfit",
+          snapshot_fit_bounds_df = snapshot_fit_bounds_df
+        ),
         path = file
       )
 
@@ -182,6 +211,9 @@
     
     sheet_list[["meta_rev"]] <- meta_rev
     sheet_list[["fit_params"]] <- fit_params_df
+    sheet_list[["fit_bounds"]] <- export_bridge_build_fit_bounds_df(
+      safe_rv_get(fit_param_bounds, default = list())
+    )
     sheet_list[["simulation"]] <- sim_df
 
     # Always regenerate report at export time to ensure current UI/fitting state

@@ -87,18 +87,137 @@ export_bridge_build_meta_signature_df <- function(module_name, version = NULL, d
   )
 }
 
+export_bridge_build_fit_bounds_df <- function(fit_bounds, row_id = NULL, row_id_col = NULL) {
+  row_id_col_chr <- as.character(row_id_col)
+  row_id_col_chr <- if (length(row_id_col_chr) == 0L) "" else trimws(row_id_col_chr[1])
+  row_id_chr <- as.character(row_id)
+  row_id_chr <- if (length(row_id_chr) == 0L) "" else trimws(row_id_chr[1])
+  out_cols <- c("param", "lower", "upper")
+  if (nzchar(row_id_col_chr)) out_cols <- c(row_id_col_chr, out_cols)
+
+  if (!is.list(fit_bounds) || length(fit_bounds) < 1L) {
+    out <- as.data.frame(
+      setNames(
+        lapply(out_cols, function(col) {
+          if (identical(col, "lower") || identical(col, "upper")) numeric(0) else character(0)
+        }),
+        out_cols
+      ),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+    return(out)
+  }
+
+  rows <- vector("list", length(fit_bounds))
+  row_n <- 0L
+  for (nm in names(fit_bounds)) {
+    param_name <- as.character(nm)
+    param_name <- if (length(param_name) == 0L) "" else trimws(param_name[1])
+    if (!nzchar(param_name)) next
+    pair <- fit_bounds[[nm]]
+    lower <- NA_real_
+    upper <- NA_real_
+    if (is.list(pair)) {
+      lower <- suppressWarnings(as.numeric(pair$lower)[1])
+      upper <- suppressWarnings(as.numeric(pair$upper)[1])
+    } else {
+      lower <- suppressWarnings(as.numeric(pair["lower"])[1])
+      upper <- suppressWarnings(as.numeric(pair["upper"])[1])
+      if (!is.finite(lower) || !is.finite(upper)) {
+        pair_num <- suppressWarnings(as.numeric(pair))
+        if (length(pair_num) >= 1L) lower <- pair_num[1]
+        if (length(pair_num) >= 2L) upper <- pair_num[2]
+      }
+    }
+    if (!is.finite(lower) || !is.finite(upper)) next
+    if (lower > upper) {
+      tmp <- lower
+      lower <- upper
+      upper <- tmp
+    }
+    row_n <- row_n + 1L
+    row_item <- list(param = param_name, lower = lower, upper = upper)
+    if (nzchar(row_id_col_chr)) row_item[[row_id_col_chr]] <- row_id_chr
+    rows[[row_n]] <- row_item
+  }
+
+  rows <- rows[seq_len(row_n)]
+  if (length(rows) < 1L) {
+    out <- as.data.frame(
+      setNames(
+        lapply(out_cols, function(col) {
+          if (identical(col, "lower") || identical(col, "upper")) numeric(0) else character(0)
+        }),
+        out_cols
+      ),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+    return(out)
+  }
+  out <- do.call(rbind, lapply(rows, function(item) {
+    row_df <- as.data.frame(item, stringsAsFactors = FALSE, check.names = FALSE)
+    row_df[, out_cols, drop = FALSE]
+  }))
+  rownames(out) <- NULL
+  out
+}
+
+export_bridge_build_snapshot_fit_bounds_df <- function(snapshot_fit_bounds_by_row_id,
+                                                       row_ids = NULL,
+                                                       row_id_col = "_snapshot_row_id") {
+  row_id_col_chr <- as.character(row_id_col)
+  row_id_col_chr <- if (length(row_id_col_chr) == 0L) "" else trimws(row_id_col_chr[1])
+  if (!nzchar(row_id_col_chr)) row_id_col_chr <- "_snapshot_row_id"
+  target_ids <- if (is.null(row_ids) || length(row_ids) == 0L) {
+    names(snapshot_fit_bounds_by_row_id)
+  } else {
+    as.character(row_ids)
+  }
+  target_ids <- trimws(target_ids)
+  target_ids <- unique(target_ids[nzchar(target_ids)])
+
+  chunks <- lapply(target_ids, function(row_id) {
+    export_bridge_build_fit_bounds_df(
+      fit_bounds = snapshot_fit_bounds_by_row_id[[row_id]],
+      row_id = row_id,
+      row_id_col = row_id_col_chr
+    )
+  })
+  chunks <- Filter(function(df) is.data.frame(df) && nrow(df) > 0L, chunks)
+  if (length(chunks) < 1L) {
+    return(data.frame(
+      setNames(
+        list(character(0), character(0), numeric(0), numeric(0)),
+        c(row_id_col_chr, "param", "lower", "upper")
+      ),
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    ))
+  }
+  out <- do.call(rbind, chunks)
+  rownames(out) <- NULL
+  out
+}
+
 export_bridge_build_params_export_sheets <- function(export_df,
                                                      module_name = "ITCsimfit",
                                                      version = NULL,
-                                                     default_version = "x.x.x") {
-  list(
-    snapshots = as.data.frame(export_df, stringsAsFactors = FALSE),
-    meta = export_bridge_build_meta_signature_df(
-      module_name = module_name,
-      version = version,
-      default_version = default_version
-    )
+                                                     default_version = "x.x.x",
+                                                     snapshot_fit_bounds_df = NULL) {
+  out <- list(
+    snapshots = as.data.frame(export_df, stringsAsFactors = FALSE)
   )
+  if (is.data.frame(snapshot_fit_bounds_df) && nrow(snapshot_fit_bounds_df) > 0L) {
+    out[["snapshot_fit_bounds"]] <- as.data.frame(snapshot_fit_bounds_df, stringsAsFactors = FALSE)
+  }
+  out[["meta"]] <- export_bridge_build_meta_signature_df(
+    module_name = module_name,
+    version = version,
+    default_version = default_version
+  )
+  out
 }
 
 export_bridge_build_fit_params_df <- function(safe_inp, active_paths_save, rss_info) {
@@ -282,6 +401,7 @@ export_bridge_order_sheets <- function(sheet_list) {
     "integration_rev",
     "simulation",
     "fit_params",
+    "fit_bounds",
     "error_reliability",
     "error_analysis",
     "residuals",

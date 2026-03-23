@@ -31,6 +31,8 @@
     "n_inj", "FitRangeStart", "FitRangeEnd", "V_pre", "Temp"
   )
   snapshot_rowid_col <- "row_id"
+  snapshot_export_rowid_col <- "_snapshot_row_id"
+  snapshot_fit_bounds_sheet_name <- "snapshot_fit_bounds"
 
   next_snapshot_row_ids <- function(n = 1L) {
     n_int <- suppressWarnings(as.integer(n)[1])
@@ -40,6 +42,70 @@
     seq_vec <- seq.int(from = seq_now + 1L, length.out = n_int)
     values$snapshot_row_seq <- seq_vec[length(seq_vec)]
     paste0("snap_", seq_vec)
+  }
+
+  build_snapshot_fit_bounds_map_for_rows <- function(rows_df, bounds_map = values$snapshot_fit_bounds_by_row_id) {
+    if (!is.data.frame(rows_df) || nrow(rows_df) == 0L) return(list())
+    out <- list()
+    source_map <- if (is.list(bounds_map)) bounds_map else list()
+    for (idx in seq_len(nrow(rows_df))) {
+      row_df <- rows_df[idx, , drop = FALSE]
+      row_id <- trimws(as.character(row_df[[snapshot_rowid_col]][1] %||% ""))
+      if (!nzchar(row_id)) next
+      out[[row_id]] <- resolve_complete_fit_bounds(
+        bounds = source_map[[row_id]],
+        value_source = row_df
+      )
+    }
+    out
+  }
+
+  reassign_snapshot_row_ids_against_existing <- function(df, existing_ids = character(0)) {
+    if (!is.data.frame(df) || nrow(df) == 0L || !snapshot_rowid_col %in% names(df)) return(df)
+    existing_ids <- trimws(as.character(existing_ids %||% character(0)))
+    row_ids <- trimws(as.character(df[[snapshot_rowid_col]] %||% character(0)))
+    conflict_idx <- which(
+      !nzchar(row_ids) |
+        row_ids %in% existing_ids |
+        duplicated(row_ids)
+    )
+    if (length(conflict_idx) > 0L) {
+      row_ids[conflict_idx] <- next_snapshot_row_ids(length(conflict_idx))
+      df[[snapshot_rowid_col]] <- row_ids
+    }
+    df
+  }
+
+  remap_snapshot_fit_bounds_by_row_id <- function(bounds_map, old_ids, new_ids, rows_df = NULL) {
+    if (!is.list(bounds_map)) bounds_map <- list()
+    old_ids <- as.character(old_ids %||% character(0))
+    new_ids <- as.character(new_ids %||% character(0))
+    out <- list()
+    n <- min(length(old_ids), length(new_ids))
+    if (n < 1L) return(out)
+    for (idx in seq_len(n)) {
+      new_id <- trimws(new_ids[idx])
+      if (!nzchar(new_id)) next
+      row_df <- if (is.data.frame(rows_df) && nrow(rows_df) >= idx) rows_df[idx, , drop = FALSE] else NULL
+      out[[new_id]] <- resolve_complete_fit_bounds(
+        bounds = bounds_map[[old_ids[idx]]],
+        value_source = row_df
+      )
+    }
+    out
+  }
+
+  remember_snapshot_fit_bounds_for_row <- function(row_id, row_df = NULL, bounds = NULL) {
+    row_id_chr <- trimws(as.character(row_id %||% "")[1])
+    if (!nzchar(row_id_chr)) return(invisible(NULL))
+    stored_bounds <- resolve_complete_fit_bounds(
+      bounds = bounds %||% values$snapshot_fit_bounds_by_row_id[[row_id_chr]],
+      value_source = row_df
+    )
+    current_map <- if (is.list(values$snapshot_fit_bounds_by_row_id)) values$snapshot_fit_bounds_by_row_id else list()
+    current_map[[row_id_chr]] <- stored_bounds
+    values$snapshot_fit_bounds_by_row_id <- current_map
+    invisible(stored_bounds)
   }
 
   normalize_snapshot_table <- function(df, add_row_id = TRUE) {
@@ -82,14 +148,28 @@
     checked_keep <- checked_now[checked_now %in% valid_ids]
     active_now <- as.character(values$param_active_row_id %||% "")[1]
     active_keep <- if (nzchar(active_now) && active_now %in% valid_ids) active_now else NA_character_
+    bounds_now <- normalize_snapshot_fit_bounds_by_row_id(
+      values$snapshot_fit_bounds_by_row_id,
+      rows_df = normalized_df,
+      derive_missing = FALSE
+    )
+    max_id_seq <- suppressWarnings(as.integer(sub("^snap_", "", valid_ids)))
+    max_id_seq <- max_id_seq[is.finite(max_id_seq)]
+    seq_now <- suppressWarnings(as.integer(values$snapshot_row_seq)[1])
+    if (!is.finite(seq_now) || seq_now < 0L) seq_now <- 0L
+    seq_keep <- if (length(max_id_seq) > 0L) max(seq_now, max(max_id_seq)) else seq_now
 
     changed_df <- !isTRUE(all.equal(values$param_list, normalized_df, check.attributes = FALSE))
     changed_checked <- !isTRUE(identical(checked_now, checked_keep))
     changed_active <- !isTRUE(identical(active_now, active_keep))
+    changed_bounds <- !isTRUE(all.equal(values$snapshot_fit_bounds_by_row_id, bounds_now, check.attributes = FALSE))
+    changed_seq <- !isTRUE(identical(seq_now, seq_keep))
 
     if (changed_df) values$param_list <- normalized_df
     if (changed_checked) values$param_checked_ids <- checked_keep
     if (changed_active) values$param_active_row_id <- active_keep
+    if (changed_bounds) values$snapshot_fit_bounds_by_row_id <- bounds_now
+    if (changed_seq) values$snapshot_row_seq <- as.integer(seq_keep)
   })
 
   observeEvent(input$save_params, {
@@ -261,6 +341,14 @@
       new_row,
       normalize_snapshot_table(values$param_list, add_row_id = TRUE)
     )
+    new_row_id <- as.character(new_row[[snapshot_rowid_col]][1] %||% "")
+    if (nzchar(new_row_id)) {
+      remember_snapshot_fit_bounds_for_row(
+        row_id = new_row_id,
+        row_df = new_row,
+        bounds = fit_param_bounds()
+      )
+    }
     values$param_active_row_id <- as.character(new_row[[snapshot_rowid_col]][1] %||% NA_character_)
     updateTextInput(session, "snap_name", value = "") 
   })
@@ -291,6 +379,11 @@
       df <- df[!df[[snapshot_rowid_col]] %in% checked_ids, , drop = FALSE]
     }
     values$param_list <- df
+    current_bounds <- if (is.list(values$snapshot_fit_bounds_by_row_id)) values$snapshot_fit_bounds_by_row_id else list()
+    if (length(checked_ids) > 0L && length(current_bounds) > 0L) {
+      current_bounds[checked_ids] <- NULL
+      values$snapshot_fit_bounds_by_row_id <- current_bounds
+    }
     values$param_checked_ids <- character(0)
     if (nrow(df) == 0) values$param_active_row_id <- NA_character_
     tryCatch(DT::selectRows(DT::dataTableProxy("param_table"), NULL), error = function(e) NULL)
@@ -521,6 +614,10 @@
     selected_idx <- match(clicked_id, as.character(df_display[[snapshot_rowid_col]]))
     if (!is.finite(selected_idx) || is.na(selected_idx) || selected_idx < 1L) return()
     target_p <- df_display[selected_idx, , drop = FALSE]
+    target_bounds <- remember_snapshot_fit_bounds_for_row(clicked_id, row_df = target_p)
+    if (length(target_bounds) > 0L) {
+      apply_fit_bounds_state(target_bounds, update_ui_inputs = TRUE)
+    }
     
     # 3. 批量更新 UI (兼容性处理：列不存在或为NA/空时使用默认值)
     # 基础参数 (logK1, H1)
@@ -634,8 +731,25 @@
         showNotification(tr("import_params_error_format", lang()), type = "error")
         return()
       }
-      # 读取 xlsx（snapshots sheet）
-      imported_df <- as.data.frame(readxl::read_excel(datapath, sheet = 1))
+      sheets <- tryCatch(read_xlsx_sheets(datapath), error = function(e) NULL)
+      if (!is.list(sheets) || length(sheets) < 1L) {
+        showNotification(tr("import_params_error_format", lang()), type = "error")
+        return()
+      }
+      imported_df <- if (is.data.frame(sheets[["snapshots"]])) {
+        as.data.frame(sheets[["snapshots"]], stringsAsFactors = FALSE)
+      } else {
+        first_sheet <- sheets[[1]]
+        if (!is.data.frame(first_sheet)) NULL else as.data.frame(first_sheet, stringsAsFactors = FALSE)
+      }
+      if (!is.data.frame(imported_df)) {
+        showNotification(tr("import_params_error_format", lang()), type = "error")
+        return()
+      }
+      imported_fit_bounds_raw <- extract_snapshot_fit_bounds_map(
+        sheets[[snapshot_fit_bounds_sheet_name]],
+        row_id_col = snapshot_export_rowid_col
+      )
       
       # 将文件列名（带单位后缀）还原为内部列名
       file_to_internal <- c(
@@ -650,6 +764,9 @@
         if (file_name %in% colnames(imported_df)) {
           colnames(imported_df)[colnames(imported_df) == file_name] <- file_to_internal[[file_name]]
         }
+      }
+      if (snapshot_export_rowid_col %in% colnames(imported_df) && !snapshot_rowid_col %in% colnames(imported_df)) {
+        colnames(imported_df)[colnames(imported_df) == snapshot_export_rowid_col] <- snapshot_rowid_col
       }
       
       # 关键列检查
@@ -700,11 +817,36 @@
       }
 
       imported_df <- imported_df[, valid_cols, drop = FALSE]
+      imported_old_ids <- if (snapshot_rowid_col %in% names(imported_df)) {
+        trimws(as.character(imported_df[[snapshot_rowid_col]]))
+      } else {
+        rep("", nrow(imported_df))
+      }
       imported_df <- normalize_snapshot_table(imported_df, add_row_id = TRUE)
-      values$param_list <- bind_rows(
-        normalize_snapshot_table(values$param_list, add_row_id = TRUE),
-        imported_df
+      existing_df <- normalize_snapshot_table(values$param_list, add_row_id = TRUE)
+      existing_ids <- if (snapshot_rowid_col %in% names(existing_df)) as.character(existing_df[[snapshot_rowid_col]]) else character(0)
+      imported_df <- reassign_snapshot_row_ids_against_existing(imported_df, existing_ids = existing_ids)
+      imported_new_ids <- if (snapshot_rowid_col %in% names(imported_df)) {
+        as.character(imported_df[[snapshot_rowid_col]])
+      } else {
+        character(0)
+      }
+      imported_fit_bounds <- remap_snapshot_fit_bounds_by_row_id(
+        bounds_map = imported_fit_bounds_raw,
+        old_ids = imported_old_ids,
+        new_ids = imported_new_ids,
+        rows_df = imported_df
       )
+      values$param_list <- bind_rows(existing_df, imported_df)
+      current_map <- normalize_snapshot_fit_bounds_by_row_id(
+        values$snapshot_fit_bounds_by_row_id,
+        rows_df = existing_df,
+        derive_missing = FALSE
+      )
+      for (row_id in names(imported_fit_bounds)) {
+        current_map[[row_id]] <- imported_fit_bounds[[row_id]]
+      }
+      values$snapshot_fit_bounds_by_row_id <- current_map
       values$param_checked_ids <- character(0)
       
       success_tpl <- tr("import_params_success_count", lang())

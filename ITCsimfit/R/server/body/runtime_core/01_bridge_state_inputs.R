@@ -19,6 +19,7 @@
   values <- reactiveValues(is_fitting = FALSE, param_list = data.frame(), error_analysis = NULL, 
                            param_checked_ids = character(0), # snapshot table checked row ids
                            snapshot_row_seq = 0L,            # monotonic sequence for snapshot row_id
+                           snapshot_fit_bounds_by_row_id = list(), # row_id -> saved fit bounds
                            param_active_row_id = NA_character_, # highlighted snapshot row id
                            error_analysis_info = NULL,  # 存储误差分析可靠性信息
                            residuals_data = NULL,       # 存储残差数据（用于残差图）
@@ -111,6 +112,144 @@
     for (nm in FIT_BOUND_PARAM_IDS) {
       b <- get_param_bound(nm)
       out[[nm]] <- c(lower = as.numeric(b["lower"]), upper = as.numeric(b["upper"]))
+    }
+    out
+  }
+
+  normalize_fit_bounds_for_runtime <- function(bounds, param_ids = FIT_BOUND_PARAM_IDS) {
+    if (!is.list(bounds)) return(list())
+    out <- list()
+    for (nm in param_ids) {
+      pair <- bounds[[nm]]
+      if (is.null(pair)) next
+      lower <- NA_real_
+      upper <- NA_real_
+      if (is.list(pair)) {
+        lower <- suppressWarnings(as.numeric(pair$lower)[1])
+        upper <- suppressWarnings(as.numeric(pair$upper)[1])
+      } else {
+        lower <- suppressWarnings(as.numeric(pair["lower"])[1])
+        upper <- suppressWarnings(as.numeric(pair["upper"])[1])
+        if (!is.finite(lower) || !is.finite(upper)) {
+          pair_num <- suppressWarnings(as.numeric(pair))
+          if (length(pair_num) >= 1L) lower <- pair_num[1]
+          if (length(pair_num) >= 2L) upper <- pair_num[2]
+        }
+      }
+      if (!is.finite(lower) || !is.finite(upper)) next
+      if (lower > upper) {
+        tmp <- lower
+        lower <- upper
+        upper <- tmp
+      }
+      if (isTRUE(all.equal(lower, upper, tolerance = .Machine$double.eps^0.5))) {
+        step_val <- suppressWarnings(as.numeric(FIT_BOUND_STEPS[[nm]])[1])
+        if (!is.finite(step_val) || step_val <= 0) step_val <- 1
+        upper <- upper + step_val
+      }
+      out[[nm]] <- c(lower = lower, upper = upper)
+    }
+    out
+  }
+
+  fit_bound_value_from_source <- function(source, param_name) {
+    if (is.null(source)) return(NA_real_)
+    if (is.data.frame(source) && nrow(source) > 0L) {
+      if (!param_name %in% names(source)) return(NA_real_)
+      return(suppressWarnings(as.numeric(source[[param_name]][1])))
+    }
+    if (is.list(source) && !is.null(source[[param_name]])) {
+      return(suppressWarnings(as.numeric(source[[param_name]][1])))
+    }
+    NA_real_
+  }
+
+  build_fit_bound_value_source_from_fp_restore <- function(fp_restore) {
+    if (!is.list(fp_restore)) return(list())
+    list(
+      logK1 = fp_restore$logK1,
+      H1 = fp_restore$H1,
+      logK2 = fp_restore$logK2,
+      H2 = fp_restore$H2,
+      logK3 = fp_restore$logK3,
+      H3 = fp_restore$H3,
+      logK4 = fp_restore$logK4,
+      H4 = fp_restore$H4,
+      logK5 = fp_restore$logK5,
+      H5 = fp_restore$H5,
+      logK6 = fp_restore$logK6,
+      H6 = fp_restore$H6,
+      logK7 = fp_restore$logK7,
+      H7 = fp_restore$H7,
+      Offset = fp_restore$Offset_cal
+    )
+  }
+
+  build_fit_bound_value_source_from_step2_params <- function(params) {
+    if (!is.list(params)) return(list())
+    list(
+      logK1 = params$logK1,
+      H1 = params$H1,
+      logK2 = params$logK2,
+      H2 = params$H2,
+      logK3 = params$logK3,
+      H3 = params$H3,
+      logK4 = params$logK4,
+      H4 = params$H4,
+      logK5 = params$logK5,
+      H5 = params$H5,
+      logK6 = params$logK6,
+      H6 = params$H6,
+      logK7 = params$logK7,
+      H7 = params$H7,
+      Offset = params$heat_offset %||% params$Offset
+    )
+  }
+
+  resolve_fit_bounds_for_values <- function(bounds = NULL, value_source = NULL) {
+    resolved <- build_default_fit_param_bounds()
+    bounds_norm <- normalize_fit_bounds_for_runtime(bounds)
+    for (nm in names(bounds_norm)) {
+      resolved[[nm]] <- bounds_norm[[nm]]
+    }
+    for (nm in FIT_BOUND_PARAM_IDS) {
+      value_num <- fit_bound_value_from_source(value_source, nm)
+      if (!is.finite(value_num)) next
+      lower_now <- suppressWarnings(as.numeric(resolved[[nm]]["lower"])[1])
+      upper_now <- suppressWarnings(as.numeric(resolved[[nm]]["upper"])[1])
+      if (!is.finite(lower_now) || !is.finite(upper_now)) next
+      if (value_num < lower_now) resolved[[nm]]["lower"] <- value_num
+      if (value_num > upper_now) resolved[[nm]]["upper"] <- value_num
+    }
+    normalize_fit_bounds_for_runtime(resolved)
+  }
+
+  resolve_complete_fit_bounds <- function(bounds = NULL, value_source = NULL) {
+    resolve_fit_bounds_for_values(bounds = bounds, value_source = value_source)
+  }
+
+  normalize_snapshot_fit_bounds_by_row_id <- function(bounds_by_row_id, rows_df = NULL, derive_missing = FALSE) {
+    if (!is.list(bounds_by_row_id)) bounds_by_row_id <- list()
+    if (!is.data.frame(rows_df)) rows_df <- data.frame(stringsAsFactors = FALSE)
+    row_ids <- if ("row_id" %in% names(rows_df)) {
+      trimws(as.character(rows_df$row_id))
+    } else {
+      character(0)
+    }
+    row_ids <- row_ids[nzchar(row_ids)]
+
+    out <- list()
+    if (length(row_ids) < 1L) return(out)
+
+    for (row_id in row_ids) {
+      stored <- resolve_complete_fit_bounds(bounds = bounds_by_row_id[[row_id]])
+      has_stored <- length(normalize_fit_bounds_for_runtime(bounds_by_row_id[[row_id]])) > 0L
+      if (!isTRUE(has_stored) && isTRUE(derive_missing)) {
+        row_idx <- match(row_id, trimws(as.character(rows_df$row_id)))
+        row_df <- if (is.finite(row_idx) && !is.na(row_idx) && row_idx >= 1L) rows_df[row_idx, , drop = FALSE] else NULL
+        stored <- resolve_complete_fit_bounds(bounds = NULL, value_source = row_df)
+      }
+      if (length(stored) > 0L) out[[row_id]] <- stored
     }
     out
   }
@@ -259,6 +398,24 @@
     }
 
     apply_bound_to_slider(param_name, sanitized)
+    invisible(TRUE)
+  }
+
+  apply_fit_bounds_state <- function(bounds, update_ui_inputs = TRUE) {
+    resolved <- resolve_complete_fit_bounds(bounds = bounds)
+    for (nm in FIT_BOUND_PARAM_IDS) {
+      pair <- resolved[[nm]]
+      if (is.null(pair)) next
+      lower <- suppressWarnings(as.numeric(pair["lower"])[1])
+      upper <- suppressWarnings(as.numeric(pair["upper"])[1])
+      if (!is.finite(lower) || !is.finite(upper)) next
+      update_fit_param_bound(
+        param_name = nm,
+        lower_in = lower,
+        upper_in = upper,
+        update_ui_inputs = update_ui_inputs
+      )
+    }
     invisible(TRUE)
   }
 
@@ -1707,6 +1864,16 @@
     }
     reset_step2_ui_for_new_dataset(default_n_inj = inferred_n_inj, apply_first_injection_default = FALSE)
 
+    fp_map <- extract_fit_params_map(sheets[["fit_params"]])
+    fp_restore <- extract_simfit_restore_params(fp_map)
+    fp_has_any <- any(vapply(fp_restore, function(v) is.finite(suppressWarnings(as.numeric(v))), logical(1)))
+    imported_fit_bounds_raw <- extract_fit_bounds_map(sheets[["fit_bounds"]])
+    imported_fit_bounds <- resolve_complete_fit_bounds(
+      bounds = imported_fit_bounds_raw,
+      value_source = build_fit_bound_value_source_from_fp_restore(fp_restore)
+    )
+    apply_fit_bounds_state(imported_fit_bounds, update_ui_inputs = TRUE)
+
     exp_key_cols <- c("H_cell_0_mM", "G_syringe_mM", "V_cell_mL", "V_inj_uL", "n_inj", "V_pre_uL", "Temp_K")
     has_exp_data <- FALSE
     if (!is.null(preferred_int)) {
@@ -1743,10 +1910,6 @@
           showNotification(tr("import_params_auto_filled", lang()), type = "message", duration = 3)
         }
       }
-
-      fp_map <- extract_fit_params_map(sheets[["fit_params"]])
-      fp_restore <- extract_simfit_restore_params(fp_map)
-      fp_has_any <- any(vapply(fp_restore, function(v) is.finite(suppressWarnings(as.numeric(v))), logical(1)))
       if (fp_has_any) {
         restore_paths <- parse_active_paths_from_fit_params(fp_map)
         update_active_paths_normalized(restore_paths)
@@ -2169,30 +2332,7 @@
   }
 
   normalize_step2_sleep_restore_fit_bounds <- function(bounds) {
-    if (!is.list(bounds)) return(list())
-    out <- list()
-    for (nm in FIT_BOUND_PARAM_IDS) {
-      pair <- bounds[[nm]]
-      if (is.null(pair)) next
-      lower <- NA_real_
-      upper <- NA_real_
-      if (is.list(pair)) {
-        lower <- suppressWarnings(as.numeric(pair$lower)[1])
-        upper <- suppressWarnings(as.numeric(pair$upper)[1])
-      } else {
-        pair_num <- suppressWarnings(as.numeric(pair))
-        if (length(pair_num) >= 1L) lower <- pair_num[1]
-        if (length(pair_num) >= 2L) upper <- pair_num[2]
-      }
-      if (!is.finite(lower) || !is.finite(upper)) next
-      if (lower > upper) {
-        tmp <- lower
-        lower <- upper
-        upper <- tmp
-      }
-      out[[nm]] <- list(lower = lower, upper = upper)
-    }
-    out
+    normalize_fit_bounds_for_runtime(bounds)
   }
 
   normalize_step2_sleep_restore_snapshot_table <- function(snapshot_table) {
@@ -2210,6 +2350,13 @@
     row_seq <- suppressWarnings(as.integer(snapshot_table$row_seq)[1])
     if (!is.finite(row_seq) || row_seq < 0L) row_seq <- 0L
     out$row_seq <- as.integer(row_seq)
+
+    fit_bounds_by_row_id <- normalize_snapshot_fit_bounds_by_row_id(
+      snapshot_table$fit_bounds_by_row_id,
+      rows_df = rows_df,
+      derive_missing = FALSE
+    )
+    if (length(fit_bounds_by_row_id) > 0L) out$fit_bounds_by_row_id <- fit_bounds_by_row_id
     out
   }
 
@@ -2574,9 +2721,13 @@
     pass_n <- suppressWarnings(as.integer(passes)[1])
     if (!is.finite(pass_n) || pass_n < 1L) return(invisible(FALSE))
     if (is.null(snapshot_norm) || !is.list(snapshot_norm)) return(invisible(FALSE))
+    resolved_fit_bounds <- resolve_complete_fit_bounds(
+      bounds = snapshot_norm$fit_bounds,
+      value_source = build_fit_bound_value_source_from_step2_params(snapshot_norm$params)
+    )
 
     session$onFlushed(function() {
-      tryCatch(apply_step2_sleep_restore_fit_bounds(snapshot_norm$fit_bounds), error = function(e) NULL)
+      tryCatch(apply_step2_sleep_restore_fit_bounds(resolved_fit_bounds), error = function(e) NULL)
       tryCatch(apply_step2_sleep_restore_params(snapshot_norm$params), error = function(e) NULL)
       if (pass_n > 1L) {
         replay_step2_sleep_restore_ui_state(snapshot_norm, passes = pass_n - 1L)
@@ -2586,19 +2737,9 @@
   }
 
   apply_step2_sleep_restore_fit_bounds <- function(bounds) {
-    bounds_norm <- normalize_step2_sleep_restore_fit_bounds(bounds)
+    bounds_norm <- resolve_complete_fit_bounds(bounds = bounds)
     if (length(bounds_norm) < 1L) return(invisible(FALSE))
-    for (nm in FIT_BOUND_PARAM_IDS) {
-      pair <- bounds_norm[[nm]]
-      if (!is.list(pair)) next
-      lower <- suppressWarnings(as.numeric(pair$lower)[1])
-      upper <- suppressWarnings(as.numeric(pair$upper)[1])
-      if (!is.finite(lower) || !is.finite(upper)) next
-      tryCatch(
-        update_fit_param_bound(param_name = nm, lower_in = lower, upper_in = upper, update_ui_inputs = TRUE),
-        error = function(e) NULL
-      )
-    }
+    tryCatch(apply_fit_bounds_state(bounds_norm, update_ui_inputs = TRUE), error = function(e) NULL)
     invisible(TRUE)
   }
 
@@ -2627,6 +2768,13 @@
     checked_ids <- normalize_step2_sleep_restore_chr_vec(st$checked_ids)
     checked_ids <- checked_ids[checked_ids %in% valid_ids]
     values$param_checked_ids <- checked_ids
+
+    fit_bounds_by_row_id <- normalize_snapshot_fit_bounds_by_row_id(
+      st$fit_bounds_by_row_id,
+      rows_df = rows_df,
+      derive_missing = TRUE
+    )
+    values$snapshot_fit_bounds_by_row_id <- fit_bounds_by_row_id
 
     active_row_id <- normalize_step2_sleep_restore_scalar_chr(st$active_row_id, default = "")
     if (!nzchar(active_row_id) || !active_row_id %in% valid_ids) active_row_id <- NA_character_
@@ -2679,6 +2827,10 @@
     snapshot_norm <- normalize_step2_sleep_restore_snapshot(snapshot)
     if (is.null(snapshot_norm)) return(FALSE)
     step2_sleep_restore_last_snapshot(snapshot_norm)
+    resolved_fit_bounds <- resolve_complete_fit_bounds(
+      bounds = snapshot_norm$fit_bounds,
+      value_source = build_fit_bound_value_source_from_step2_params(snapshot_norm$params)
+    )
 
     source_ok <- isTRUE(tryCatch(
       apply_step2_sleep_restore_source_context(snapshot_norm),
@@ -2696,7 +2848,7 @@
       return(FALSE)
     }
 
-    tryCatch(apply_step2_sleep_restore_fit_bounds(snapshot_norm$fit_bounds), error = function(e) NULL)
+    tryCatch(apply_step2_sleep_restore_fit_bounds(resolved_fit_bounds), error = function(e) NULL)
     tryCatch(apply_step2_sleep_restore_params(snapshot_norm$params), error = function(e) NULL)
     replay_step2_sleep_restore_ui_state(snapshot_norm, passes = 8L)
     tryCatch(apply_step2_sleep_restore_snapshot_table_state(snapshot_norm$snapshot_table), error = function(e) NULL)
@@ -2883,11 +3035,17 @@
     } else {
       checked_ids <- character(0)
     }
+    snapshot_fit_bounds_by_row_id <- normalize_snapshot_fit_bounds_by_row_id(
+      values$snapshot_fit_bounds_by_row_id,
+      rows_df = snapshot_rows,
+      derive_missing = TRUE
+    )
     snapshot_table <- normalize_step2_sleep_restore_snapshot_table(list(
       rows = snapshot_rows,
       checked_ids = checked_ids,
       active_row_id = values$param_active_row_id,
-      row_seq = values$snapshot_row_seq
+      row_seq = values$snapshot_row_seq,
+      fit_bounds_by_row_id = snapshot_fit_bounds_by_row_id
     ))
 
     corr_df <- NULL

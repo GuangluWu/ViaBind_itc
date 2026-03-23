@@ -207,6 +207,22 @@ home_sleep_restore_normalize_fit_bounds <- function(bounds) {
   out
 }
 
+home_sleep_restore_normalize_snapshot_fit_bounds_by_row_id <- function(bounds_by_row_id) {
+  if (!is.list(bounds_by_row_id)) return(list())
+  out <- list()
+  row_ids <- names(bounds_by_row_id)
+  if (is.null(row_ids)) row_ids <- character(0)
+
+  for (row_id in row_ids) {
+    row_key <- home_sleep_restore_scalar_chr(row_id, default = "")
+    if (!nzchar(row_key)) next
+    fit_bounds <- home_sleep_restore_normalize_fit_bounds(bounds_by_row_id[[row_id]])
+    if (length(fit_bounds) > 0L) out[[row_key]] <- fit_bounds
+  }
+
+  out
+}
+
 home_sleep_restore_normalize_step2_params <- function(params) {
   if (!is.list(params)) return(list())
   out <- home_sleep_restore_normalize_vector_map(params)
@@ -253,11 +269,13 @@ home_sleep_restore_normalize_step2_snapshot_table <- function(snapshot_table) {
   active_row_id <- home_sleep_restore_scalar_chr(snapshot_table$active_row_id, default = "")
   row_seq <- suppressWarnings(as.integer(snapshot_table$row_seq)[1])
   if (!is.finite(row_seq) || row_seq < 0L) row_seq <- 0L
+  fit_bounds_by_row_id <- home_sleep_restore_normalize_snapshot_fit_bounds_by_row_id(snapshot_table$fit_bounds_by_row_id)
 
   out <- list()
   if (is.data.frame(rows) && nrow(rows) > 0L) out$rows <- rows
   if (length(checked_ids) > 0L) out$checked_ids <- checked_ids
   if (nzchar(active_row_id)) out$active_row_id <- active_row_id
+  if (length(fit_bounds_by_row_id) > 0L) out$fit_bounds_by_row_id <- fit_bounds_by_row_id
   out$row_seq <- as.integer(row_seq)
   out
 }

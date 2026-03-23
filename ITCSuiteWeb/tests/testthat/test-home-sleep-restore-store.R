@@ -78,7 +78,11 @@ testthat::test_that("sleep restore store save/load round trip works", {
             rows = data.frame(Name = c("snapA", "snapB"), RSS = c("1e-4", "2e-4"), stringsAsFactors = FALSE),
             checked_ids = c("snap_1", "snap_2"),
             active_row_id = "snap_2",
-            row_seq = 12
+            row_seq = 12,
+            fit_bounds_by_row_id = list(
+              snap_1 = list(logK1 = c(lower = 0.5, upper = 12)),
+              snap_2 = list(H1 = list(lower = -20000, upper = -5000))
+            )
           ),
           diagnostics = list(
             error_analysis = data.frame(Parameter = c("logK1", "H1"), SE = c(0.2, 100), stringsAsFactors = FALSE),
@@ -108,6 +112,8 @@ testthat::test_that("sleep restore store save/load round trip works", {
     loaded <- home_sleep_restore_store_load(warn_fn = function(...) NULL)
     testthat::expect_equal(loaded$schema_version, home_sleep_restore_store_schema())
     testthat::expect_true(isTRUE(loaded$pending_restore))
+    testthat::expect_equal(loaded$steps$step2$snapshot_table$fit_bounds_by_row_id$snap_1$logK1$lower, 0.5)
+    testthat::expect_equal(loaded$steps$step2$snapshot_table$fit_bounds_by_row_id$snap_2$H1$upper, -5000)
     testthat::expect_equal(loaded$lang, "zh")
     testthat::expect_equal(loaded$active_tab, "step3")
     testthat::expect_equal(loaded$steps$step1$display_name, "a.itc")
