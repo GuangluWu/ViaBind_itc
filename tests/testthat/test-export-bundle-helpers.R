@@ -35,10 +35,43 @@ testthat::test_that("build_fit_params_df keeps inactive path parameters as NA", 
   testthat::expect_true(all(c("parameter", "value") %in% names(df)))
   testthat::expect_equal(df$value[df$parameter == "logK3"], NA_character_)
   testthat::expect_equal(df$value[df$parameter == "logK2"], "4")
+  testthat::expect_equal(df$value[df$parameter == "logK7"], NA_character_)
   testthat::expect_equal(df$value[df$parameter == "RSS_method"], "unweighted")
   testthat::expect_equal(df$value[df$parameter == "n_inj"], "20")
   testthat::expect_equal(df$value[df$parameter == "FitRangeStart_Inj"], "2")
   testthat::expect_equal(df$value[df$parameter == "FitRangeEnd_Inj"], "18")
+})
+
+testthat::test_that("build_fit_params_df normalizes dependency-backed active paths", {
+  safe_inp <- make_safe_input(list(
+    logK1 = 6,
+    H1 = -5000,
+    logK3 = 5,
+    H3 = -2500,
+    logK7 = 4,
+    H7 = -1200,
+    factor_H = 1,
+    factor_G = 1,
+    V_init_val = 0,
+    heat_offset = 0,
+    H_cell_0 = 30,
+    G_syringe = 600,
+    V_cell = 0.2,
+    V_inj = 1.5,
+    n_inj = 20,
+    fit_data_range = c(2, 18),
+    V_pre = 0.4,
+    Temp = 298.15
+  ))
+  df <- export_bridge_build_fit_params_df(
+    safe_inp = safe_inp,
+    active_paths_save = c("rxn_E"),
+    rss_info = list(rss = 10, method = "unweighted")
+  )
+
+  testthat::expect_equal(df$value[df$parameter == "logK3"], "5")
+  testthat::expect_equal(df$value[df$parameter == "logK7"], "4")
+  testthat::expect_equal(df$value[df$parameter == "ActivePaths"], "rxn_T,rxn_E")
 })
 
 testthat::test_that("build_integration_rev exports required columns", {

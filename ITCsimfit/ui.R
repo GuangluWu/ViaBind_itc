@@ -76,6 +76,7 @@ ui <- fluidPage(
         --path-c-base: #3498db;
         --path-c-rxn-d: #e67e22;
         --path-c-rxn-t: #9b59b6;
+        --path-c-rxn-e: #27ae60;
         --path-c-rxn-b: #f1c40f;
         --path-c-rxn-f: #1abc9c;
         --path-c-rxn-u: #e74c3c;
@@ -452,6 +453,11 @@ ui <- fluidPage(
         stroke: var(--path-c-rxn-t);
       }
 
+      .simfit-root .path-node.path-rxn-e.is-active rect {
+        fill: #eef9f1;
+        stroke: var(--path-c-rxn-e);
+      }
+
       .simfit-root .path-node.path-rxn-b.is-active rect {
         fill: #fff8da;
         stroke: var(--path-c-rxn-b-ink);
@@ -490,6 +496,7 @@ ui <- fluidPage(
       .simfit-root .path-edge-line.path-base.is-active { stroke: var(--path-c-base); }
       .simfit-root .path-edge-line.path-rxn-d.is-active { stroke: var(--path-c-rxn-d); }
       .simfit-root .path-edge-line.path-rxn-t.is-active { stroke: var(--path-c-rxn-t); }
+      .simfit-root .path-edge-line.path-rxn-e.is-active { stroke: var(--path-c-rxn-e); }
       .simfit-root .path-edge-line.path-rxn-b.is-active { stroke: var(--path-c-rxn-b-ink); }
       .simfit-root .path-edge-line.path-rxn-f.is-active { stroke: var(--path-c-rxn-f); }
       .simfit-root .path-edge-line.path-rxn-u.is-active { stroke: var(--path-c-rxn-u); }
@@ -507,6 +514,7 @@ ui <- fluidPage(
       .simfit-root .path-edge-label.path-base.is-active { fill: var(--path-c-base); }
       .simfit-root .path-edge-label.path-rxn-d.is-active { fill: var(--path-c-rxn-d); }
       .simfit-root .path-edge-label.path-rxn-t.is-active { fill: var(--path-c-rxn-t); }
+      .simfit-root .path-edge-label.path-rxn-e.is-active { fill: var(--path-c-rxn-e); }
       .simfit-root .path-edge-label.path-rxn-b.is-active { fill: var(--path-c-rxn-b-ink); }
       .simfit-root .path-edge-label.path-rxn-f.is-active { fill: var(--path-c-rxn-f); }
       .simfit-root .path-edge-label.path-rxn-u.is-active { fill: var(--path-c-rxn-u); }
@@ -534,6 +542,7 @@ ui <- fluidPage(
 
       .simfit-root .path-edge-toggle.path-rxn-d.is-active rect { stroke: var(--path-c-rxn-d); }
       .simfit-root .path-edge-toggle.path-rxn-t.is-active rect { stroke: var(--path-c-rxn-t); }
+      .simfit-root .path-edge-toggle.path-rxn-e.is-active rect { stroke: var(--path-c-rxn-e); }
       .simfit-root .path-edge-toggle.path-rxn-b.is-active rect { stroke: var(--path-c-rxn-b-ink); }
       .simfit-root .path-edge-toggle.path-rxn-f.is-active rect { stroke: var(--path-c-rxn-f); }
       .simfit-root .path-edge-toggle.path-rxn-u.is-active rect { stroke: var(--path-c-rxn-u); }
@@ -551,6 +560,7 @@ ui <- fluidPage(
 
       .simfit-root .path-edge-toggle.path-rxn-d.is-active .path-check-mark { stroke: var(--path-c-rxn-d); }
       .simfit-root .path-edge-toggle.path-rxn-t.is-active .path-check-mark { stroke: var(--path-c-rxn-t); }
+      .simfit-root .path-edge-toggle.path-rxn-e.is-active .path-check-mark { stroke: var(--path-c-rxn-e); }
       .simfit-root .path-edge-toggle.path-rxn-b.is-active .path-check-mark { stroke: var(--path-c-rxn-b-ink); }
       .simfit-root .path-edge-toggle.path-rxn-f.is-active .path-check-mark { stroke: var(--path-c-rxn-f); }
       .simfit-root .path-edge-toggle.path-rxn-u.is-active .path-check-mark { stroke: var(--path-c-rxn-u); }
@@ -839,6 +849,22 @@ ui <- fluidPage(
                                                 min = PARAM_BOUNDS$H["lower"], 
                                                 max = PARAM_BOUNDS$H["upper"], 
                                                 value = DEFAULT_PARAMS$H, 
+                                                step = 100, ticks = FALSE))
+                ),
+
+                # --- Trihost (E) ---
+                conditionalPanel("(input.active_paths || []).includes('rxn_E')",
+                                 div(class="param-group", style="border-left-color: var(--path-c-rxn-e);",
+                                     strong(uiOutput("param_trihost_title", inline = TRUE)),
+                                     sliderInput("logK7", "logK7",
+                                                min = PARAM_BOUNDS$logK["lower"],
+                                                max = PARAM_BOUNDS$logK["upper"],
+                                                value = DEFAULT_PARAMS$logK,
+                                                step = 0.001, ticks = FALSE),
+                                     sliderInput("H7", "dH7",
+                                                min = PARAM_BOUNDS$H["lower"],
+                                                max = PARAM_BOUNDS$H["upper"],
+                                                value = DEFAULT_PARAMS$H,
                                                 step = 100, ticks = FALSE))
                 ),
                  

@@ -277,6 +277,31 @@ test_that("rxn_M + rxn_T 模型正确求解", {
                message = "rxn_T 模型 H 质量守恒失败")
 })
 
+test_that("rxn_M + rxn_T + rxn_E 模型正确求解", {
+  p <- list(K1 = 1e6, H1 = -5000, K2 = 1e3, H2 = -2000,
+            K3 = 1e5, H3 = -3000, K4 = 1e2, H4 = -1000,
+            K5 = 1e2, H5 = -1000, K7 = 1e4, H7 = -1200)
+  G_tot <- 1e-4
+  H_tot <- 3e-5
+
+  result <- solve_equi_modular(G_tot, H_tot, p, c("rxn_M", "rxn_T", "rxn_E"), c(1e-10, H_tot))
+
+  G_free <- result[1]
+  H_free <- result[2]
+
+  M <- p$K1 * G_free * H_free
+  T_val <- p$K3 * M^2
+  E_val <- p$K7 * T_val * H_free
+
+  G_check <- G_free + M + 2*T_val + 2*E_val
+  H_check <- H_free + M + 2*T_val + 3*E_val
+
+  expect_equal(G_check, G_tot, tolerance = 1e-6,
+               message = "rxn_E 模型 G 质量守恒失败")
+  expect_equal(H_check, H_tot, tolerance = 1e-6,
+               message = "rxn_E 模型 H 质量守恒失败")
+})
+
 test_that("完整五路径模型求解", {
   p <- list(K1 = 1e6, H1 = -5000, K2 = 1e4, H2 = -2000, 
             K3 = 1e3, H3 = -1500, K4 = 1e3, H4 = -1800, K5 = 1e4, H5 = -2500)

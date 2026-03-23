@@ -107,6 +107,7 @@
         "base" = "path-base",
         "rxn_D" = "path-rxn-d",
         "rxn_T" = "path-rxn-t",
+        "rxn_E" = "path-rxn-e",
         "rxn_B" = "path-rxn-b",
         "rxn_F" = "path-rxn-f",
         "rxn_U" = "path-rxn-u",
@@ -156,7 +157,7 @@
       path_cls <- path_class(path_id)
       state_cls <- state_class(active)
       path_id_chr <- as.character(path_id)[1]
-      toggleable_node <- path_id_chr %in% c("rxn_D", "rxn_T", "rxn_B", "rxn_F", "rxn_U")
+      toggleable_node <- path_id_chr %in% c("rxn_D", "rxn_T", "rxn_E", "rxn_B", "rxn_F", "rxn_U")
       fit_text <- nchar(label, type = "width") >= 8
       text_attrs <- list(
         x = cx,
@@ -214,6 +215,7 @@
         # Keep checkbox on the vertical branch segment (same relative position as D -> F).
         edge_toggle_g("rxn_D", "280,156 280,188 70,188 70,258", 70, 224, "+G"),
         edge_toggle_g("rxn_T", "280,156 280,188 210,188 210,258", 210, 224, "+M"),
+        edge_toggle_g("rxn_E", "210,310 210,378", 210, 344, "+H"),
         edge_toggle_g("rxn_B", "280,156 280,188 350,188 350,258", 350, 224, "+H"),
         edge_toggle_g("rxn_U", "280,156 280,188 490,188 490,258", 490, 224, "Bend"),
         edge_toggle_g("rxn_F", "70,310 70,378", 70, 344, "+M"),
@@ -223,6 +225,7 @@
         node_g("M: H\u2081G\u2081", 280, 128, path_id = "base", active = TRUE, width = 150, height = 56),
         node_g("D: H\u2081G\u2082", 70, 284, path_id = "rxn_D", active = is_active("rxn_D"), width = 132, height = 52),
         node_g("T: H\u2082G\u2082", 210, 284, path_id = "rxn_T", active = is_active("rxn_T"), width = 132, height = 52),
+        node_g("E: H\u2083G\u2082", 210, 404, path_id = "rxn_E", active = is_active("rxn_E"), width = 132, height = 52),
         node_g("B: H\u2082G\u2081", 350, 284, path_id = "rxn_B", active = is_active("rxn_B"), width = 132, height = 52),
         node_g("U: H\u2081G\u2081", 490, 284, path_id = "rxn_U", active = is_active("rxn_U"), width = 132, height = 52),
         node_g("F: H\u2082G\u2083", 70, 404, path_id = "rxn_F", active = is_active("rxn_F"), width = 132, height = 52)
@@ -245,11 +248,12 @@
                       choiceNames = list(
                         HTML(paste0("<div class='model-row'><span class='col-mod'>M+G=D</span><span class='col-par'>K2 H2</span><span class='col-sto'>H\u2081G\u2082</span><span class='col-dsc'>", tr("model_stepwise", lang()), "</span></div>")),
                         HTML(paste0("<div class='model-row'><span class='col-mod'>M+M=T</span><span class='col-par'>K3 H3</span><span class='col-sto'>H\u2082G\u2082</span><span class='col-dsc'>", tr("model_dimer", lang()), "</span></div>")),
+                        HTML(paste0("<div class='model-row'><span class='col-mod'>T+H=E</span><span class='col-par'>K7 H7</span><span class='col-sto'>H\u2083G\u2082</span><span class='col-dsc'>", tr("model_trihost", lang()), "</span></div>")),
                         HTML(paste0("<div class='model-row'><span class='col-mod'>M+H=B</span><span class='col-par'>K4 H4</span><span class='col-sto'>H\u2082G\u2081</span><span class='col-dsc'>", tr("model_reverse", lang()), "</span></div>")),
                         HTML(paste0("<div class='model-row'><span class='col-mod'>M+D=F</span><span class='col-par'>K5 H5</span><span class='col-sto'>H\u2082G\u2083</span><span class='col-dsc'>", tr("model_oligomer", lang()), "</span></div>")),
                         HTML(paste0("<div class='model-row'><span class='col-mod'>M=U</span><span class='col-par'>K6 H6</span><span class='col-sto'>H\u2081G\u2081</span><span class='col-dsc'>", tr("model_bending", lang()), "</span></div>"))
                       ),
-                      choiceValues = c("rxn_D", "rxn_T", "rxn_B", "rxn_F", "rxn_U"),
+                      choiceValues = c("rxn_D", "rxn_T", "rxn_E", "rxn_B", "rxn_F", "rxn_U"),
                       selected = current_selection)
   })
   
@@ -349,6 +353,7 @@
   output$param_base_title     <- renderUI({ tr("param_base",     lang()) })
   output$param_stepwise_title <- renderUI({ tr("param_stepwise", lang()) })
   output$param_dimer_title    <- renderUI({ tr("param_dimer",    lang()) })
+  output$param_trihost_title  <- renderUI({ tr("param_trihost",  lang()) })
   output$param_reverse_title  <- renderUI({ tr("param_reverse",  lang()) })
   output$param_oligomer_title  <- renderUI({ tr("param_oligomer", lang()) })
   output$param_bending_title   <- renderUI({ tr("param_bending",  lang()) })
@@ -607,6 +612,13 @@
       "M + M <=> T (Dimer)",
       get_se_raw("logK3"),
       get_se_raw("H3")
+    ))
+    if ("rxn_E" %in% active) path_info <- paste0(path_info, calc_thermo(
+      safe_num("logK7", DEFAULT_PARAMS$logK),
+      safe_num("H7", DEFAULT_PARAMS$H),
+      "T + H <=> E (H3G2)",
+      get_se_raw("logK7"),
+      get_se_raw("H7")
     ))
     if ("rxn_B" %in% active) path_info <- paste0(path_info, calc_thermo(
       safe_num("logK4", DEFAULT_PARAMS$logK),

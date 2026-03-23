@@ -113,15 +113,20 @@ Step2 分层依赖方向（必须遵守）：
 
 - 路径 UI 与选项值：`ITCsimfit/R/server/body/ui_i18n/02_ui_outputs_report.R`
 - 条件参数控件显示：`ITCsimfit/ui.R`
+- 路径依赖归一与图切换：`ITCsimfit/R/path_selection_helpers.R`
+- 运行时路径归一 / 拟合参数联动 / restore：`ITCsimfit/R/server/body/runtime_core/01_bridge_state_inputs.R`
 - 求解与模拟方程：`ITCsimfit/R/core_logic.R`
 - 参数映射与模拟包装：`ITCsimfit/R/fitting.R`
 - 快照/导出中的 ActivePaths：`ITCsimfit/R/export_bundle_helpers.R`
 - 从导入参数恢复路径：`ITCsimfit/R/bridge_step1_import.R`
+- 快照导入导出与睡眠恢复：`ITCsimfit/R/server/body/snapshot_export/01_snapshot_management.R`
 
 建议流程：
 
 1. 先改 UI 选项与显示逻辑
-2. 再改核心方程与数值路径
+2. 同步改路径依赖与 restore/fit 参数联动
+3. 再改核心方程与数值路径
+4. 最后补 ActivePaths 导入导出与快照恢复
 3. 再补导入/导出/快照链路
 4. 最后补测试（见第 8 节）
 

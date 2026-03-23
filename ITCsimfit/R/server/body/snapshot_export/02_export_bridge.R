@@ -74,7 +74,7 @@
         "V_cell" = "V_cell_mL", "V_inj" = "V_inj_uL", "V_pre" = "V_pre_uL",
         "Temp" = "Temp_K",
         "H1" = "H1_cal_mol", "H2" = "H2_cal_mol", "H3" = "H3_cal_mol",
-        "H4" = "H4_cal_mol", "H5" = "H5_cal_mol", "H6" = "H6_cal_mol",
+        "H4" = "H4_cal_mol", "H5" = "H5_cal_mol", "H6" = "H6_cal_mol", "H7" = "H7_cal_mol",
         "V_init" = "V_init_uL", "Offset" = "Offset_cal"
       )
       for (old_name in names(col_rename)) {

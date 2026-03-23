@@ -137,7 +137,20 @@ solve_equi_modular <- function(G_tot, H_tot, p, active_paths, last_guess) {
   # --- 情况 B: 复杂模型，使用数值求解 ---
   
   # 准备常数 - 使用常量定义的极小值阈值
-  Ks <- c(p$K1, p$K2, p$K3, p$K4, p$K5, p$K6)
+  safe_solver_k <- function(val) {
+    val_num <- suppressWarnings(as.numeric(val)[1])
+    if (!is.finite(val_num)) return(EPSILON)
+    val_num
+  }
+  Ks <- c(
+    safe_solver_k(p$K1),
+    safe_solver_k(p$K2),
+    safe_solver_k(p$K3),
+    safe_solver_k(p$K4),
+    safe_solver_k(p$K5),
+    safe_solver_k(p$K6),
+    safe_solver_k(p$K7)
+  )
   Ks <- pmax(Ks, EPSILON) # 防止有某个K变成0或者负数，无法计算lnK
   lnKs <- safe_log(Ks, EPSILON_LOG)
   
@@ -169,10 +182,15 @@ solve_equi_modular <- function(G_tot, H_tot, p, active_paths, last_guess) {
       # [M] = K1 * [H] * [G]  => ln[M] = lnK1 + lnH + lnG
       lnM <- lnKs[1] + lnH + lnG; M <- exp(lnM)
       
-      D <- 0; T_val <- 0; B <- 0; F_val <- 0; U <- 0
+      D <- 0; T_val <- 0; E_val <- 0; B <- 0; F_val <- 0; U <- 0
+      lnT <- NA_real_
       # 根据激活的路径计算其他物种
       if("rxn_D" %in% active_paths) { lnD <- lnKs[2] + lnM + lnG; D <- exp(lnD) }
       if("rxn_T" %in% active_paths) { lnT <- lnKs[3] + 2 * lnM; T_val <- exp(lnT) }
+      if("rxn_E" %in% active_paths && "rxn_T" %in% active_paths) {
+        lnE <- lnKs[7] + lnT + lnH
+        E_val <- exp(lnE)
+      }
       if("rxn_B" %in% active_paths) { lnB <- lnKs[4] + lnM + lnH; B <- exp(lnB) }
       if("rxn_F" %in% active_paths && "rxn_D" %in% active_paths) { 
         lnF <- lnKs[5] + lnM + lnD; F_val <- exp(lnF) 
@@ -182,8 +200,8 @@ solve_equi_modular <- function(G_tot, H_tot, p, active_paths, last_guess) {
       # 质量守恒方程 (残差函数)
       # 目标是使 diff_G 和 diff_H 趋近于 0
       # G_tot = [G] + [M] + [U] + 2[D] + 2[T] + [B] + 3[F] ... (系数取决于分子式中G的数量)
-      diff_G <- (G + M + U + 2*D + 2*T_val + B + 3*F_val) - G_tot
-      diff_H <- (H + M + U + D + 2*T_val + 2*B + 2*F_val) - H_tot
+      diff_G <- (G + M + U + 2*D + 2*T_val + 2*E_val + B + 3*F_val) - G_tot
+      diff_H <- (H + M + U + D + 2*T_val + 3*E_val + 2*B + 2*F_val) - H_tot
       c(f1 = diff_G, f2 = diff_H)
     }
     
@@ -198,7 +216,7 @@ solve_equi_modular <- function(G_tot, H_tot, p, active_paths, last_guess) {
   # 策略 B: 线性缩放求解 (备用)  
   # scale: 缩放因子，用于将浓度转换到较大的数值空间，防止数值计算中的下溢问题。
   try_scaled_solve <- function() {
-    if("rxn_F" %in% active_paths) return(NULL) # F 路径禁用线性
+    if("rxn_F" %in% active_paths || "rxn_E" %in% active_paths) return(NULL) # F/E 路径禁用线性
     
     scale <- 1e6
     G_s <- G_tot * scale; H_s <- H_tot * scale # 缩放总浓度 把小变大
@@ -346,7 +364,8 @@ run_sim_modular <- function(p, active_paths) {
     K3 = safe_K(p$logK3), lnK3 = safe_logK_val(p$logK3) * LN10, H3 = safe_H(p$H3),
     K4 = safe_K(p$logK4), lnK4 = safe_logK_val(p$logK4) * LN10, H4 = safe_H(p$H4),
     K5 = safe_K(p$logK5), lnK5 = safe_logK_val(p$logK5) * LN10, H5 = safe_H(p$H5),
-    K6 = safe_K(p$logK6), lnK6 = safe_logK_val(p$logK6) * LN10, H6 = safe_H(p$H6)
+    K6 = safe_K(p$logK6), lnK6 = safe_logK_val(p$logK6) * LN10, H6 = safe_H(p$H6),
+    K7 = safe_K(p$logK7), lnK7 = safe_logK_val(p$logK7) * LN10, H7 = safe_H(p$H7)
   )
   
   # ============================================================================
@@ -419,6 +438,7 @@ run_sim_modular <- function(p, active_paths) {
   M_vec <- numeric(n_inj)        # 复合物 M 浓度
   D_vec <- numeric(n_inj)        # 复合物 D 浓度
   T_vec <- numeric(n_inj)        # 复合物 T 浓度
+  E_vec <- numeric(n_inj)        # 复合物 E 浓度
   B_vec <- numeric(n_inj)        # 复合物 B 浓度
   F_vec <- numeric(n_inj)        # 复合物 F 浓度
   U_vec <- numeric(n_inj)        # 复合物 U 浓度 (弯折构象)
@@ -519,6 +539,9 @@ run_sim_modular <- function(p, active_paths) {
       
       if("rxn_D" %in% active_paths) D_vec[i] <- lin_p$K2 * M_vec[i] * G_free_vec[i]
       if("rxn_T" %in% active_paths) T_vec[i] <- lin_p$K3 * M_vec[i]^2
+      if("rxn_E" %in% active_paths && "rxn_T" %in% active_paths) {
+        E_vec[i] <- lin_p$K7 * T_vec[i] * H_free_vec[i]
+      }
       if("rxn_B" %in% active_paths) B_vec[i] <- lin_p$K4 * M_vec[i] * H_free_vec[i]
       if("rxn_F" %in% active_paths && "rxn_D" %in% active_paths) {
         F_vec[i] <- lin_p$K5 * M_vec[i] * D_vec[i]
@@ -547,6 +570,9 @@ run_sim_modular <- function(p, active_paths) {
       }
       if("rxn_T" %in% active_paths && T_vec[i] > 0) {
         Q_sum <- Q_sum + T_vec[i] * (2*lin_p$H1 + lin_p$H3)
+      }
+      if("rxn_E" %in% active_paths && "rxn_T" %in% active_paths && E_vec[i] > 0) {
+        Q_sum <- Q_sum + E_vec[i] * (2*lin_p$H1 + lin_p$H3 + lin_p$H7)
       }
       if("rxn_B" %in% active_paths && B_vec[i] > 0) {
         Q_sum <- Q_sum + B_vec[i] * (lin_p$H1 + lin_p$H4)
@@ -595,6 +621,7 @@ run_sim_modular <- function(p, active_paths) {
   M_pct_vec <- M_vec / H_t_real_vec
   D_pct_vec <- D_vec / H_t_real_vec
   T_pct_vec <- (2 * T_vec) / H_t_real_vec  # T 是 2M，所以乘以 2
+  E_pct_vec <- (3 * E_vec) / H_t_real_vec  # E 是 H3G2，按 H 分数计乘以 3
   B_pct_vec <- (2 * B_vec) / H_t_real_vec  # B 是 M+H，但这里按 H 计算
   F_pct_vec <- (2 * F_vec) / H_t_real_vec  # F 是 M+D，但这里按 H 计算
   U_pct_vec <- U_vec / H_t_real_vec        # U 是 M 的弯折构象，H1G1
@@ -613,6 +640,7 @@ run_sim_modular <- function(p, active_paths) {
     M_pct = M_pct_vec,
     D_pct = D_pct_vec,
     T_pct = T_pct_vec,
+    E_pct = E_pct_vec,
     B_pct = B_pct_vec,
     F_pct = F_pct_vec,
     U_pct = U_pct_vec,

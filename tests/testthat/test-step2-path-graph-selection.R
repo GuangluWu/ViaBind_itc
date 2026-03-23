@@ -1,7 +1,12 @@
 repo_root <- itcsuite_repo_root()
 source(file.path(repo_root, "ITCsimfit", "R", "path_selection_helpers.R"))
 
-testthat::test_that("normalize_active_paths_with_dependencies enforces F->D and valid ordering", {
+testthat::test_that("normalize_active_paths_with_dependencies enforces E->T, F->D and valid ordering", {
+  testthat::expect_equal(
+    normalize_active_paths_with_dependencies(c("rxn_E")),
+    c("rxn_T", "rxn_E")
+  )
+
   testthat::expect_equal(
     normalize_active_paths_with_dependencies(c("rxn_F")),
     c("rxn_D", "rxn_F")
@@ -20,6 +25,11 @@ testthat::test_that("normalize_active_paths_with_dependencies enforces F->D and 
 
 testthat::test_that("apply_path_graph_toggle_with_dependencies handles add/remove with dependency", {
   testthat::expect_equal(
+    apply_path_graph_toggle_with_dependencies(c("rxn_T"), "rxn_E"),
+    c("rxn_T", "rxn_E")
+  )
+
+  testthat::expect_equal(
     apply_path_graph_toggle_with_dependencies(c("rxn_D"), "rxn_F"),
     c("rxn_D", "rxn_F")
   )
@@ -31,6 +41,11 @@ testthat::test_that("apply_path_graph_toggle_with_dependencies handles add/remov
 
   testthat::expect_equal(
     apply_path_graph_toggle_with_dependencies(c("rxn_D", "rxn_F"), "rxn_F"),
+    c("rxn_D")
+  )
+
+  testthat::expect_equal(
+    apply_path_graph_toggle_with_dependencies(c("rxn_T", "rxn_E", "rxn_D"), "rxn_T"),
     c("rxn_D")
   )
 
@@ -47,6 +62,10 @@ testthat::test_that("same_active_paths_selection compares normalized sets", {
 
   testthat::expect_true(
     same_active_paths_selection(c("rxn_F"), c("rxn_D", "rxn_F"))
+  )
+
+  testthat::expect_true(
+    same_active_paths_selection(c("rxn_E"), c("rxn_T", "rxn_E"))
   )
 
   testthat::expect_false(
@@ -104,10 +123,13 @@ testthat::test_that("path_graph_toggle payload can drive path state updates", {
     session$setInputs(active_paths = c("rxn_T"))
     testthat::expect_equal(selected_paths(), c("rxn_T"))
 
-    session$setInputs(path_graph_toggle = list(path_id = "rxn_F", nonce = 1))
-    testthat::expect_equal(selected_paths(), c("rxn_D", "rxn_T", "rxn_F"))
+    session$setInputs(path_graph_toggle = list(path_id = "rxn_E", nonce = 1))
+    testthat::expect_equal(selected_paths(), c("rxn_T", "rxn_E"))
 
-    session$setInputs(path_graph_toggle = list(path_id = "rxn_D", nonce = 2))
-    testthat::expect_equal(selected_paths(), c("rxn_T"))
+    session$setInputs(path_graph_toggle = list(path_id = "rxn_F", nonce = 2))
+    testthat::expect_equal(selected_paths(), c("rxn_D", "rxn_T", "rxn_E", "rxn_F"))
+
+    session$setInputs(path_graph_toggle = list(path_id = "rxn_T", nonce = 3))
+    testthat::expect_equal(selected_paths(), c("rxn_D", "rxn_F"))
   })
 })

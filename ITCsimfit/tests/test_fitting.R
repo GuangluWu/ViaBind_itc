@@ -549,6 +549,34 @@ test_that("复杂模型完整计算", {
   expect_true(any(result$T_pct > 0), message = "应有 T 物种")
 })
 
+test_that("E 路径计算会输出 H3G2 分布并自动联动 T", {
+  p <- list(
+    V_cell = 0.2033,
+    V_inj = 0.0015,
+    n_inj = 26,
+    H_cell_0 = 30,
+    G_syringe = 600,
+    logK1 = 6,
+    H1 = -5000,
+    logK3 = 5,
+    H3 = -1500,
+    logK7 = 4,
+    H7 = -1200,
+    fH = 1.0,
+    fG = 1.0,
+    Offset = 0,
+    V_init = 0,
+    V_pre = 0
+  )
+
+  result <- calculate_simulation(p, c("rxn_E"))
+
+  expect_not_null(result, message = "rxn_E 模型应返回结果")
+  expect_true("E_pct" %in% names(result), message = "应输出 E_pct 列")
+  expect_true(any(result$T_pct > 0), message = "rxn_E 应自动联动 T 物种")
+  expect_true(any(result$E_pct > 0), message = "应有 E(H3G2) 物种")
+})
+
 test_that("第一针体积变化影响模拟结果", {
   p <- list(
     V_cell = 0.2033,

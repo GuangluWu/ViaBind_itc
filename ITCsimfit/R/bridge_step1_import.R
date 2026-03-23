@@ -84,8 +84,21 @@ parse_active_paths_from_fit_params <- function(fp_map) {
   tokens <- trimws(unlist(strsplit(raw_chr, ",", fixed = TRUE), use.names = FALSE))
   tokens <- tokens[nzchar(tokens)]
   tokens <- unique(tokens)
-  valid_paths <- c("rxn_D", "rxn_T", "rxn_B", "rxn_F", "rxn_U")
-  intersect(tokens, valid_paths)
+  valid_paths <- c("rxn_D", "rxn_T", "rxn_E", "rxn_B", "rxn_F", "rxn_U")
+  tokens <- intersect(tokens, valid_paths)
+
+  if (exists("normalize_active_paths_with_dependencies", mode = "function", inherits = TRUE)) {
+    return(normalize_active_paths_with_dependencies(tokens, valid_paths = valid_paths))
+  }
+
+  normalized <- valid_paths[valid_paths %in% tokens]
+  if ("rxn_E" %in% normalized && !"rxn_T" %in% normalized) {
+    normalized <- valid_paths[valid_paths %in% c(normalized, "rxn_T")]
+  }
+  if ("rxn_F" %in% normalized && !"rxn_D" %in% normalized) {
+    normalized <- valid_paths[valid_paths %in% c(normalized, "rxn_D")]
+  }
+  normalized
 }
 
 extract_simfit_restore_params <- function(fp_map) {
@@ -102,6 +115,8 @@ extract_simfit_restore_params <- function(fp_map) {
     H5 = get_fit_param_num(fp_map, "H5_cal_mol"),
     logK6 = get_fit_param_num(fp_map, "logK6"),
     H6 = get_fit_param_num(fp_map, "H6_cal_mol"),
+    logK7 = get_fit_param_num(fp_map, "logK7"),
+    H7 = get_fit_param_num(fp_map, "H7_cal_mol"),
     fH = get_fit_param_num(fp_map, "fH"),
     fG = get_fit_param_num(fp_map, "fG"),
     V_init_uL = get_fit_param_num(fp_map, "V_init_uL"),

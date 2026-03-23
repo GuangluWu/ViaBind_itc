@@ -102,6 +102,22 @@ export_bridge_build_params_export_sheets <- function(export_df,
 }
 
 export_bridge_build_fit_params_df <- function(safe_inp, active_paths_save, rss_info) {
+  active_paths_norm <- if (exists("normalize_active_paths_with_dependencies", mode = "function", inherits = TRUE)) {
+    tryCatch(normalize_active_paths_with_dependencies(active_paths_save), error = function(e) active_paths_save)
+  } else {
+    paths_raw <- if (is.null(active_paths_save)) character(0) else active_paths_save
+    paths_raw <- unique(trimws(as.character(paths_raw)))
+    paths_raw <- paths_raw[nzchar(paths_raw)]
+    valid_paths <- c("rxn_D", "rxn_T", "rxn_E", "rxn_B", "rxn_F", "rxn_U")
+    paths_norm <- valid_paths[valid_paths %in% paths_raw]
+    if ("rxn_E" %in% paths_norm && !"rxn_T" %in% paths_norm) {
+      paths_norm <- valid_paths[valid_paths %in% c(paths_norm, "rxn_T")]
+    }
+    if ("rxn_F" %in% paths_norm && !"rxn_D" %in% paths_norm) {
+      paths_norm <- valid_paths[valid_paths %in% c(paths_norm, "rxn_D")]
+    }
+    paths_norm
+  }
   fit_range_raw <- safe_inp("fit_data_range")
   fit_range_num <- suppressWarnings(as.numeric(fit_range_raw))
   fit_range_start <- if (length(fit_range_num) >= 1 && is.finite(fit_range_num[1])) {
@@ -123,6 +139,7 @@ export_bridge_build_fit_params_df <- function(safe_inp, active_paths_save, rss_i
       "logK4", "H4_cal_mol",
       "logK5", "H5_cal_mol",
       "logK6", "H6_cal_mol",
+      "logK7", "H7_cal_mol",
       "fH", "fG", "V_init_uL", "Offset_cal",
       "RSS", "RSS_method",
       "H_cell_0_mM", "G_syringe_mM", "V_cell_mL", "V_inj_uL",
@@ -131,16 +148,18 @@ export_bridge_build_fit_params_df <- function(safe_inp, active_paths_save, rss_i
     ),
     value = as.character(c(
       safe_inp("logK1"), safe_inp("H1"),
-      if ("rxn_D" %in% active_paths_save) safe_inp("logK2") else NA,
-      if ("rxn_D" %in% active_paths_save) safe_inp("H2") else NA,
-      if ("rxn_T" %in% active_paths_save) safe_inp("logK3") else NA,
-      if ("rxn_T" %in% active_paths_save) safe_inp("H3") else NA,
-      if ("rxn_B" %in% active_paths_save) safe_inp("logK4") else NA,
-      if ("rxn_B" %in% active_paths_save) safe_inp("H4") else NA,
-      if ("rxn_F" %in% active_paths_save) safe_inp("logK5") else NA,
-      if ("rxn_F" %in% active_paths_save) safe_inp("H5") else NA,
-      if ("rxn_U" %in% active_paths_save) safe_inp("logK6") else NA,
-      if ("rxn_U" %in% active_paths_save) safe_inp("H6") else NA,
+      if ("rxn_D" %in% active_paths_norm) safe_inp("logK2") else NA,
+      if ("rxn_D" %in% active_paths_norm) safe_inp("H2") else NA,
+      if ("rxn_T" %in% active_paths_norm) safe_inp("logK3") else NA,
+      if ("rxn_T" %in% active_paths_norm) safe_inp("H3") else NA,
+      if ("rxn_B" %in% active_paths_norm) safe_inp("logK4") else NA,
+      if ("rxn_B" %in% active_paths_norm) safe_inp("H4") else NA,
+      if ("rxn_F" %in% active_paths_norm) safe_inp("logK5") else NA,
+      if ("rxn_F" %in% active_paths_norm) safe_inp("H5") else NA,
+      if ("rxn_U" %in% active_paths_norm) safe_inp("logK6") else NA,
+      if ("rxn_U" %in% active_paths_norm) safe_inp("H6") else NA,
+      if ("rxn_E" %in% active_paths_norm) safe_inp("logK7") else NA,
+      if ("rxn_E" %in% active_paths_norm) safe_inp("H7") else NA,
       safe_inp("factor_H"), safe_inp("factor_G"),
       safe_inp("V_init_val"), safe_inp("heat_offset"),
       if (is.null(rss_info$rss) || !is.finite(rss_info$rss)) NA else formatC(rss_info$rss, format = "e", digits = 3),
@@ -150,7 +169,7 @@ export_bridge_build_fit_params_df <- function(safe_inp, active_paths_save, rss_i
       safe_inp("n_inj"), fit_range_start, fit_range_end,
       safe_inp("V_pre"),
       safe_inp("Temp"),
-      paste(active_paths_save, collapse = ",")
+      paste(active_paths_norm, collapse = ",")
     )),
     stringsAsFactors = FALSE
   )

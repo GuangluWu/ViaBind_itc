@@ -139,6 +139,7 @@
     cols_to_plot <- c("H_pct", "M_pct")
     if("rxn_D" %in% input$active_paths) cols_to_plot <- c(cols_to_plot, "D_pct")
     if("rxn_T" %in% input$active_paths) cols_to_plot <- c(cols_to_plot, "T_pct")
+    if("rxn_E" %in% input$active_paths && "rxn_T" %in% input$active_paths) cols_to_plot <- c(cols_to_plot, "E_pct")
     if("rxn_B" %in% input$active_paths) cols_to_plot <- c(cols_to_plot, "B_pct")
     if("rxn_F" %in% input$active_paths && "rxn_D" %in% input$active_paths) cols_to_plot <- c(cols_to_plot, "F_pct")
     if("rxn_U" %in% input$active_paths) cols_to_plot <- c(cols_to_plot, "U_pct")
@@ -149,6 +150,7 @@
       "M_pct" = "H1G1",
       "D_pct" = "H1G2",
       "T_pct" = "H2G2",
+      "E_pct" = "H3G2",
       "B_pct" = "H2G1",
       "F_pct" = "H2G3",
       "U_pct" = "H1G1(U)"

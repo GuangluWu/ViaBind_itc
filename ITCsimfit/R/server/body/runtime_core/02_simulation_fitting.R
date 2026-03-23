@@ -80,6 +80,7 @@
       safe_input(input$logK4, DEFAULT_PARAMS$logK), safe_input(input$H4, DEFAULT_PARAMS$H), 
       safe_input(input$logK5, DEFAULT_PARAMS$logK), safe_input(input$H5, DEFAULT_PARAMS$H),
       safe_input(input$logK6, DEFAULT_PARAMS$logK), safe_input(input$H6, DEFAULT_PARAMS$H),
+      safe_input(input$logK7, DEFAULT_PARAMS$logK), safe_input(input$H7, DEFAULT_PARAMS$H),
       safe_input(input$factor_H, DEFAULT_PARAMS$fH), safe_input(input$factor_G, DEFAULT_PARAMS$fG), 
       safe_input(input$heat_offset, DEFAULT_PARAMS$Offset),
       active_paths_str,
@@ -127,6 +128,7 @@
       logK4=safe_input(input$logK4, DEFAULT_PARAMS$logK), H4=safe_input(input$H4, DEFAULT_PARAMS$H), 
       logK5=safe_input(input$logK5, DEFAULT_PARAMS$logK), H5=safe_input(input$H5, DEFAULT_PARAMS$H),
       logK6=safe_input(input$logK6, DEFAULT_PARAMS$logK), H6=safe_input(input$H6, DEFAULT_PARAMS$H),
+      logK7=safe_input(input$logK7, DEFAULT_PARAMS$logK), H7=safe_input(input$H7, DEFAULT_PARAMS$H),
       fH=safe_input(input$factor_H, DEFAULT_PARAMS$fH), fG=safe_input(input$factor_G, DEFAULT_PARAMS$fG), 
       Offset=safe_input(input$heat_offset, DEFAULT_PARAMS$Offset)
     )
@@ -540,6 +542,7 @@
     b_logK4 <- get_bound("logK4"); b_H4 <- get_bound("H4")
     b_logK5 <- get_bound("logK5"); b_H5 <- get_bound("H5")
     b_logK6 <- get_bound("logK6"); b_H6 <- get_bound("H6")
+    b_logK7 <- get_bound("logK7"); b_H7 <- get_bound("H7")
     b_Offset <- get_bound("Offset")
 
     p_curr <- list(
@@ -567,6 +570,10 @@
                           min = b_logK6["lower"], max = b_logK6["upper"]),
       H6 = safe_numeric(input$H6, default = DEFAULT_PARAMS$H, 
                        min = b_H6["lower"], max = b_H6["upper"]),
+      logK7 = safe_numeric(input$logK7, default = DEFAULT_PARAMS$logK,
+                          min = b_logK7["lower"], max = b_logK7["upper"]),
+      H7 = safe_numeric(input$H7, default = DEFAULT_PARAMS$H,
+                       min = b_H7["lower"], max = b_H7["upper"]),
       fH = safe_numeric(input$factor_H, default = DEFAULT_PARAMS$fH, 
                        min = PARAM_BOUNDS$fH_fG["lower"], max = PARAM_BOUNDS$fH_fG["upper"]),
       fG = safe_numeric(input$factor_G, default = DEFAULT_PARAMS$fG, 

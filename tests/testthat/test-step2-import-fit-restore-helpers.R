@@ -31,19 +31,21 @@ testthat::test_that("meta fallback works when meta_rev missing", {
 testthat::test_that("fit_params parser restores active paths and thermo params", {
   fit_params <- data.frame(
     parameter = c(
-      "ActivePaths", "logK1", "H1_cal_mol", "fH", "fG", "V_init_uL", "Offset_cal",
+      "ActivePaths", "logK1", "H1_cal_mol", "logK7", "H7_cal_mol", "fH", "fG", "V_init_uL", "Offset_cal",
       "FitRangeStart_Inj", "FitRangeEnd_Inj"
     ),
-    value = c("rxn_D, rxn_T,invalid,rxn_D", "7.1", "-6200", "0.9", "1.1", "0.35", "-12", "2", "18"),
+    value = c("rxn_D, rxn_E,invalid,rxn_D", "7.1", "-6200", "4.8", "-1800", "0.9", "1.1", "0.35", "-12", "2", "18"),
     stringsAsFactors = FALSE
   )
   fp_map <- extract_fit_params_map(fit_params)
   restore <- extract_simfit_restore_params(fp_map)
   paths <- parse_active_paths_from_fit_params(fp_map)
 
-  testthat::expect_equal(paths, c("rxn_D", "rxn_T"))
+  testthat::expect_equal(paths, c("rxn_D", "rxn_T", "rxn_E"))
   testthat::expect_equal(restore$logK1, 7.1)
   testthat::expect_equal(restore$H1, -6200)
+  testthat::expect_equal(restore$logK7, 4.8)
+  testthat::expect_equal(restore$H7, -1800)
   testthat::expect_equal(restore$fH, 0.9)
   testthat::expect_equal(restore$fG, 1.1)
   testthat::expect_equal(restore$V_init_uL, 0.35)

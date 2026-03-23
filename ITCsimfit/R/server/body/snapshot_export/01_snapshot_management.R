@@ -20,11 +20,11 @@
 
   snapshot_expected_cols <- c(
     "Name", "RSS", "Model", "logK1", "H1", "logK2", "H2",
-    "logK3", "H3", "logK4", "H4", "logK5", "H5", "logK6", "H6",
+    "logK3", "H3", "logK4", "H4", "logK5", "H5", "logK6", "H6", "logK7", "H7",
     "fH", "fG", "V_init", "Offset",
     "logK1_SE", "H1_SE", "logK2_SE", "H2_SE",
     "logK3_SE", "H3_SE", "logK4_SE", "H4_SE",
-    "logK5_SE", "H5_SE", "logK6_SE", "H6_SE",
+    "logK5_SE", "H5_SE", "logK6_SE", "H6_SE", "logK7_SE", "H7_SE",
     "fH_SE", "fG_SE",
     "V_init_SE", "Offset_SE",
     "H_cell_0", "G_syringe", "V_cell", "V_inj",
@@ -150,8 +150,8 @@
     se_values <- list()  # 存储标准误差值
     
     # 定义所有可能的参数名
-    all_params <- c("logK1", "H1", "logK2", "H2", "logK3", "H3", 
-                    "logK4", "H4", "logK5", "H5", "logK6", "H6",
+    all_params <- c("logK1", "H1", "logK2", "H2", "logK3", "H3",
+                    "logK4", "H4", "logK5", "H5", "logK6", "H6", "logK7", "H7",
                     "fH", "fG", "V_init", "Offset")
     
     # 为每个参数查找标准误差
@@ -165,19 +165,26 @@
     }
     
     # [新增] 未激活的模型路径对应参数存 NA，其标准误差也置空
-    active_paths_save <- if(is.null(input$active_paths) || length(input$active_paths) == 0) character(0) else input$active_paths
+    active_paths_save <- if(is.null(input$active_paths) || length(input$active_paths) == 0) character(0) else as.character(input$active_paths)
+    if (exists("normalize_active_paths_with_dependencies", mode = "function", inherits = TRUE)) {
+      active_paths_save <- tryCatch(
+        normalize_active_paths_with_dependencies(active_paths_save),
+        error = function(e) active_paths_save
+      )
+    }
     if(!"rxn_D" %in% active_paths_save) { se_values[["logK2"]] <- NA; se_values[["H2"]] <- NA }
     if(!"rxn_T" %in% active_paths_save) { se_values[["logK3"]] <- NA; se_values[["H3"]] <- NA }
     if(!"rxn_B" %in% active_paths_save) { se_values[["logK4"]] <- NA; se_values[["H4"]] <- NA }
     if(!"rxn_F" %in% active_paths_save) { se_values[["logK5"]] <- NA; se_values[["H5"]] <- NA }
     if(!"rxn_U" %in% active_paths_save) { se_values[["logK6"]] <- NA; se_values[["H6"]] <- NA }
+    if(!"rxn_E" %in% active_paths_save) { se_values[["logK7"]] <- NA; se_values[["H7"]] <- NA }
     
     # 格式化标准误差（logK保留3位小数，H保留1位小数，其他保留3位小数）
     format_se <- function(param, se) {
       if (is.na(se) || !is.finite(se)) return("")
       if (grepl("logK", param)) {
         return(sprintf("%.3f", se))
-      } else if (grepl("^H[0-9]$", param)) {
+      } else if (grepl("^H[0-9]+$", param)) {
         return(sprintf("%.1f", se))
       } else {
         return(sprintf("%.3f", se))
@@ -195,6 +202,8 @@
     H5_save    <- if("rxn_F" %in% active_paths_save) input$H5 else NA
     logK6_save <- if("rxn_U" %in% active_paths_save) input$logK6 else NA
     H6_save    <- if("rxn_U" %in% active_paths_save) input$H6 else NA
+    logK7_save <- if("rxn_E" %in% active_paths_save) input$logK7 else NA
+    H7_save    <- if("rxn_E" %in% active_paths_save) input$H7 else NA
 
     fit_range_now <- suppressWarnings(as.numeric(input$fit_data_range))
     fit_range_start_save <- if (length(fit_range_now) >= 1 && is.finite(fit_range_now[1])) {
@@ -212,11 +221,12 @@
       Name = final_name, # 第一列现在是组合名称
       RSS = if(is.na(current_rss)) "-" else formatC(current_rss, format="e", digits=3),
       # [修正] 强制包含 rxn_M，因为它总是激活的
-      Model = paste(c("rxn_M", input$active_paths), collapse="+"),
+      Model = paste(c("rxn_M", active_paths_save), collapse="+"),
       
       logK1=input$logK1, H1=input$H1, logK2=logK2_save, H2=H2_save,
       logK3=logK3_save, H3=H3_save, logK4=logK4_save, H4=H4_save,
       logK5=logK5_save, H5=H5_save, logK6=logK6_save, H6=H6_save,
+      logK7=logK7_save, H7=H7_save,
       fH=input$factor_H, fG=input$factor_G, V_init=input$V_init_val,
       Offset=input$heat_offset,
       # [新增] 标准误差列
@@ -232,6 +242,8 @@
       H5_SE = format_se("H5", se_values[["H5"]]),
       logK6_SE = format_se("logK6", se_values[["logK6"]]),
       H6_SE = format_se("H6", se_values[["H6"]]),
+      logK7_SE = format_se("logK7", se_values[["logK7"]]),
+      H7_SE = format_se("H7", se_values[["H7"]]),
       fH_SE = format_se("fH", se_values[["fH"]]),
       fG_SE = format_se("fG", se_values[["fG"]]),
       V_init_SE = format_se("V_init", se_values[["V_init"]]),
@@ -302,18 +314,10 @@
   
   observeEvent(input$confirm_reset, {
     # [修复] 使用 DEFAULT_PARAMS 常量，确保与初始值一致
-    updateSliderInput(session, "logK1", value=DEFAULT_PARAMS$logK)
-    updateSliderInput(session, "H1", value=DEFAULT_PARAMS$H)
-    updateSliderInput(session, "logK2", value=DEFAULT_PARAMS$logK)
-    updateSliderInput(session, "H2", value=DEFAULT_PARAMS$H)
-    updateSliderInput(session, "logK3", value=DEFAULT_PARAMS$logK)
-    updateSliderInput(session, "H3", value=DEFAULT_PARAMS$H)
-    updateSliderInput(session, "logK4", value=DEFAULT_PARAMS$logK)
-    updateSliderInput(session, "H4", value=DEFAULT_PARAMS$H)
-    updateSliderInput(session, "logK5", value=DEFAULT_PARAMS$logK)
-    updateSliderInput(session, "H5", value=DEFAULT_PARAMS$H)
-    updateSliderInput(session, "logK6", value=DEFAULT_PARAMS$logK)
-    updateSliderInput(session, "H6", value=DEFAULT_PARAMS$H)
+    for (idx in 1:7) {
+      updateSliderInput(session, paste0("logK", idx), value = DEFAULT_PARAMS$logK)
+      updateSliderInput(session, paste0("H", idx), value = DEFAULT_PARAMS$H)
+    }
     
     updateNumericInput(session, "factor_H", value=DEFAULT_PARAMS$fH)
     updateNumericInput(session, "factor_G", value=DEFAULT_PARAMS$fG)
@@ -523,7 +527,7 @@
     updateSliderInput(session, "logK1", value = snap_param_value(target_p$logK1, DEFAULT_PARAMS$logK))
     updateSliderInput(session, "H1", value = snap_param_value(target_p$H1, DEFAULT_PARAMS$H))
     
-    # 可选参数 (logK2–H6)：读到 NA 则自动用默认值
+    # 可选参数 (logK2–H7)：读到 NA 则自动用默认值
     updateSliderInput(session, "logK2", value = snap_param_value(target_p$logK2, DEFAULT_PARAMS$logK))
     updateSliderInput(session, "H2", value = snap_param_value(target_p$H2, DEFAULT_PARAMS$H))
     updateSliderInput(session, "logK3", value = snap_param_value(target_p$logK3, DEFAULT_PARAMS$logK))
@@ -534,6 +538,8 @@
     updateSliderInput(session, "H5", value = snap_param_value(target_p$H5, DEFAULT_PARAMS$H))
     updateSliderInput(session, "logK6", value = snap_param_value(target_p$logK6, DEFAULT_PARAMS$logK))
     updateSliderInput(session, "H6", value = snap_param_value(target_p$H6, DEFAULT_PARAMS$H))
+    updateSliderInput(session, "logK7", value = snap_param_value(target_p$logK7, DEFAULT_PARAMS$logK))
+    updateSliderInput(session, "H7", value = snap_param_value(target_p$H7, DEFAULT_PARAMS$H))
     
     updateNumericInput(session, "factor_H", value = snap_param_value(target_p$fH, DEFAULT_PARAMS$fH))
     updateNumericInput(session, "factor_G", value = snap_param_value(target_p$fG, DEFAULT_PARAMS$fG))
@@ -593,10 +599,13 @@
         saved_paths <- strsplit(saved_model_str, "\\+")[[1]]
         
         # 定义有效路径 (必须与 checkboxGroupInput 的 values 对应)
-        valid_paths <- c("rxn_D", "rxn_T", "rxn_B", "rxn_F", "rxn_U")
+        valid_paths <- c("rxn_D", "rxn_T", "rxn_E", "rxn_B", "rxn_F", "rxn_U")
         
         # 筛选出有效路径 (rxn_M 是基础反应，不在 checkbox 中，忽略即可)
         paths_to_select <- intersect(saved_paths, valid_paths)
+        if (exists("normalize_active_paths_with_dependencies", mode = "function", inherits = TRUE)) {
+          paths_to_select <- normalize_active_paths_with_dependencies(paths_to_select, valid_paths = valid_paths)
+        }
         
         # 更新 CheckboxGroupInput
         updateCheckboxGroupInput(session, "active_paths", selected = paths_to_select)
@@ -634,7 +643,7 @@
         "V_cell_mL" = "V_cell", "V_inj_uL" = "V_inj", "V_pre_uL" = "V_pre",
         "Temp_K" = "Temp",
         "H1_cal_mol" = "H1", "H2_cal_mol" = "H2", "H3_cal_mol" = "H3",
-        "H4_cal_mol" = "H4", "H5_cal_mol" = "H5", "H6_cal_mol" = "H6",
+        "H4_cal_mol" = "H4", "H5_cal_mol" = "H5", "H6_cal_mol" = "H6", "H7_cal_mol" = "H7",
         "V_init_uL" = "V_init", "Offset_cal" = "Offset"
       )
       for (file_name in names(file_to_internal)) {
@@ -663,6 +672,7 @@
         "logK4" = 7.0, "H4" = -6000,
         "logK5" = 7.0, "H5" = -6000,
         "logK6" = 7.0, "H6" = -6000,
+        "logK7" = 7.0, "H7" = -6000,
         "V_init" = 0, "Offset" = 0
       )
       for(col in names(optional_param_cols)) {

@@ -43,6 +43,22 @@ calculate_simulation <- function(p, active_paths) {
   if(length(active_paths) == 0) {
     active_paths <- character(0)
   }
+  active_paths <- setdiff(as.character(active_paths), "rxn_M")
+  if (exists("normalize_active_paths_with_dependencies", mode = "function", inherits = TRUE)) {
+    active_paths <- tryCatch(
+      normalize_active_paths_with_dependencies(active_paths),
+      error = function(e) active_paths
+    )
+  } else {
+    valid_paths <- c("rxn_D", "rxn_T", "rxn_E", "rxn_B", "rxn_F", "rxn_U")
+    active_paths <- valid_paths[valid_paths %in% active_paths]
+    if ("rxn_E" %in% active_paths && !"rxn_T" %in% active_paths) {
+      active_paths <- valid_paths[valid_paths %in% c(active_paths, "rxn_T")]
+    }
+    if ("rxn_F" %in% active_paths && !"rxn_D" %in% active_paths) {
+      active_paths <- valid_paths[valid_paths %in% c(active_paths, "rxn_D")]
+    }
+  }
   
   if (is.null(p$V_inj_vec) && !is.null(p$V_inj) && !is.null(p$n_inj)) {
     p$V_inj_vec <- rep(p$V_inj, p$n_inj)

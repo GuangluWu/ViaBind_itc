@@ -48,7 +48,7 @@
       normalize_active_paths_with_dependencies(paths),
       error = function(e) {
         raw <- if (is.null(paths)) character(0) else as.character(paths)
-        valid <- c("rxn_D", "rxn_T", "rxn_B", "rxn_F", "rxn_U")
+        valid <- c("rxn_D", "rxn_T", "rxn_E", "rxn_B", "rxn_F", "rxn_U")
         valid[valid %in% unique(raw)]
       }
     )
@@ -87,6 +87,7 @@
     "logK1", "H1",
     "logK2", "H2",
     "logK3", "H3",
+    "logK7", "H7",
     "logK4", "H4",
     "logK5", "H5",
     "logK6", "H6",
@@ -97,6 +98,7 @@
     logK1 = 0.001, H1 = 100,
     logK2 = 0.001, H2 = 100,
     logK3 = 0.001, H3 = 100,
+    logK7 = 0.001, H7 = 100,
     logK4 = 0.001, H4 = 100,
     logK5 = 0.001, H5 = 100,
     logK6 = 0.001, H6 = 100,
@@ -120,6 +122,7 @@
     ids <- c("Offset", "logK1", "H1")
     if ("rxn_D" %in% paths_safe) ids <- c(ids, "logK2", "H2")
     if ("rxn_T" %in% paths_safe) ids <- c(ids, "logK3", "H3")
+    if ("rxn_E" %in% paths_safe) ids <- c(ids, "logK7", "H7")
     if ("rxn_B" %in% paths_safe) ids <- c(ids, "logK4", "H4")
     if ("rxn_F" %in% paths_safe) ids <- c(ids, "logK5", "H5")
     if ("rxn_U" %in% paths_safe) ids <- c(ids, "logK6", "H6")
@@ -536,18 +539,10 @@
     update_active_paths_normalized(character(0))
     updateCheckboxGroupInput(session, "fit_params", selected = c("logK1", "H1"))
 
-    updateSliderInput(session, "logK1", value = DEFAULT_PARAMS$logK)
-    updateSliderInput(session, "H1", value = DEFAULT_PARAMS$H)
-    updateSliderInput(session, "logK2", value = DEFAULT_PARAMS$logK)
-    updateSliderInput(session, "H2", value = DEFAULT_PARAMS$H)
-    updateSliderInput(session, "logK3", value = DEFAULT_PARAMS$logK)
-    updateSliderInput(session, "H3", value = DEFAULT_PARAMS$H)
-    updateSliderInput(session, "logK4", value = DEFAULT_PARAMS$logK)
-    updateSliderInput(session, "H4", value = DEFAULT_PARAMS$H)
-    updateSliderInput(session, "logK5", value = DEFAULT_PARAMS$logK)
-    updateSliderInput(session, "H5", value = DEFAULT_PARAMS$H)
-    updateSliderInput(session, "logK6", value = DEFAULT_PARAMS$logK)
-    updateSliderInput(session, "H6", value = DEFAULT_PARAMS$H)
+    for (idx in 1:7) {
+      updateSliderInput(session, paste0("logK", idx), value = DEFAULT_PARAMS$logK)
+      updateSliderInput(session, paste0("H", idx), value = DEFAULT_PARAMS$H)
+    }
 
     updateNumericInput(session, "factor_H", value = DEFAULT_PARAMS$fH)
     updateNumericInput(session, "factor_G", value = DEFAULT_PARAMS$fG)
@@ -613,14 +608,26 @@
     prev <- normalize_active_paths_safe(path_selection_last())
     adjusted <- raw
 
-    # Keep table-mode dependency behavior aligned with graph mode:
-    # selecting F auto-enables D; deselecting D auto-disables F.
-    if ("rxn_F" %in% adjusted && !"rxn_D" %in% adjusted) {
-      if ("rxn_D" %in% prev && "rxn_F" %in% prev) {
-        adjusted <- setdiff(adjusted, "rxn_F")
-      } else {
-        adjusted <- c(adjusted, "rxn_D")
+    dependency_map <- if (exists("ITCSIMFIT_ACTIVE_PATH_DEPENDENCIES", inherits = TRUE)) {
+      get("ITCSIMFIT_ACTIVE_PATH_DEPENDENCIES", inherits = TRUE)
+    } else {
+      c(rxn_E = "rxn_T", rxn_F = "rxn_D")
+    }
+
+    changed <- TRUE
+    while (isTRUE(changed)) {
+      adjusted_prev <- adjusted
+      for (child in names(dependency_map)) {
+        parent <- as.character(dependency_map[[child]])[1]
+        if (child %in% adjusted && !parent %in% adjusted) {
+          if (parent %in% prev && child %in% prev) {
+            adjusted <- setdiff(adjusted, child)
+          } else {
+            adjusted <- c(adjusted, parent)
+          }
+        }
       }
+      changed <- !(setequal(adjusted_prev, adjusted) && length(unique(adjusted_prev)) == length(unique(adjusted)))
     }
 
     normalized <- normalize_active_paths_safe(adjusted)
@@ -1169,6 +1176,10 @@
       choices <- c(choices, "logK3", "H3")
       auto_selected <- c(auto_selected, "logK3", "H3")
     }
+    if("rxn_E" %in% paths) {
+      choices <- c(choices, "logK7", "H7")
+      auto_selected <- c(auto_selected, "logK7", "H7")
+    }
     if("rxn_B" %in% paths) {
       choices <- c(choices, "logK4", "H4")
       auto_selected <- c(auto_selected, "logK4", "H4")
@@ -1213,6 +1224,7 @@
     
     if("rxn_D" %in% paths) choices <- c(choices, "logK2", "H2")
     if("rxn_T" %in% paths) choices <- c(choices, "logK3", "H3")
+    if("rxn_E" %in% paths) choices <- c(choices, "logK7", "H7")
     if("rxn_B" %in% paths) choices <- c(choices, "logK4", "H4")
     if("rxn_F" %in% paths) choices <- c(choices, "logK5", "H5")
     if("rxn_U" %in% paths) choices <- c(choices, "logK6", "H6")
@@ -1751,6 +1763,8 @@
         if (is.finite(fp_restore$H5)) updateSliderInput(session, "H5", value = fp_restore$H5)
         if (is.finite(fp_restore$logK6)) updateSliderInput(session, "logK6", value = fp_restore$logK6)
         if (is.finite(fp_restore$H6)) updateSliderInput(session, "H6", value = fp_restore$H6)
+        if (is.finite(fp_restore$logK7)) updateSliderInput(session, "logK7", value = fp_restore$logK7)
+        if (is.finite(fp_restore$H7)) updateSliderInput(session, "H7", value = fp_restore$H7)
 
         if (is.finite(fp_restore$fH)) updateNumericInput(session, "factor_H", value = fp_restore$fH)
         if (is.finite(fp_restore$fG)) updateNumericInput(session, "factor_G", value = fp_restore$fG)
@@ -2134,7 +2148,7 @@
 
     num_ids <- c(
       "H_cell_0", "G_syringe", "V_cell", "V_inj", "n_inj", "V_pre", "Temp",
-      "logK1", "H1", "logK2", "H2", "logK3", "H3", "logK4", "H4", "logK5", "H5", "logK6", "H6",
+      "logK1", "H1", "logK2", "H2", "logK3", "H3", "logK4", "H4", "logK5", "H5", "logK6", "H6", "logK7", "H7",
       "factor_H", "factor_G", "V_init_val", "heat_offset", "huber_delta"
     )
     for (id in num_ids) {
@@ -2528,7 +2542,7 @@
       update_numeric_if_present(id, params_norm[[id]])
     }
 
-    slider_ids <- c("logK1", "H1", "logK2", "H2", "logK3", "H3", "logK4", "H4", "logK5", "H5", "logK6", "H6", "heat_offset")
+    slider_ids <- c("logK1", "H1", "logK2", "H2", "logK3", "H3", "logK4", "H4", "logK5", "H5", "logK6", "H6", "logK7", "H7", "heat_offset")
     for (id in slider_ids) {
       update_slider_if_present(id, params_norm[[id]])
     }
@@ -2835,6 +2849,8 @@
       H5 = safe_input_get("H5"),
       logK6 = safe_input_get("logK6"),
       H6 = safe_input_get("H6"),
+      logK7 = safe_input_get("logK7"),
+      H7 = safe_input_get("H7"),
       factor_H = safe_input_get("factor_H"),
       factor_G = safe_input_get("factor_G"),
       V_init_val = safe_input_get("V_init_val"),

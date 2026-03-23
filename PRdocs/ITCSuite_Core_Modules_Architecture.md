@@ -182,7 +182,8 @@ flowchart TD
 1. 路径组合建模（Path-Combination Modeling）  
    Step2 并非仅依赖单一固定模型，而是基于路径集合组合出模型结构：  
    - 基础路径：`rxn_M`（始终参与）  
-   - 可选路径：`rxn_D` / `rxn_T` / `rxn_B` / `rxn_F` / `rxn_U`  
+   - 可选路径：`rxn_D` / `rxn_T` / `rxn_E` / `rxn_B` / `rxn_F` / `rxn_U`  
+   - 依赖规则：`rxn_E -> rxn_T`，`rxn_F -> rxn_D`  
    该机制使模型结构更贴近不同体系的物理实际，并支持快速切换比较。
 
 2. 平衡求解器（Equilibrium Solver）  

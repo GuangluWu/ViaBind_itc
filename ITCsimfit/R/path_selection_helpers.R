@@ -2,7 +2,11 @@
 # R/path_selection_helpers.R - Step2 path selection helper functions
 # ==============================================================================
 
-ITCSIMFIT_VALID_ACTIVE_PATHS <- c("rxn_D", "rxn_T", "rxn_B", "rxn_F", "rxn_U")
+ITCSIMFIT_VALID_ACTIVE_PATHS <- c("rxn_D", "rxn_T", "rxn_E", "rxn_B", "rxn_F", "rxn_U")
+ITCSIMFIT_ACTIVE_PATH_DEPENDENCIES <- c(
+  rxn_E = "rxn_T",
+  rxn_F = "rxn_D"
+)
 
 normalize_active_paths_with_dependencies <- function(paths,
                                                      valid_paths = ITCSIMFIT_VALID_ACTIVE_PATHS) {
@@ -11,9 +15,21 @@ normalize_active_paths_with_dependencies <- function(paths,
   tokens <- tokens[nzchar(tokens)]
   normalized <- valid_paths[valid_paths %in% unique(tokens)]
 
-  # rxn_F depends on rxn_D. Keep output ordered by valid_paths.
-  if ("rxn_F" %in% normalized && !"rxn_D" %in% normalized) {
-    normalized <- valid_paths[valid_paths %in% c(normalized, "rxn_D")]
+  dependency_map <- ITCSIMFIT_ACTIVE_PATH_DEPENDENCIES[
+    names(ITCSIMFIT_ACTIVE_PATH_DEPENDENCIES) %in% valid_paths
+  ]
+
+  # Keep output ordered by valid_paths while recursively filling required parents.
+  changed <- TRUE
+  while (isTRUE(changed)) {
+    changed <- FALSE
+    for (child in names(dependency_map)) {
+      parent <- as.character(dependency_map[[child]])[1]
+      if (child %in% normalized && !parent %in% normalized) {
+        normalized <- valid_paths[valid_paths %in% c(normalized, parent)]
+        changed <- TRUE
+      }
+    }
   }
 
   normalized
@@ -48,11 +64,29 @@ apply_path_graph_toggle_with_dependencies <- function(current_paths,
     return(normalized_current)
   }
 
-  if (path_chr %in% normalized_current) {
-    next_paths <- setdiff(normalized_current, path_chr)
-    if (identical(path_chr, "rxn_D")) {
-      next_paths <- setdiff(next_paths, "rxn_F")
+  dependency_map <- ITCSIMFIT_ACTIVE_PATH_DEPENDENCIES[
+    names(ITCSIMFIT_ACTIVE_PATH_DEPENDENCIES) %in% valid_paths
+  ]
+  drop_path_and_dependents <- function(paths, removed_id) {
+    out <- unique(as.character(paths))
+    queue <- as.character(removed_id)[1]
+
+    while (length(queue) > 0) {
+      current_id <- queue[1]
+      queue <- queue[-1]
+      out <- setdiff(out, current_id)
+      child_ids <- names(dependency_map)[as.character(dependency_map) == current_id]
+      child_ids <- child_ids[child_ids %in% out]
+      if (length(child_ids) > 0) {
+        queue <- unique(c(queue, child_ids))
+      }
     }
+
+    out
+  }
+
+  if (path_chr %in% normalized_current) {
+    next_paths <- drop_path_and_dependents(normalized_current, path_chr)
   } else {
     next_paths <- c(normalized_current, path_chr)
   }
