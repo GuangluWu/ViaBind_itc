@@ -128,43 +128,11 @@
   
   output$distPlot <- renderPlot({
     sim <- sim_results()
-    if(is.null(sim)) return(NULL)
-    legend_species <- tryCatch(tr("legend_species", lang()), error = function(e) "")
-    if (is.null(legend_species) || !nzchar(as.character(legend_species)[1]) || identical(as.character(legend_species)[1], "legend_species")) {
-      legend_species <- if (identical(lang(), "zh")) "物种" else "Species"
-    } else {
-      legend_species <- as.character(legend_species)[1]
-    }
-    
-    cols_to_plot <- c("H_pct", "M_pct")
-    if("rxn_D" %in% input$active_paths) cols_to_plot <- c(cols_to_plot, "D_pct")
-    if("rxn_T" %in% input$active_paths) cols_to_plot <- c(cols_to_plot, "T_pct")
-    if("rxn_E" %in% input$active_paths && "rxn_T" %in% input$active_paths) cols_to_plot <- c(cols_to_plot, "E_pct")
-    if("rxn_B" %in% input$active_paths) cols_to_plot <- c(cols_to_plot, "B_pct")
-    if("rxn_F" %in% input$active_paths && "rxn_D" %in% input$active_paths) cols_to_plot <- c(cols_to_plot, "F_pct")
-    if("rxn_U" %in% input$active_paths) cols_to_plot <- c(cols_to_plot, "U_pct")
-    
-    # [修改] 定义图例标签映射
-    lbl_map <- c(
-      "H_pct" = "H",
-      "M_pct" = "H1G1",
-      "D_pct" = "H1G2",
-      "T_pct" = "H2G2",
-      "E_pct" = "H3G2",
-      "B_pct" = "H2G1",
-      "F_pct" = "H2G3",
-      "U_pct" = "H1G1(U)"
+    build_species_dist_plot(
+      sim = sim,
+      active_paths = input$active_paths,
+      lang = lang()
     )
-
-    sim %>% select(Ratio_App, all_of(cols_to_plot)) %>%
-      pivot_longer(-Ratio_App, names_to="Species", values_to="Frac") %>%
-      # 将 Species 转换为因子并重命名标签，确保顺序和显示正确
-      mutate(Species = factor(Species, levels = names(lbl_map), labels = lbl_map)) %>%
-      ggplot(aes(x=Ratio_App, y=Frac, fill=Species)) + 
-      geom_area(alpha=0.8, color="white", linewidth=0.1) +
-      scale_fill_brewer(palette="Set3", name = legend_species) + 
-      labs(x=tr("axis_simulated_ratio", lang()), y=tr("axis_fraction_based_on_h", lang())) +
-      theme_minimal(base_size=14) + theme(legend.position="bottom")
   })
   
   # [新增] 残差子标签页按钮事件处理
@@ -317,7 +285,12 @@
     # 基础标签页（始终显示）
     tabs <- list(
       tabPanel(tr("plot_tab_itc", lang()), value = "tab_itc", br(), plotOutput("itcPlot", height = "460px")),
-      tabPanel(tr("plot_tab_dist", lang()), value = "tab_dist", br(), plotOutput("distPlot", height = "460px"))
+      tabPanel(
+        tr("plot_tab_dist", lang()),
+        value = "tab_dist",
+        br(),
+        plotOutput("distPlot", height = "460px")
+      )
     )
     
     # 如果误差分析已完成，添加残差诊断和参数相关性标签页
@@ -335,6 +308,17 @@
     
     # 创建tabsetPanel并添加自定义CSS类
     tabset <- do.call(tabsetPanel, c(list(type = "tabs", id = "main_plot_tabs"), tabs))
+    tabset <- htmltools::tagAppendAttributes(tabset, class = "plot-tabs-shell")
+    tabset <- htmltools::tagAppendChild(
+      tabset,
+      div(
+        class = "plot-tabs-header-action",
+        conditionalPanel(
+          condition = "input.main_plot_tabs === 'tab_dist'",
+          downloadButton("export_dist_pdf", tr("btn_export_dist", lang()), icon = NULL, class = "btn-success btn-sm")
+        )
+      )
+    )
     
     # 包装在div中，添加自定义CSS类用于控制标签页换行
     div(class = "two-row-tabs", tabset)

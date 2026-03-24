@@ -400,6 +400,7 @@ export_bridge_order_sheets <- function(sheet_list) {
     "meta_rev",
     "integration_rev",
     "simulation",
+    "species_dist",
     "fit_params",
     "fit_bounds",
     "error_reliability",

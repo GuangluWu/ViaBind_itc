@@ -1,11 +1,12 @@
   # [COMMENT_STD][MODULE_HEADER]
   # 模块职责：负责 Step2 快照导出、Step3 bridge payload 组装与导出文件写入。
   # 依赖：writexl、snapshot helper、bridge helper、Shiny downloadHandler。
-  # 对外接口：output$export_params、publish_step2_plot_payload()、output$simfit_downloadData。
+  # 对外接口：output$export_params、publish_step2_plot_payload()、output$simfit_downloadData、output$export_dist_pdf。
   # 副作用：写出 xlsx、更新 bridge channel、触发通知与 tab 切换。
   # 变更历史：2026-02-12 - 增加 Phase 4 注释规范样板。
   last_step2_export_params_name <- reactiveVal(NULL)
   last_step2_export_fitted_name <- reactiveVal(NULL)
+  last_step2_export_dist_name <- reactiveVal(NULL)
 
   normalize_step2_export_path <- function(path) {
     p <- as.character(path %||% "")[1]
@@ -215,6 +216,13 @@
       safe_rv_get(fit_param_bounds, default = list())
     )
     sheet_list[["simulation"]] <- sim_df
+    species_dist_df <- build_species_dist_export_df(
+      sim = sim_df,
+      active_paths = active_paths_save
+    )
+    if (is.data.frame(species_dist_df) && nrow(species_dist_df) > 0L) {
+      sheet_list[["species_dist"]] <- species_dist_df
+    }
 
     # Always regenerate report at export time to ensure current UI/fitting state
     # is written, instead of reusing any stale cached report text.
@@ -410,6 +418,117 @@
         payload = list(
           target_file = file,
           sheet_count = length(bundle$sheets %||% list())
+        )
+      )
+    }
+  )
+
+  output$export_dist_pdf <- downloadHandler(
+    filename = function() {
+      base <- export_bridge_sanitize_base_name(
+        base_name = values$imported_xlsx_base_name,
+        fallback_name = values$imported_xlsx_filename,
+        default_name = "ITC"
+      )
+      fname <- paste0(base, "_species_dist_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".pdf")
+      last_step2_export_dist_name(fname)
+      fname
+    },
+    content = function(file) {
+      op_id <- telemetry_start(
+        event = "step2.export",
+        payload = list(action = "export_species_dist", format = "pdf")
+      )
+      op_finished <- FALSE
+      finish_export <- function(outcome = "ok", payload = list(), err = NULL, level = NULL) {
+        if (isTRUE(op_finished)) return(invisible(NULL))
+        op_finished <<- TRUE
+        telemetry_finish(op_id, outcome = outcome, payload = payload, err = err, level = level)
+      }
+      on.exit({
+        if (!isTRUE(op_finished)) {
+          finish_export(outcome = "error", payload = list(reason = "unexpected_exit"), level = "ERROR")
+        }
+      }, add = TRUE)
+
+      sim <- tryCatch(sim_results(), error = function(e) NULL)
+      fig <- tryCatch(
+        build_species_dist_plot(
+          sim = sim,
+          active_paths = input$active_paths,
+          lang = lang()
+        ),
+        error = function(e) e
+      )
+
+      if (inherits(fig, "error")) {
+        finish_export(outcome = "error", payload = list(reason = "plot_build_failed"), err = fig, level = "ERROR")
+        showNotification(
+          paste0(tr("export_dist_failed_prefix", lang()), conditionMessage(fig)),
+          type = "error",
+          duration = 8
+        )
+        return()
+      }
+      if (is.null(fig)) {
+        finish_export(outcome = "error", payload = list(reason = "no_plot"), level = "WARN")
+        showNotification(tr("export_dist_no_data", lang()), type = "warning", duration = 5)
+        return()
+      }
+
+      pdf_title <- export_bridge_build_version_signature("ITCsimfit")
+      tryCatch({
+        ggplot2::ggsave(
+          filename = file,
+          plot = fig,
+          device = "pdf",
+          width = 8,
+          height = 5.5,
+          units = "in",
+          dpi = 300,
+          title = pdf_title
+        )
+      }, error = function(e) {
+        finish_export(outcome = "error", payload = list(reason = "ggsave_failed", format = "pdf"), err = e, level = "ERROR")
+        showNotification(
+          paste0(tr("export_dist_failed_prefix", lang()), conditionMessage(e)),
+          type = "error",
+          duration = 8
+        )
+        return(invisible(NULL))
+      })
+
+      export_name <- as.character(last_step2_export_dist_name() %||% "")[1]
+      if (!nzchar(trimws(export_name))) export_name <- basename(file)
+      export_path <- normalize_step2_export_path(file)
+      import_raw <- as.character(values$imported_xlsx_file_path %||% "")[1]
+      import_raw <- trimws(import_raw)
+      source_import_path <- ""
+      if (nzchar(import_raw) && !startsWith(import_raw, "bridge://")) {
+        source_import_path <- normalize_step2_export_path(import_raw)
+      }
+      if (nzchar(source_import_path)) {
+        home_add_recent_export(
+          list(
+            display_name = export_name,
+            file_name = export_name,
+            source_step = "step2",
+            target_step = "step2",
+            export_type = "pdf",
+            source_path = source_import_path,
+            artifact_path = export_path,
+            source_path_kind = "import"
+          )
+        )
+      }
+
+      finish_export(
+        outcome = "ok",
+        payload = list(
+          target_file = file,
+          width = 8,
+          height = 5.5,
+          source_path_linked = nzchar(source_import_path)
         )
       )
     }

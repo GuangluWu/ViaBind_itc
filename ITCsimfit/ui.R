@@ -623,13 +623,44 @@ ui <- fluidPage(
         border-bottom: 1px solid #ddd;
       }
       
-      .simfit-root .two-row-tabs .nav-tabs .nav-tabs > li > a {
-        padding: 8px 12px;
-        font-size: 12px;
-      }
-      
-      /* [新增] 响应式布局：在窄屏模式下调整参数快照位置 */
-      @media (max-width: 768px) {
+	      .simfit-root .two-row-tabs .nav-tabs .nav-tabs > li > a {
+	        padding: 8px 12px;
+	        font-size: 12px;
+	      }
+
+	      .simfit-root .two-row-tabs .plot-tabs-shell {
+	        display: grid;
+	        grid-template-columns: minmax(0, 1fr) auto;
+	        grid-template-rows: auto auto;
+	        column-gap: 12px;
+	        row-gap: 0;
+	        align-items: start;
+	      }
+
+	      .simfit-root .two-row-tabs .plot-tabs-shell > .nav-tabs {
+	        grid-column: 1;
+	        grid-row: 1;
+	        margin-bottom: 0;
+	        min-width: 0;
+	      }
+
+	      .simfit-root .two-row-tabs .plot-tabs-shell > .plot-tabs-header-action {
+	        grid-column: 2;
+	        grid-row: 1;
+	        align-self: center;
+	        justify-self: end;
+	        display: flex;
+	        justify-content: flex-end;
+	      }
+
+	      .simfit-root .two-row-tabs .plot-tabs-shell > .tab-content {
+	        grid-column: 1 / -1;
+	        grid-row: 2;
+	        width: 100%;
+	      }
+	      
+	      /* [新增] 响应式布局：在窄屏模式下调整参数快照位置 */
+	      @media (max-width: 768px) {
         /* 在窄屏时，让row变成flex容器 */
         .simfit-root .row {
           display: flex !important;
@@ -665,13 +696,38 @@ ui <- fluidPage(
         }
 
         /* 窄屏回退：恢复自然流，避免双重滚动 */
-        .simfit-root .step2-col-scroll {
-          max-height: none;
-          overflow: visible;
-          padding-right: 0;
-        }
+	        .simfit-root .step2-col-scroll {
+	          max-height: none;
+	          overflow: visible;
+	          padding-right: 0;
+	        }
 
-      }
+	        .simfit-root .two-row-tabs .plot-tabs-shell {
+	          grid-template-columns: 1fr;
+	          grid-template-rows: auto auto auto;
+	        }
+
+	        .simfit-root .two-row-tabs .plot-tabs-shell > .nav-tabs {
+	          grid-column: 1;
+	          grid-row: 1;
+	        }
+
+	        .simfit-root .two-row-tabs .plot-tabs-shell > .plot-tabs-header-action {
+	          grid-column: 1;
+	          grid-row: 2;
+	          justify-self: start;
+	          min-width: 0;
+	          width: 100%;
+	          justify-content: flex-start;
+	          margin-top: 8px;
+	        }
+
+	        .simfit-root .two-row-tabs .plot-tabs-shell > .tab-content {
+	          grid-column: 1;
+	          grid-row: 3;
+	        }
+
+	      }
       
     ")),
     tags$script(HTML("

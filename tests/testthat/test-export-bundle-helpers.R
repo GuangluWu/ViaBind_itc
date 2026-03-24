@@ -1,5 +1,6 @@
 repo_root <- itcsuite_repo_root()
 source(file.path(repo_root, "ITCsimfit", "R", "export_bundle_helpers.R"))
+source(file.path(repo_root, "ITCsimfit", "R", "species_dist_helpers.R"))
 
 make_safe_input <- function(values) {
   function(name) {
@@ -186,11 +187,73 @@ testthat::test_that("order_sheets keeps expected order and report at end", {
     fit_bounds = data.frame(a = 6),
     custom_x = data.frame(a = 2),
     simulation = data.frame(a = 3),
+    species_dist = data.frame(a = 7),
     report = data.frame(a = 4),
     meta_rev = data.frame(a = 5)
   )
   ordered <- export_bridge_order_sheets(sheets)
-  testthat::expect_equal(names(ordered), c("meta_rev", "simulation", "fit_params", "fit_bounds", "custom_x", "report"))
+  testthat::expect_equal(names(ordered), c("meta_rev", "simulation", "species_dist", "fit_params", "fit_bounds", "custom_x", "report"))
+})
+
+testthat::test_that("build_species_dist_export_df keeps base-model workbook columns in English", {
+  sim <- data.frame(
+    Inj = c(1, 2),
+    Ratio_App = c(0.1, 0.2),
+    H_pct = c(0.9, 0.8),
+    M_pct = c(0.1, 0.2),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+
+  out <- build_species_dist_export_df(sim = sim, active_paths = character(0))
+
+  testthat::expect_equal(names(out), c("Injection", "Simulated_GH_Ratio", "H", "H1G1"))
+  testthat::expect_equal(out$H, c(0.9, 0.8))
+  testthat::expect_equal(out$H1G1, c(0.1, 0.2))
+})
+
+testthat::test_that("build_species_dist_export_df expands dependency-backed species in fixed order", {
+  sim <- data.frame(
+    Inj = 1:2,
+    Ratio_App = c(0.1, 0.2),
+    H_pct = c(0.50, 0.40),
+    M_pct = c(0.10, 0.10),
+    D_pct = c(0.05, 0.06),
+    T_pct = c(0.07, 0.08),
+    E_pct = c(0.09, 0.10),
+    B_pct = c(0.06, 0.07),
+    F_pct = c(0.08, 0.09),
+    U_pct = c(0.05, 0.10),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+
+  out <- build_species_dist_export_df(
+    sim = sim,
+    active_paths = c("rxn_E", "rxn_B", "rxn_F", "rxn_U")
+  )
+
+  testthat::expect_equal(
+    names(out),
+    c("Injection", "Simulated_GH_Ratio", "H", "H1G1", "H1G2", "H2G2", "H3G2", "H2G1", "H2G3", "H1G1(U)")
+  )
+})
+
+testthat::test_that("build_species_dist_plot returns ggplot with current species selection", {
+  sim <- data.frame(
+    Inj = 1:3,
+    Ratio_App = c(0.1, 0.2, 0.3),
+    H_pct = c(0.70, 0.60, 0.50),
+    M_pct = c(0.20, 0.20, 0.20),
+    D_pct = c(0.10, 0.20, 0.30),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+
+  plot_obj <- build_species_dist_plot(sim = sim, active_paths = c("rxn_D"), lang = "en")
+
+  testthat::expect_s3_class(plot_obj, "ggplot")
+  testthat::expect_equal(levels(plot_obj$data$Species), c("H", "H1G1", "H1G2"))
 })
 
 testthat::test_that("resolve_step2_plot_source returns stable source label", {

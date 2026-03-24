@@ -68,6 +68,12 @@ if (!exists("trf", envir = .GlobalEnv)) {
   stop("Failed to load trf() function from R/i18n.R. Please check the file path and syntax.")
 }
 
+# 3.1 加载物种分布导出/作图 helper（Step 2 Species Dist. 共享逻辑）
+source("R/species_dist_helpers.R", local = FALSE)
+if (!exists("build_species_dist_plot", envir = .GlobalEnv)) {
+  stop("Failed to load species dist helpers from R/species_dist_helpers.R.")
+}
+
 # 4. 加载引导注释预埋模块（Phase 4，配置驱动，默认不启用 UI）
 source("R/guide_annotations.R", local = FALSE)
 if (!exists("load_guide_annotations", envir = .GlobalEnv)) {
