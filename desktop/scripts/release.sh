@@ -17,7 +17,7 @@ RUNTIME_PROFILE="release"
 RUNTIME_SYMBOLS_OUT=""
 STRICT_RUNTIME_MANIFEST=1
 RUNTIME_OUT_DIR=""
-MACOS_MIN_VERSION="13.0"
+MACOS_MIN_VERSION="14.0"
 
 usage() {
   cat <<USAGE
@@ -42,7 +42,7 @@ Options:
   --runtime-out-dir <dir>
                        Runtime output dir (default: desktop/resources/r-runtime)
   --macos-min-version <ver>
-                       Maximum supported minos for bundled binaries (default: 13.0)
+                       Maximum supported minos for bundled binaries (default: 14.0)
   -h, --help           Show this help
 
 Examples:

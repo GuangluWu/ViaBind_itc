@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export const DEFAULT_MACOS_MIN_VERSION = "13.0";
+export const DEFAULT_MACOS_MIN_VERSION = "14.0";
 export const HOST_R_FRAMEWORK_RESOURCES_RE = /^\/Library\/Frameworks\/R\.framework\/Versions\/[^/]+\/Resources(?:\/|$)/;
 export const PORTABLE_RSCRIPT_LAUNCHER_NAME = "itcsuite-rscript";
 

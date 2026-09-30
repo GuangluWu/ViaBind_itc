@@ -59,7 +59,7 @@ jobs:
         working-directory: desktop
         env:
           ITCSUITE_R_PKG_TYPE: binary
-        run: node scripts/build-r-runtime.mjs --strict-runtime-manifest --macos-min-version 13.0
+        run: node scripts/build-r-runtime.mjs --strict-runtime-manifest --macos-min-version 14.0
 
       - name: Bundled runtime graphics smoke
         working-directory: desktop
