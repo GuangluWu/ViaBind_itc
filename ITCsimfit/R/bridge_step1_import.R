@@ -339,6 +339,24 @@ extract_step2_import_diagnostics <- function(sheets) {
   if (!is.null(corr_df)) out$correlation_matrix_df <- corr_df
   out$current_report <- parse_report(report_df)
   out$has_error_analysis <- is.data.frame(out$error_analysis) && nrow(out$error_analysis) > 0L
+  if (isTRUE(out$has_error_analysis)) {
+    if (is.null(out$error_analysis_info)) out$error_analysis_info <- list()
+    if (is.null(out$error_analysis_info$method)) {
+      old_warnings <- if (is.null(out$error_analysis_info$warning_codes)) {
+        ""
+      } else {
+        as.character(out$error_analysis_info$warning_codes)[[1]]
+      }
+      out$error_analysis_info$method <- "legacy_hessian"
+      out$error_analysis_info$method_version <- "1.x"
+      out$error_analysis_info$reliability_level <- "low"
+      out$error_analysis_info$reliability_color <- "#e74c3c"
+      out$error_analysis_info$warning_codes <- paste(
+        c(old_warnings[nzchar(old_warnings)], "legacy_unverified"),
+        collapse = "|"
+      )
+    }
+  }
   out
 }
 

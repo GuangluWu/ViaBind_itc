@@ -5,27 +5,83 @@
     if (is.null(info)) {
       return(NULL)
     }
-    
-    rel_key <- if (info$dof >= 10) "error_analysis_applicability_1" else if (info$dof >= 5) "error_analysis_applicability_2" else "error_analysis_applicability_3"
+
+    dof <- suppressWarnings(as.numeric(info$dof)[1])
+    if (!is.finite(dof)) dof <- 0
+    reliability_level <- as.character(info$reliability_level %||% "")[[1]]
+    if (!reliability_level %in% c("good", "moderate", "low")) {
+      reliability_level <- if (dof >= 10) "good" else if (dof >= 5) "moderate" else "low"
+    }
+    rel_key <- switch(
+      reliability_level,
+      good = "error_analysis_applicability_1",
+      moderate = "error_analysis_applicability_2",
+      "error_analysis_applicability_3"
+    )
+    reliability_text_key <- switch(
+      reliability_level,
+      good = "error_analysis_reliability_good",
+      moderate = "error_analysis_reliability_moderate",
+      "error_analysis_reliability_low"
+    )
+    reliability_color <- as.character(info$reliability_color %||% "")[[1]]
+    if (!nzchar(reliability_color)) {
+      reliability_color <- switch(reliability_level, good = "#27ae60", moderate = "#f39c12", "#e74c3c")
+    }
+
+    method <- as.character(info$method %||% "legacy_hessian")[[1]]
+    method_key <- switch(
+      method,
+      nls_jacobian = "error_analysis_method_nls_jacobian",
+      weighted_sandwich = "error_analysis_method_weighted_sandwich",
+      huber_sandwich = "error_analysis_method_huber_sandwich",
+      weighted_huber_sandwich = "error_analysis_method_weighted_huber_sandwich",
+      "error_analysis_method_legacy"
+    )
+    warning_codes <- as.character(info$warning_codes %||% "")[[1]]
+    warning_codes <- unique(strsplit(warning_codes, "|", fixed = TRUE)[[1]])
+    warning_codes <- warning_codes[nzchar(warning_codes)]
+    warning_key_map <- c(
+      optimizer_not_converged = "error_analysis_warning_optimizer",
+      boundary_parameters = "error_analysis_warning_boundary",
+      interval_crosses_bounds = "error_analysis_warning_interval_bounds",
+      sandwich_approximation = "error_analysis_warning_sandwich",
+      rank_deficient = "error_analysis_warning_rank",
+      ill_conditioned = "error_analysis_warning_condition",
+      invalid_covariance = "error_analysis_warning_covariance",
+      invalid_residual_variance = "error_analysis_warning_variance",
+      insufficient_dof = "error_analysis_warning_dof",
+      jacobian_failed = "error_analysis_warning_jacobian",
+      invalid_weights = "error_analysis_warning_weights",
+      invalid_parameters = "error_analysis_warning_parameters",
+      legacy_unverified = "error_analysis_warning_legacy"
+    )
+    warning_items <- lapply(warning_codes, function(code) {
+      key <- unname(warning_key_map[code])
+      tags$li(if (length(key) == 1L && !is.na(key)) tr(key, lang()) else code)
+    })
+
     div(style = "background-color: #f8f9fa; padding: 10px; border-left: 4px solid #3498db; margin-bottom: 8px; border-radius: 4px;",
         div(style = "display: flex; align-items: center; margin-bottom: 5px;",
             strong(tr("error_analysis_reliability", lang()), style = "margin-right: 10px;"),
-            span(style = paste0("color: ", info$reliability_color, "; font-weight: bold; font-size: 1.1em;"),
+            span(style = paste0("color: ", reliability_color, "; font-weight: bold; font-size: 1.1em;"),
                  tr(rel_key, lang()))
         ),
         div(style = "font-size: 0.85em; color: #555;",
+            p(style = "margin: 2px 0;",
+              paste0(tr("error_analysis_method_label", lang()), tr(method_key, lang()))),
             p(style = "margin: 2px 0;", 
               paste0(tr("error_analysis_data_points", lang()), info$n_data, " | ",
                      tr("error_analysis_fit_params", lang()), info$n_params, " | ",
-                     tr("error_analysis_dof", lang()), info$dof)),
+                     tr("error_analysis_dof", lang()), dof)),
             p(style = "margin: 2px 0; font-style: italic;",
-              if (info$dof >= 10) {
-                tr("error_analysis_reliability_good", lang())
-              } else if (info$dof >= 5) {
-                tr("error_analysis_reliability_moderate", lang())
-              } else {
-                tr("error_analysis_reliability_low", lang())
-              })
+              tr(reliability_text_key, lang())),
+            if (length(warning_items) > 0L) {
+              tagList(
+                strong(tr("error_analysis_warning_label", lang())),
+                tags$ul(style = "margin: 2px 0 0 18px; padding: 0;", warning_items)
+              )
+            } else NULL
         )
     )
   })

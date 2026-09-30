@@ -541,6 +541,29 @@
       NA_real_
     }
 
+    get_cov_raw <- function(param_a, param_b) {
+      error_df <- values$error_analysis
+      cov_matrix <- if (!is.null(error_df)) attr(error_df, "cov_matrix") else NULL
+      if (is.matrix(cov_matrix) &&
+          param_a %in% rownames(cov_matrix) && param_b %in% colnames(cov_matrix)) {
+        cov_value <- suppressWarnings(as.numeric(cov_matrix[param_a, param_b]))
+        if (length(cov_value) > 0L && is.finite(cov_value[[1]])) return(cov_value[[1]])
+      }
+
+      cor_matrix <- values$correlation_matrix
+      if (is.matrix(cor_matrix) &&
+          param_a %in% rownames(cor_matrix) && param_b %in% colnames(cor_matrix)) {
+        cor_value <- suppressWarnings(as.numeric(cor_matrix[param_a, param_b]))
+        se_a <- get_se_raw(param_a)
+        se_b <- get_se_raw(param_b)
+        if (length(cor_value) > 0L && is.finite(cor_value[[1]]) &&
+            is.finite(se_a) && is.finite(se_b)) {
+          return(cor_value[[1]] * se_a * se_b)
+        }
+      }
+      NA_real_
+    }
+
     fmt_se <- function(se_val, unit = "") {
       if (is.na(se_val) || !is.finite(se_val)) return("")
       sprintf(" \u00B1 %.3f%s", se_val, unit)
@@ -558,7 +581,7 @@
     T_val <- temp_k
     if (!is.finite(T_val)) T_val <- 298.15
 
-    calc_thermo <- function(logK, dH_cal, name, logK_se, dH_se_cal) {
+    calc_thermo <- function(logK, dH_cal, name, logK_se, dH_se_cal, cov_logK_dH = NA_real_) {
       if (!is.finite(logK) || !is.finite(dH_cal)) {
         return(paste0(
           txt("路径", "Path"), ": ", name, "\n",
@@ -571,10 +594,18 @@
       K <- 10^logK
       dH_kcal <- dH_cal / 1000
       dH_se_kcal <- if (is.na(dH_se_cal)) NA else dH_se_cal / 1000
-      dG_kcal <- -R_const * T_val * log(K) / 1000
-      dG_se_kcal <- if (is.na(logK_se)) NA else abs(R_const * T_val * log(10) / 1000) * logK_se
+      dG_slope <- -R_const * T_val * log(10) / 1000
+      dG_kcal <- dG_slope * logK
+      dG_se_kcal <- if (is.na(logK_se)) NA else abs(dG_slope) * logK_se
       TdS_kcal <- dH_kcal - dG_kcal
-      TdS_se_kcal <- if (is.na(dH_se_kcal) || is.na(dG_se_kcal)) NA else sqrt(dH_se_kcal^2 + dG_se_kcal^2)
+      TdS_se_kcal <- NA_real_
+      if (!is.na(dH_se_kcal) && !is.na(dG_se_kcal)) {
+        tds_var <- dH_se_kcal^2 + dG_se_kcal^2
+        if (is.finite(cov_logK_dH)) {
+          tds_var <- tds_var + 2 * (1 / 1000) * (-dG_slope) * cov_logK_dH
+        }
+        if (is.finite(tds_var) && tds_var >= 0) TdS_se_kcal <- sqrt(tds_var)
+      }
 
       paste0(
         txt("路径", "Path"), ": ", name, "\n",
@@ -592,7 +623,8 @@
       safe_num("H1", DEFAULT_PARAMS$H),
       "H + G <=> M",
       get_se_raw("logK1"),
-      get_se_raw("H1")
+      get_se_raw("H1"),
+      get_cov_raw("logK1", "H1")
     ))
 
     active <- input$active_paths
@@ -604,43 +636,73 @@
       safe_num("H2", DEFAULT_PARAMS$H),
       "M + G <=> D (Stepwise)",
       get_se_raw("logK2"),
-      get_se_raw("H2")
+      get_se_raw("H2"),
+      get_cov_raw("logK2", "H2")
     ))
     if ("rxn_T" %in% active) path_info <- paste0(path_info, calc_thermo(
       safe_num("logK3", DEFAULT_PARAMS$logK),
       safe_num("H3", DEFAULT_PARAMS$H),
       "M + M <=> T (Dimer)",
       get_se_raw("logK3"),
-      get_se_raw("H3")
+      get_se_raw("H3"),
+      get_cov_raw("logK3", "H3")
     ))
     if ("rxn_E" %in% active) path_info <- paste0(path_info, calc_thermo(
       safe_num("logK7", DEFAULT_PARAMS$logK),
       safe_num("H7", DEFAULT_PARAMS$H),
       "T + H <=> E (H3G2)",
       get_se_raw("logK7"),
-      get_se_raw("H7")
+      get_se_raw("H7"),
+      get_cov_raw("logK7", "H7")
     ))
     if ("rxn_B" %in% active) path_info <- paste0(path_info, calc_thermo(
       safe_num("logK4", DEFAULT_PARAMS$logK),
       safe_num("H4", DEFAULT_PARAMS$H),
       "M + H <=> B (Reverse)",
       get_se_raw("logK4"),
-      get_se_raw("H4")
+      get_se_raw("H4"),
+      get_cov_raw("logK4", "H4")
     ))
     if ("rxn_F" %in% active) path_info <- paste0(path_info, calc_thermo(
       safe_num("logK5", DEFAULT_PARAMS$logK),
       safe_num("H5", DEFAULT_PARAMS$H),
       "M + D <=> F (Oligomer)",
       get_se_raw("logK5"),
-      get_se_raw("H5")
+      get_se_raw("H5"),
+      get_cov_raw("logK5", "H5")
     ))
     if ("rxn_U" %in% active) path_info <- paste0(path_info, calc_thermo(
       safe_num("logK6", DEFAULT_PARAMS$logK),
       safe_num("H6", DEFAULT_PARAMS$H),
       "M <=> U (Bending)",
       get_se_raw("logK6"),
-      get_se_raw("H6")
+      get_se_raw("H6"),
+      get_cov_raw("logK6", "H6")
     ))
+
+    error_info <- values$error_analysis_info
+    uncertainty_info <- if (is.list(error_info) && length(error_info) > 0L) {
+      method_code <- as.character(error_info$method %||% "legacy_hessian")[[1]]
+      method_label <- switch(
+        method_code,
+        nls_jacobian = txt("残差 Jacobian / Wald", "Residual Jacobian / Wald"),
+        weighted_sandwich = txt("加权 sandwich 协方差", "Weighted sandwich covariance"),
+        huber_sandwich = txt("Huber sandwich 协方差", "Huber sandwich covariance"),
+        weighted_huber_sandwich = txt("加权 Huber sandwich 协方差", "Weighted Huber sandwich covariance"),
+        txt("旧版或未知方法", "Legacy or unknown method")
+      )
+      status_label <- as.character(error_info$reliability_level %||% "unknown")[[1]]
+      warnings_label <- as.character(error_info$warning_codes %||% "")[[1]]
+      paste0(
+        txt("误差分析:\n", "Uncertainty Analysis:\n"),
+        "  ", txt("方法", "Method"), ": ", method_label, "\n",
+        "  ", txt("状态", "Status"), ": ", status_label,
+        if (nzchar(warnings_label)) paste0("\n  ", txt("诊断代码", "Diagnostic codes"), ": ", warnings_label) else "",
+        "\n\n"
+      )
+    } else {
+      ""
+    }
 
     version_signature <- export_bridge_build_version_signature("ITCsimfit")
 
@@ -650,6 +712,7 @@
       "==================================================\n\n",
       t_info, "\n",
       p_info, "\n",
+      uncertainty_info,
       path_info,
       "==================================================\n",
       txt("由 ", "Generated by "), version_signature, txt(" 生成于 ", " on "), format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n"

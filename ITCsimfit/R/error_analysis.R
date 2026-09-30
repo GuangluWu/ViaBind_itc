@@ -7,6 +7,389 @@
 # ==============================================================================
 # 3.5. 误差分析函数 (Error Analysis Functions)
 # ==============================================================================
+
+ERROR_ANALYSIS_METHOD_VERSION <- "2.0"
+
+# Build an error-analysis table even when uncertainty cannot be estimated.  Keeping
+# the point estimates visible while returning NA uncertainty is safer than turning
+# an invalid/indefinite covariance matrix into zero standard errors.
+build_error_analysis_result <- function(par_opt, se = NULL, ci_lower = NULL, ci_upper = NULL,
+                                        cov_matrix = NULL, diagnostics = list()) {
+  original_names <- names(par_opt)
+  par_opt <- as.numeric(par_opt)
+  param_names <- original_names
+  if (is.null(param_names) || any(!nzchar(param_names))) {
+    param_names <- paste0("par", seq_along(par_opt))
+  }
+
+  n_par <- length(par_opt)
+  fill_numeric <- function(x) {
+    if (is.null(x) || length(x) != n_par) return(rep(NA_real_, n_par))
+    as.numeric(x)
+  }
+
+  result <- data.frame(
+    Parameter = param_names,
+    Value = par_opt,
+    SE = fill_numeric(se),
+    CI_Lower = fill_numeric(ci_lower),
+    CI_Upper = fill_numeric(ci_upper),
+    stringsAsFactors = FALSE
+  )
+
+  if (!is.null(cov_matrix) && is.matrix(cov_matrix)) {
+    rownames(cov_matrix) <- colnames(cov_matrix) <- param_names
+    attr(result, "cov_matrix") <- cov_matrix
+  }
+  attr(result, "diagnostics") <- diagnostics
+  result
+}
+
+normalize_uncertainty_bounds <- function(bounds, par_opt, default) {
+  n_par <- length(par_opt)
+  if (is.null(bounds) || length(bounds) != n_par) {
+    out <- rep(default, n_par)
+  } else {
+    out <- suppressWarnings(as.numeric(bounds))
+    out[is.na(out)] <- default
+  }
+  names(out) <- names(par_opt)
+  out
+}
+
+# Numerically differentiate the residual vector, rather than the scalar RSS.
+# This avoids the factor-of-two ambiguity in an RSS Hessian and permits stable,
+# independently scaled steps for parameters such as logK, H and Offset.
+calculate_residual_jacobian <- function(residual_fun, par_opt, lower_b = NULL, upper_b = NULL,
+                                        rel_step = .Machine$double.eps^(1 / 3)) {
+  original_names <- names(par_opt)
+  par_opt <- as.numeric(par_opt)
+  names(par_opt) <- if (is.null(original_names)) paste0("par", seq_along(par_opt)) else original_names
+  n_par <- length(par_opt)
+  lower_b <- normalize_uncertainty_bounds(lower_b, par_opt, -Inf)
+  upper_b <- normalize_uncertainty_bounds(upper_b, par_opt, Inf)
+
+  eval_residuals <- function(par) {
+    names(par) <- names(par_opt)
+    value <- residual_fun(par)
+    value <- suppressWarnings(as.numeric(value))
+    if (length(value) == 0L || any(!is.finite(value))) {
+      stop("Residual function returned non-finite or empty values")
+    }
+    value
+  }
+
+  r0 <- eval_residuals(par_opt)
+  jacobian <- matrix(NA_real_, nrow = length(r0), ncol = n_par,
+                     dimnames = list(NULL, names(par_opt)))
+  steps <- numeric(n_par)
+  schemes <- character(n_par)
+  boundary <- logical(n_par)
+
+  for (i in seq_len(n_par)) {
+    span <- upper_b[i] - lower_b[i]
+    span_scale <- if (is.finite(span) && span > 0) 0.1 * span else 0
+    par_scale <- max(abs(par_opt[i]), span_scale, 1)
+    h <- rel_step * par_scale
+    if (is.finite(span) && span > 0) h <- min(h, span / 10)
+    if (!is.finite(h) || h <= 0) stop("Unable to determine a finite-difference step")
+
+    can_minus <- par_opt[i] - h >= lower_b[i]
+    can_plus <- par_opt[i] + h <= upper_b[i]
+    can_minus2 <- par_opt[i] - 2 * h >= lower_b[i]
+    can_plus2 <- par_opt[i] + 2 * h <= upper_b[i]
+
+    if (can_minus && can_plus) {
+      p_minus <- p_plus <- par_opt
+      p_minus[i] <- p_minus[i] - h
+      p_plus[i] <- p_plus[i] + h
+      r_minus <- eval_residuals(p_minus)
+      r_plus <- eval_residuals(p_plus)
+      if (length(r_minus) != length(r0) || length(r_plus) != length(r0)) {
+        stop("Residual length changed during numerical differentiation")
+      }
+      jacobian[, i] <- (r_plus - r_minus) / (2 * h)
+      schemes[i] <- "central"
+    } else if (can_plus2) {
+      p1 <- p2 <- par_opt
+      p1[i] <- p1[i] + h
+      p2[i] <- p2[i] + 2 * h
+      r1 <- eval_residuals(p1)
+      r2 <- eval_residuals(p2)
+      if (length(r1) != length(r0) || length(r2) != length(r0)) {
+        stop("Residual length changed during numerical differentiation")
+      }
+      jacobian[, i] <- (-3 * r0 + 4 * r1 - r2) / (2 * h)
+      schemes[i] <- "forward"
+      boundary[i] <- TRUE
+    } else if (can_minus2) {
+      p1 <- p2 <- par_opt
+      p1[i] <- p1[i] - h
+      p2[i] <- p2[i] - 2 * h
+      r1 <- eval_residuals(p1)
+      r2 <- eval_residuals(p2)
+      if (length(r1) != length(r0) || length(r2) != length(r0)) {
+        stop("Residual length changed during numerical differentiation")
+      }
+      jacobian[, i] <- (3 * r0 - 4 * r1 + r2) / (2 * h)
+      schemes[i] <- "backward"
+      boundary[i] <- TRUE
+    } else {
+      stop(sprintf("Parameter %s has insufficient room inside its bounds", names(par_opt)[i]))
+    }
+    steps[i] <- h
+  }
+
+  # Also flag parameters close enough to a bound that a symmetric Wald interval
+  # should not be presented as an ordinary two-sided confidence interval.
+  finite_span <- is.finite(upper_b - lower_b) & (upper_b > lower_b)
+  bound_tol <- pmax(10 * steps, ifelse(finite_span, (upper_b - lower_b) * 1e-7, 0))
+  boundary <- boundary |
+    (is.finite(lower_b) & par_opt - lower_b <= bound_tol) |
+    (is.finite(upper_b) & upper_b - par_opt <= bound_tol)
+
+  list(
+    residuals = r0,
+    jacobian = jacobian,
+    steps = steps,
+    schemes = schemes,
+    boundary = boundary,
+    lower = lower_b,
+    upper = upper_b
+  )
+}
+
+invert_information_matrix <- function(information, condition_limit = 1e12) {
+  information <- (information + t(information)) / 2
+  diagonal <- diag(information)
+  if (length(diagonal) == 0L || any(!is.finite(diagonal)) || any(diagonal <= 0)) {
+    return(list(
+      inverse = NULL,
+      rank = 0L,
+      condition_number = Inf,
+      positive_definite = FALSE,
+      ill_conditioned = TRUE,
+      eigenvalues = rep(NA_real_, ncol(information))
+    ))
+  }
+
+  # Equilibrate by the information diagonal before decomposition.  This keeps
+  # diagnostics meaningful when parameters use very different units (for
+  # example logK versus cal/mol) and improves the numerical inverse.
+  scale <- sqrt(diagonal)
+  scaled_information <- information / outer(scale, scale)
+  scaled_information <- (scaled_information + t(scaled_information)) / 2
+  eig <- eigen(scaled_information, symmetric = TRUE)
+  eigenvalues <- as.numeric(eig$values)
+  max_eigen <- if (length(eigenvalues) > 0L) max(eigenvalues) else NA_real_
+  rank_tol <- if (is.finite(max_eigen) && max_eigen > 0) {
+    max(dim(information)) * .Machine$double.eps * max_eigen
+  } else {
+    Inf
+  }
+  rank <- sum(eigenvalues > rank_tol)
+  full_rank <- rank == ncol(information)
+  condition_number <- if (full_rank) max_eigen / min(eigenvalues) else Inf
+  positive_definite <- full_rank && all(eigenvalues > 0)
+
+  inverse <- NULL
+  if (positive_definite) {
+    scaled_inverse <- eig$vectors %*% diag(1 / eigenvalues, nrow = length(eigenvalues)) %*% t(eig$vectors)
+    inverse <- scaled_inverse / outer(scale, scale)
+    inverse <- (inverse + t(inverse)) / 2
+  }
+
+  list(
+    inverse = inverse,
+    rank = rank,
+    condition_number = condition_number,
+    positive_definite = positive_definite,
+    ill_conditioned = !is.finite(condition_number) || condition_number > condition_limit,
+    eigenvalues = eigenvalues
+  )
+}
+
+#' Calculate parameter uncertainty from a residual-vector function
+#'
+#' Ordinary nonlinear least squares uses sigma^2 (J'J)^-1. Weighted and/or
+#' Huber fits use a finite-sample-corrected sandwich covariance so the scalar
+#' weighted/robust loss is never mislabeled as an ordinary RSS variance.
+#'
+#' @param residual_fun Function mapping a named parameter vector to raw residuals.
+#' @param par_opt Named optimum parameter vector.
+#' @param lower_b,upper_b Optional parameter bounds.
+#' @param weights Optional fixed weights evaluated for the fitted observations.
+#' @param use_huber Whether the fitted objective used Huber loss.
+#' @param huber_delta Fixed Huber threshold used by the fit.
+#' @param conf_level Confidence level.
+#' @param optimizer_converged Whether the optimizer reported convergence.
+#' @return A data frame with uncertainty columns and diagnostic attributes.
+calculate_parameter_uncertainty <- function(residual_fun, par_opt, lower_b = NULL, upper_b = NULL,
+                                            weights = NULL, use_huber = FALSE, huber_delta = NULL,
+                                            conf_level = 0.95, optimizer_converged = TRUE) {
+  original_names <- names(par_opt)
+  par_opt <- suppressWarnings(as.numeric(par_opt))
+  names(par_opt) <- if (is.null(original_names)) paste0("par", seq_along(par_opt)) else original_names
+  n_par <- length(par_opt)
+  warning_codes <- character(0)
+
+  base_diagnostics <- list(
+    method_version = ERROR_ANALYSIS_METHOD_VERSION,
+    status = "invalid",
+    method = if (isTRUE(use_huber) && !is.null(weights)) {
+      "weighted_huber_sandwich"
+    } else if (isTRUE(use_huber)) {
+      "huber_sandwich"
+    } else if (!is.null(weights)) {
+      "weighted_sandwich"
+    } else {
+      "nls_jacobian"
+    },
+    warning_codes = "",
+    n_data = NA_integer_,
+    n_params = n_par,
+    dof = NA_integer_,
+    rank = NA_integer_,
+    condition_number = NA_real_,
+    boundary_params = ""
+  )
+
+  if (n_par == 0L || any(!is.finite(par_opt))) {
+    base_diagnostics$warning_codes <- "invalid_parameters"
+    return(build_error_analysis_result(par_opt, diagnostics = base_diagnostics))
+  }
+
+  fd <- tryCatch(
+    calculate_residual_jacobian(residual_fun, par_opt, lower_b = lower_b, upper_b = upper_b),
+    error = function(e) e
+  )
+  if (inherits(fd, "error")) {
+    base_diagnostics$warning_codes <- "jacobian_failed"
+    base_diagnostics$detail <- conditionMessage(fd)
+    return(build_error_analysis_result(par_opt, diagnostics = base_diagnostics))
+  }
+
+  residuals <- fd$residuals
+  jacobian <- fd$jacobian
+  n_data <- length(residuals)
+  dof <- n_data - n_par
+  boundary_names <- names(par_opt)[fd$boundary]
+  base_diagnostics$n_data <- n_data
+  base_diagnostics$dof <- dof
+  base_diagnostics$boundary_params <- paste(boundary_names, collapse = ",")
+
+  if (dof <= 0L) {
+    base_diagnostics$warning_codes <- "insufficient_dof"
+    return(build_error_analysis_result(par_opt, diagnostics = base_diagnostics))
+  }
+  if (!isTRUE(optimizer_converged)) warning_codes <- c(warning_codes, "optimizer_not_converged")
+  if (length(boundary_names) > 0L) warning_codes <- c(warning_codes, "boundary_parameters")
+
+  weight_vec <- if (is.null(weights)) rep(1, n_data) else suppressWarnings(as.numeric(weights))
+  if (length(weight_vec) != n_data || any(!is.finite(weight_vec)) || any(weight_vec <= 0)) {
+    base_diagnostics$warning_codes <- paste(c(warning_codes, "invalid_weights"), collapse = "|")
+    return(build_error_analysis_result(par_opt, diagnostics = base_diagnostics))
+  }
+
+  if (isTRUE(use_huber)) {
+    delta <- suppressWarnings(as.numeric(huber_delta)[1])
+    if (!is.finite(delta) || delta <= 0) {
+      delta <- if (exists("calculate_huber_delta", mode = "function")) {
+        calculate_huber_delta(residuals)
+      } else {
+        max(2 * stats::sd(residuals), 1e-6)
+      }
+    }
+    psi <- ifelse(abs(residuals) <= delta, residuals, delta * sign(residuals))
+    psi_prime <- as.numeric(abs(residuals) <= delta)
+    information <- crossprod(jacobian, jacobian * (weight_vec * psi_prime))
+    scores <- jacobian * (weight_vec * psi)
+    warning_codes <- c(warning_codes, "sandwich_approximation")
+  } else if (!is.null(weights)) {
+    information <- crossprod(jacobian, jacobian * weight_vec)
+    scores <- jacobian * (weight_vec * residuals)
+    warning_codes <- c(warning_codes, "sandwich_approximation")
+  } else {
+    information <- crossprod(jacobian)
+    scores <- NULL
+  }
+
+  matrix_info <- invert_information_matrix(information)
+  base_diagnostics$rank <- matrix_info$rank
+  base_diagnostics$condition_number <- matrix_info$condition_number
+  if (!matrix_info$positive_definite) warning_codes <- c(warning_codes, "rank_deficient")
+  if (matrix_info$ill_conditioned) warning_codes <- c(warning_codes, "ill_conditioned")
+
+  if (is.null(matrix_info$inverse) || matrix_info$ill_conditioned) {
+    base_diagnostics$warning_codes <- paste(unique(warning_codes), collapse = "|")
+    return(build_error_analysis_result(par_opt, diagnostics = base_diagnostics))
+  }
+
+  if (is.null(scores)) {
+    rss <- sum(residuals^2)
+    sigma_sq <- rss / dof
+    if (!is.finite(sigma_sq) || sigma_sq < 0) {
+      warning_codes <- c(warning_codes, "invalid_residual_variance")
+      base_diagnostics$warning_codes <- paste(unique(warning_codes), collapse = "|")
+      return(build_error_analysis_result(par_opt, diagnostics = base_diagnostics))
+    }
+    cov_matrix <- sigma_sq * matrix_info$inverse
+  } else {
+    meat <- crossprod(scores)
+    hc1 <- n_data / dof
+    cov_matrix <- hc1 * matrix_info$inverse %*% meat %*% matrix_info$inverse
+  }
+
+  cov_matrix <- (cov_matrix + t(cov_matrix)) / 2
+  if (any(!is.finite(cov_matrix))) {
+    warning_codes <- c(warning_codes, "invalid_covariance")
+    base_diagnostics$warning_codes <- paste(unique(warning_codes), collapse = "|")
+    return(build_error_analysis_result(par_opt, diagnostics = base_diagnostics))
+  }
+  cov_eigen <- eigen(cov_matrix, symmetric = TRUE, only.values = TRUE)$values
+  cov_tol <- max(1, max(abs(cov_eigen))) * max(dim(cov_matrix)) * .Machine$double.eps
+  if (any(cov_eigen < -cov_tol) || any(diag(cov_matrix) < 0)) {
+    warning_codes <- c(warning_codes, "invalid_covariance")
+    base_diagnostics$warning_codes <- paste(unique(warning_codes), collapse = "|")
+    return(build_error_analysis_result(par_opt, diagnostics = base_diagnostics))
+  }
+
+  param_se <- sqrt(pmax(diag(cov_matrix), 0))
+  t_crit <- stats::qt((1 + conf_level) / 2, df = dof)
+  ci_lower <- par_opt - t_crit * param_se
+  ci_upper <- par_opt + t_crit * param_se
+  interval_crosses_bounds <-
+    (is.finite(fd$lower) & ci_lower < fd$lower) |
+    (is.finite(fd$upper) & ci_upper > fd$upper)
+  suppress_interval <- fd$boundary | interval_crosses_bounds
+  if (any(interval_crosses_bounds)) {
+    warning_codes <- c(warning_codes, "interval_crosses_bounds")
+  }
+  if (any(suppress_interval)) {
+    ci_lower[suppress_interval] <- NA_real_
+    ci_upper[suppress_interval] <- NA_real_
+  }
+
+  status <- if (dof < 5L || any(c("optimizer_not_converged", "boundary_parameters", "ill_conditioned", "interval_crosses_bounds") %in% warning_codes)) {
+    "low"
+  } else if (length(warning_codes) > 0L || dof < 10L) {
+    "moderate"
+  } else {
+    "good"
+  }
+  base_diagnostics$status <- status
+  base_diagnostics$warning_codes <- paste(unique(warning_codes), collapse = "|")
+
+  build_error_analysis_result(
+    par_opt,
+    se = param_se,
+    ci_lower = ci_lower,
+    ci_upper = ci_upper,
+    cov_matrix = cov_matrix,
+    diagnostics = base_diagnostics
+  )
+}
+
 #' 使用 Hessian 矩阵计算参数协方差和置信区间
 #' 
 #' @param obj_fun 目标函数
@@ -66,7 +449,7 @@ calculate_hessian_ci <- function(obj_fun, par_opt, n_data, rss, conf_level = 0.9
       }
     }
     
-      # 计算协方差矩阵: Cov = sigma^2 * inv(Hessian)
+      # 原始 RSS 的 Hessian 约为 2 J'J，因此 Cov = 2 sigma^2 H^-1。
       # 注意：对于最小二乘问题，Hessian 应该是正定的
       hessian_inv <- tryCatch({
         solve(hessian)
@@ -87,11 +470,13 @@ calculate_hessian_ci <- function(obj_fun, par_opt, n_data, rss, conf_level = 0.9
       return(NULL)
     }
     
-    cov_matrix <- sigma_sq * hessian_inv
+    # obj_fun is raw RSS, whose Hessian is approximately 2 J'J.
+    cov_matrix <- 2 * sigma_sq * hessian_inv
     
     # 提取对角线元素 (参数方差)
     param_var <- diag(cov_matrix)
-    param_se <- sqrt(pmax(param_var, 0))  # 标准误差
+    if (any(!is.finite(param_var)) || any(param_var < 0)) return(NULL)
+    param_se <- sqrt(param_var)  # 标准误差
     
     # 计算 t 统计量 (95% 置信区间，双边)
     t_crit <- qt((1 + conf_level) / 2, df = dof)
@@ -120,7 +505,7 @@ calculate_hessian_ci <- function(obj_fun, par_opt, n_data, rss, conf_level = 0.9
 #'    RSS(θ) ≈ RSS(θ*) + (θ-θ*)'H(θ-θ*)/2
 #'    其中H是Hessian矩阵（二阶导数矩阵）
 #' 
-#' 2. 参数协方差矩阵：Cov(θ) = σ² × H⁻¹
+#' 2. 参数协方差矩阵：Cov(θ) = 2σ² × H⁻¹（H 为原始 RSS 的 Hessian）
 #'    其中σ² = RSS/(n-p)是残差方差，n是数据点数，p是参数个数
 #' 
 #' 3. 标准误差：SE(θᵢ) = √Cov(θᵢ, θᵢ)
@@ -169,26 +554,25 @@ calculate_hessian_ci_robust <- function(obj_fun, par_opt, n_data, rss, conf_leve
     for (i in 1:n_par) {
       for (j in 1:n_par) {
         # 自适应步长：根据参数大小调整
-        eps_i <- eps_base * max(abs(par_opt[i]), 1e-6)
-        eps_j <- eps_base * max(abs(par_opt[j]), 1e-6)
-        eps <- min(eps_i, eps_j)
+        eps_i <- eps_base * max(abs(par_opt[i]), 1)
+        eps_j <- eps_base * max(abs(par_opt[j]), 1)
         
         par_pp <- par_opt
         par_pm <- par_opt
         par_mp <- par_opt
         par_mm <- par_opt
         
-        par_pp[i] <- par_pp[i] + eps
-        par_pp[j] <- par_pp[j] + eps
+        par_pp[i] <- par_pp[i] + eps_i
+        par_pp[j] <- par_pp[j] + eps_j
         
-        par_pm[i] <- par_pm[i] + eps
-        par_pm[j] <- par_pm[j] - eps
+        par_pm[i] <- par_pm[i] + eps_i
+        par_pm[j] <- par_pm[j] - eps_j
         
-        par_mp[i] <- par_mp[i] - eps
-        par_mp[j] <- par_mp[j] + eps
+        par_mp[i] <- par_mp[i] - eps_i
+        par_mp[j] <- par_mp[j] + eps_j
         
-        par_mm[i] <- par_mm[i] - eps
-        par_mm[j] <- par_mm[j] - eps
+        par_mm[i] <- par_mm[i] - eps_i
+        par_mm[j] <- par_mm[j] - eps_j
         
         f_pp <- obj_fun(par_pp)
         f_pm <- obj_fun(par_pm)
@@ -197,7 +581,7 @@ calculate_hessian_ci_robust <- function(obj_fun, par_opt, n_data, rss, conf_leve
         
         # 检查函数值是否合理
         if (all(is.finite(c(f_pp, f_pm, f_mp, f_mm)))) {
-          hessian[i, j] <- (f_pp - f_pm - f_mp + f_mm) / (4 * eps^2)
+          hessian[i, j] <- (f_pp - f_pm - f_mp + f_mm) / (4 * eps_i * eps_j)
         }
       }
     }
@@ -225,13 +609,15 @@ calculate_hessian_ci_robust <- function(obj_fun, par_opt, n_data, rss, conf_leve
       return(NULL)
     }
     
-    cov_matrix <- sigma_sq * hessian_inv
+    # obj_fun is raw RSS, whose Hessian is approximately 2 J'J.
+    cov_matrix <- 2 * sigma_sq * hessian_inv
     # 设置协方差矩阵的行列名（确保参数名正确）
     rownames(cov_matrix) <- names(par_opt)
     colnames(cov_matrix) <- names(par_opt)
     
     param_var <- diag(cov_matrix)
-    param_se <- sqrt(pmax(param_var, 0))
+    if (any(!is.finite(param_var)) || any(param_var < 0)) return(NULL)
+    param_se <- sqrt(param_var)
     
     # 使用更保守的t值（对于小样本）
     t_crit <- qt((1 + conf_level) / 2, df = max(1, dof))

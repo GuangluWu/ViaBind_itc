@@ -1197,14 +1197,22 @@
           sprintf("%.1f", Value)
         ),
         SE_Formatted = ifelse(
-          grepl("logK", Parameter),
-          sprintf("±%.3f", SE),
-          sprintf("±%.1f", SE)
+          !is.finite(SE),
+          "—",
+          ifelse(
+            grepl("logK", Parameter),
+            sprintf("±%.3f", SE),
+            sprintf("±%.1f", SE)
+          )
         ),
         CI_Formatted = ifelse(
-          grepl("logK", Parameter),
-          sprintf("[%.3f, %.3f]", CI_Lower, CI_Upper),
-          sprintf("[%.1f, %.1f]", CI_Lower, CI_Upper)
+          !is.finite(CI_Lower) | !is.finite(CI_Upper),
+          "—",
+          ifelse(
+            grepl("logK", Parameter),
+            sprintf("[%.3f, %.3f]", CI_Lower, CI_Upper),
+            sprintf("[%.1f, %.1f]", CI_Lower, CI_Upper)
+          )
         ),
         # 参数名格式化（使用更安全的方法，避免 ifelse 的问题）
         Parameter_Formatted = sapply(Parameter, function(p) {

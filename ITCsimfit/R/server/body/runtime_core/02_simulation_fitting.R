@@ -229,9 +229,9 @@
       }
     }
     
-    # 目标函数 (Objective Function): 计算加权残差平方和 (RSS)
-    # 采用 Needle-based 拟合：直接比较对应针数的热量值
-    obj_fun <- function(par) {
+    # 统一的残差求值入口。拟合和误差分析共用同一组有效针数，避免
+    # n_data、RSS 与实际进入目标函数的数据不一致。
+    evaluate_fit_residuals <- function(par) {
       current_vars <- p_curr
       current_vars[params_to_opt] <- par
       full_p <- c(current_vars, fit_fixed_p)
@@ -241,7 +241,7 @@
       
       # 1. 运行模拟
       sim_res <- tryCatch({ calculate_simulation(full_p, active_paths) }, error=function(e) NULL)
-      if(is.null(sim_res) || any(!is.finite(sim_res$dQ_App))) return(1e20) # 惩罚项
+      if(is.null(sim_res) || any(!is.finite(sim_res$dQ_App))) return(NULL)
       
       # 2. 针数对齐 (Injection Alignment)
       # 仅比较用户选定范围内的针数 (Needle Index)
@@ -249,10 +249,41 @@
       valid_idx <- range_lim[1]:range_lim[2]
       valid_idx <- valid_idx[valid_idx <= max_idx]
       
-      if(length(valid_idx)==0) return(1e20)
+      if(length(valid_idx)==0) return(NULL)
       
       # 3. 计算残差
       residuals <- sim_res$dQ_App[valid_idx] - exp_df$Heat_Raw[valid_idx]
+      if (length(residuals) == 0L || any(!is.finite(residuals))) return(NULL)
+
+      list(residuals = residuals, valid_idx = valid_idx)
+    }
+
+    residual_fun <- function(par) {
+      evaluated <- evaluate_fit_residuals(par)
+      if (is.null(evaluated)) stop("Unable to evaluate finite fitting residuals")
+      evaluated$residuals
+    }
+
+    # Automatic Huber scaling is estimated once from the initial residuals and
+    # then kept fixed. Re-estimating delta at every objective evaluation changes
+    # the loss surface and invalidates both optimization and uncertainty formulas.
+    if (isTRUE(use_robust) &&
+        (is.null(huber_delta) || length(huber_delta) == 0L ||
+         !is.finite(suppressWarnings(as.numeric(huber_delta)[1])) ||
+         suppressWarnings(as.numeric(huber_delta)[1]) <= 0)) {
+      initial_eval <- evaluate_fit_residuals(par_vec)
+      if (!is.null(initial_eval)) {
+        huber_delta <- calculate_huber_delta(initial_eval$residuals)
+      }
+    }
+
+    # 目标函数 (Objective Function): 计算加权残差平方和或稳健损失。
+    # 采用 Needle-based 拟合：直接比较对应针数的热量值。
+    obj_fun <- function(par) {
+      evaluated <- evaluate_fit_residuals(par)
+      if (is.null(evaluated)) return(1e20)
+      residuals <- evaluated$residuals
+      valid_idx <- evaluated$valid_idx
       
       # 4. 应用加权和/或鲁棒回归
       # 如果启用加权，使用预计算的权重（需要重新索引以匹配当前valid_idx）
@@ -420,7 +451,8 @@
       # 提取结果并适配格式
       res <- list(
         par = out$optim$bestmem,
-        value = out$optim$bestval
+        value = out$optim$bestval,
+        convergence = 0L
       )
       names(res$par) <- names(par_vec) # 确保名字正确
       
@@ -489,7 +521,14 @@
       par_vec = par_vec,
       range_lim = range_lim,
       exp_df = exp_df,
-      enable_error_analysis = enable_error_analysis
+      enable_error_analysis = enable_error_analysis,
+      residual_fun = residual_fun,
+      evaluate_fit_residuals = evaluate_fit_residuals,
+      lower_b = lower_b,
+      upper_b = upper_b,
+      use_weighted = isTRUE(use_weighted),
+      use_robust = isTRUE(use_robust),
+      huber_delta = huber_delta
     )
 
     fit_value <- suppressWarnings(as.numeric(res$value)[1])
@@ -619,12 +658,17 @@
     # 获取加权和鲁棒回归设置
     use_weighted <- isTRUE(input$use_weighted_fitting)
     use_robust <- isTRUE(input$use_robust_fitting)
-    # [修复] 使用常量定义的 huber_delta 参数
+    # 留空时在 perform_fitting_sync() 中根据初始残差自动估计并固定。
     huber_delta_input <- if(use_robust) {
-      safe_numeric(input$huber_delta, 
-                   default = HUBER_PARAMS$delta_default, 
-                   min = HUBER_PARAMS$delta_min, 
-                   max = HUBER_PARAMS$delta_max)
+      raw_delta <- suppressWarnings(as.numeric(input$huber_delta)[1])
+      if (length(raw_delta) == 0L || !is.finite(raw_delta) || raw_delta <= 0) {
+        NULL
+      } else {
+        safe_numeric(raw_delta,
+                     default = HUBER_PARAMS$delta_default,
+                     min = HUBER_PARAMS$delta_min,
+                     max = HUBER_PARAMS$delta_max)
+      }
     } else {
       NULL
     }
@@ -675,6 +719,13 @@
     range_lim <- result$range_lim
     exp_df <- result$exp_df
     enable_error_analysis <- result$enable_error_analysis
+    residual_fun <- result$residual_fun
+    evaluate_fit_residuals <- result$evaluate_fit_residuals
+    lower_b <- result$lower_b
+    upper_b <- result$upper_b
+    fit_use_weighted <- isTRUE(result$use_weighted)
+    fit_use_robust <- isTRUE(result$use_robust)
+    fit_huber_delta <- result$huber_delta
     
     # 更新参数值
     new_vals <- res$par
@@ -693,130 +744,65 @@
       # [修复] 使用翻译函数而不是硬编码中文
       progress$set(value = 0.97, detail = tr("fit_progress_error_analysis", lang()))
       tryCatch({
-        valid_idx <- range_lim[1]:range_lim[2]
-        max_idx <- min(nrow(exp_df), max(valid_idx, na.rm = TRUE))
-        valid_idx <- valid_idx[valid_idx <= max_idx]
-        n_data <- length(valid_idx)
-        
-        if (n_data <= length(new_vals)) {
-          values$error_analysis <- NULL
-          values$error_analysis_info <- NULL
-          values$correlation_matrix <- NULL
-          showNotification(tr("fit_error_insufficient_data", lang()), type = "warning", duration = 3)
+        fitted_eval <- evaluate_fit_residuals(new_vals)
+        if (is.null(fitted_eval)) stop("Unable to evaluate fitted residuals")
+        n_data <- length(fitted_eval$residuals)
+        analysis_weights <- if (fit_use_weighted) {
+          calculate_weights_from_derivative(exp_df, fitted_eval$valid_idx)
         } else {
-          final_rss <- res$value
-          error_result <- calculate_hessian_ci_robust(
-            obj_fun = obj_fun,
-            par_opt = new_vals,
-            n_data = n_data,
-            rss = final_rss,
-            conf_level = 0.95
-          )
-          
-          if (!is.null(error_result) && nrow(error_result) > 0) {
-            # 保存完整的误差分析结果（用于相关性矩阵计算）
-            error_result_full <- error_result
-            # [Updated] Use full error result in values$error_analysis for Report and Snapshots
-            # Filtering for table display is moved to renderDT
-            
-            if (nrow(error_result) > 0) {
-              values$error_analysis <- error_result
-              dof <- n_data - length(new_vals)
-              # 不存储翻译后的 reliability 文案，仅存 dof/color；渲染时按当前 lang() 用 tr() 取文，以便切换语言后正确更新
-              reliability_color <- if (dof >= 10) "#27ae60" else if (dof >= 5) "#f39c12" else "#e74c3c"
-              
-              values$error_analysis_info <- list(
-                n_data = n_data,
-                n_params = length(new_vals),
-                dof = dof,
-                reliability_color = reliability_color
-              )
-              
-              # [新增] 提取协方差矩阵并计算相关性矩阵
-              # 使用完整的误差分析结果来获取协方差矩阵（包含所有拟合参数）
-              cov_matrix <- attr(error_result_full, "cov_matrix")
-              if (!is.null(cov_matrix) && is.matrix(cov_matrix)) {
-                tryCatch({
-                  # 使用所有拟合参数（new_vals 包含所有被拟合的参数）
-                  param_names <- names(new_vals)
-                  
-                  # 如果协方差矩阵有行列名，使用它们（更可靠）
-                  if (!is.null(rownames(cov_matrix)) && !is.null(colnames(cov_matrix))) {
-                    # 确保行列名与参数名匹配
-                    if (all(param_names %in% rownames(cov_matrix)) && 
-                        all(param_names %in% colnames(cov_matrix))) {
-                      # 按照参数顺序提取协方差矩阵
-                      cov_matrix_ordered <- cov_matrix[param_names, param_names, drop = FALSE]
-                    } else {
-                      # 如果行列名不匹配，但维度匹配，直接使用
-                      if (nrow(cov_matrix) == length(param_names) && 
-                          ncol(cov_matrix) == length(param_names)) {
-                        cov_matrix_ordered <- cov_matrix
-                        rownames(cov_matrix_ordered) <- param_names
-                        colnames(cov_matrix_ordered) <- param_names
-                      } else {
-                        cov_matrix_ordered <- NULL
-                      }
-                    }
-                  } else {
-                    # 如果协方差矩阵没有行列名，但维度匹配，直接使用并设置行列名
-                    if (nrow(cov_matrix) == length(param_names) && 
-                        ncol(cov_matrix) == length(param_names)) {
-                      cov_matrix_ordered <- cov_matrix
-                      rownames(cov_matrix_ordered) <- param_names
-                      colnames(cov_matrix_ordered) <- param_names
-                    } else {
-                      cov_matrix_ordered <- NULL
-                    }
-                  }
-                  
-                  if (!is.null(cov_matrix_ordered)) {
-                    # 检查协方差矩阵的对角线是否都是正数（方差必须为正）
-                    diag_vals <- diag(cov_matrix_ordered)
-                    valid_idx <- is.finite(diag_vals) & diag_vals > 0
-                    
-                    if (sum(valid_idx) > 1) {  # 至少需要2个有效参数才能计算相关性
-                      # 只保留有效的参数
-                      param_names_valid <- rownames(cov_matrix_ordered)[valid_idx]
-                      cov_matrix_filtered <- cov_matrix_ordered[valid_idx, valid_idx, drop = FALSE]
-                      
-                      # 再次检查对角线（防止数值误差）
-                      diag_vals_filtered <- diag(cov_matrix_filtered)
-                      if (all(is.finite(diag_vals_filtered)) && all(diag_vals_filtered > 0)) {
-                        # 计算相关性矩阵（使用 suppressWarnings 避免警告）
-                        cor_matrix <- suppressWarnings(cov2cor(cov_matrix_filtered))
-                        # 检查结果是否有效
-                        if (all(is.finite(cor_matrix))) {
-                          rownames(cor_matrix) <- param_names_valid
-                          colnames(cor_matrix) <- param_names_valid
-                          values$correlation_matrix <- cor_matrix
-                        } else {
-                          values$correlation_matrix <- NULL
-                        }
-                      } else {
-                        values$correlation_matrix <- NULL
-                      }
-                    } else {
-                      values$correlation_matrix <- NULL
-                    }
-                  } else {
-                    values$correlation_matrix <- NULL
-                  }
-                }, error = function(e) {
-                  values$correlation_matrix <- NULL
-                })
-              } else {
-                values$correlation_matrix <- NULL
-              }
-            } else {
-              values$error_analysis <- NULL
-              values$error_analysis_info <- NULL
-              values$correlation_matrix <- NULL
-            }
-          } else {
-            values$error_analysis <- NULL
-            values$error_analysis_info <- NULL
-            values$correlation_matrix <- NULL
+          NULL
+        }
+
+        optimizer_converged <- !is.null(res$convergence) &&
+          length(res$convergence) > 0L && is.finite(res$convergence[[1]]) &&
+          as.integer(res$convergence[[1]]) == 0L
+        error_result <- calculate_parameter_uncertainty(
+          residual_fun = residual_fun,
+          par_opt = new_vals,
+          lower_b = lower_b,
+          upper_b = upper_b,
+          weights = analysis_weights,
+          use_huber = fit_use_robust,
+          huber_delta = fit_huber_delta,
+          conf_level = 0.95,
+          optimizer_converged = optimizer_converged
+        )
+
+        diagnostics <- attr(error_result, "diagnostics")
+        if (is.null(diagnostics)) diagnostics <- list()
+        dof <- suppressWarnings(as.integer(diagnostics$dof)[1])
+        if (!is.finite(dof)) dof <- n_data - length(new_vals)
+        reliability_level <- as.character(diagnostics$status %||% "invalid")[[1]]
+        if (!reliability_level %in% c("good", "moderate", "low")) reliability_level <- "low"
+        reliability_color <- switch(
+          reliability_level,
+          good = "#27ae60",
+          moderate = "#f39c12",
+          "#e74c3c"
+        )
+
+        values$error_analysis <- error_result
+        values$error_analysis_info <- list(
+          n_data = n_data,
+          n_params = length(new_vals),
+          dof = dof,
+          reliability_color = reliability_color,
+          reliability_level = reliability_level,
+          method = as.character(diagnostics$method %||% "unknown")[[1]],
+          method_version = as.character(diagnostics$method_version %||% ERROR_ANALYSIS_METHOD_VERSION)[[1]],
+          warning_codes = as.character(diagnostics$warning_codes %||% "")[[1]],
+          rank = suppressWarnings(as.integer(diagnostics$rank)[1]),
+          condition_number = suppressWarnings(as.numeric(diagnostics$condition_number)[1]),
+          boundary_params = as.character(diagnostics$boundary_params %||% "")[[1]]
+        )
+
+        cov_matrix <- attr(error_result, "cov_matrix")
+        values$correlation_matrix <- NULL
+        if (!is.null(cov_matrix) && is.matrix(cov_matrix) && nrow(cov_matrix) > 1L &&
+            all(is.finite(cov_matrix)) && all(diag(cov_matrix) > 0)) {
+          cor_matrix <- suppressWarnings(cov2cor(cov_matrix))
+          if (all(is.finite(cor_matrix)) && max(abs(cor_matrix)) <= 1 + 1e-8) {
+            values$correlation_matrix <- cor_matrix
           }
         }
       }, error = function(e) {
